@@ -21,13 +21,19 @@ DEFAULTS = {
     "model": "ggml-large-v3.bin",
     "mic": None,  # None = Windows default input device, otherwise device name
     "vocabulary": "",  # words/names Whisper should spell correctly, comma or newline separated
+    "replacements": [],  # [wrong, right] phrase fixes applied to every transcript
+    "learn_vocabulary": True,  # let Claude extend vocabulary/replacements from the transcripts in the log
+    "learned_until": None,  # log timestamp of the last transcript Claude has seen
     "voice_commands": True,  # "nový řádek" / "nový odstavec"
+    "live_transcribe": True,  # transcribe finished parts at pauses while still recording
     "keep_recordings": False,  # save the last recordings to recordings/ (for tuning)
     "insert_mode": "paste",  # "paste" (clipboard + Ctrl+V) or "type" (Unicode keystrokes)
     "trailing_space": True,
     "sounds": True,
     "show_button": True,
     "show_usage": True,  # Claude plan usage panel above the mic button
+    "show_sessions": True,  # Claude Code sessions in that panel (needs Orbit's hooks in ~/.claude/settings.json)
+    "speak_answers": True,  # read the start of a finished session's answer aloud
     "button_pos": None,
 }
 

@@ -16,6 +16,8 @@ projekt s TWLanem). Původní název byl „Diktování“ a složka `C:\Users\j
 - Windows 11 Pro, Ryzen 7 5800X, 32 GB RAM, **AMD Radeon RX 9070 XT (16 GB, bez CUDA)**, Python 3.13 (`C:\Python313`).
 - Mikrofon: USB headset **HyperX 7.1** (v MME se jmenuje `Headset Microphone (HyperX 7.1 `, zkrácené na 31 znaků).
 - Předplatné Claude Max 20x. Claude Code je nainstalovaný přes npm (`%APPDATA%\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe`).
+- V uživatelských proměnných Windows je `ANTHROPIC_API_KEY` **bez kreditu** („Credit balance is too low“). `claude -p`
+  ho upřednostní před předplatným, proto ho Orbit při spouštění Clauda z prostředí odebírá.
 - GitHub účet `josefkotran`. `gh` CLI **není** nainstalované, git má přihlášení v Git Credential Manageru.
 - Pracuje ve firmách HHW Hommel Hercules (nářadí) a M-tex (bytový textil), proto se ve slovníku hodí jejich názvy.
 
@@ -23,7 +25,9 @@ projekt s TWLanem). Původní název byl „Diktování“ a složka `C:\Users\j
 
 Push-to-talk je **boční tlačítko myši vpřed** (`{"kind": "mouse", "code": 6}`), model `ggml-large-v3.bin`, mikrofon HyperX,
 vkládání **psaním znaků** (`insert_mode: "type"`), bez mezery za textem, povely zapnuté, pípání zapnuté, panel Clauda
-zapnutý, **ukládání nahrávek zapnuté** (`recordings/`), spouštění s Windows zapnuté.
+zapnutý, **ukládání nahrávek zapnuté** (`recordings/`), spouštění s Windows zapnuté. Průběžný přepis a učení
+slovníku jsou zapnuté (výchozí). Slovník a opravy (`vocabulary`, `replacements`) doplňuje Claude, `learned_until`
+je čas posledního přepisu z logu, který už Claude viděl.
 
 ## Struktura
 
@@ -38,6 +42,10 @@ zapnutý, **ukládání nahrávek zapnuté** (`recordings/`), spouštění s Win
 | `app/ui.py` | `FloatingButton` (mikrofon + panel limitů), `SettingsDialog` (nastavení), kreslení ikony |
 | `app/theme.py` | vzhled „noční signál“: barvy, QSS, `Toggle` přepínač, `LevelWave` živá vlna, tmavý titulek přes DWM |
 | `app/claude_usage.py` | načtení limitů Clauda, parsování, české texty pro odpočty |
+| `app/learning.py` | učení slovníku: přepisy z logu → `claude -p` → nová slova a opravy |
+| `app/sessions.py` | přehled relací Claude Code: stav z hook souborů, kontext z přepisu, přepnutí okna, instalace hooků |
+| `app/cc_hook.py` | hook, který Claude Code spouští (jen stdlib, rychlý): zapíše `sessions/<id>.<událost>.json` |
+| `sessions/` | stavové soubory relací od hooku – nejsou v gitu |
 | `app/config.py` | výchozí nastavení, cesty, popisky modelů |
 | `app/winutil.py` | jedna instance (mutex), AppUserModelID, spouštění s Windows (registry), pípání |
 | `whisper/` | `whisper-server.exe` (Vulkan build, 59 MB), `libwinpthread-1.dll`, licence whisper.cpp |
@@ -72,7 +80,32 @@ složce `diktovani`, řádek `command` v `pyvenv.cfg` je proto zastaralý, ale n
   `verbose_json` (segmenty) by přidal ~0,7 s na každý přepis, proto zůstává `json`.
 - **`suppress_nst` je schválně vypnuté**, protože maže `: " ( ) /` (např. „10:30“ by se změnilo na „10 30“).
 - Filtry: nahrávka kratší než 0,3 s nebo s max. RMS pod 200 (≈ −44 dBFS) se nepřepisuje. Maže se známá halucinace
-  „Titulky vytvořil JohnyX“ a samostatné „Děkuji za pozornost / sledování“, „Titulky“, „Hudba“.
+  „Titulky vytvořil JohnyX“ a samostatné „Děkuji za pozornost / sledování“, „Titulky“, „Hudba“. Filtruje se po kusech
+  (viz průběžný přepis), takže halucinace uprostřed nesmaže zbytek textu.
+- Opravy (`replacements`, „comgit“ → „Comgate“) se aplikují na celý text diktátu: celá slova, bez ohledu na velikost
+  písmen. Pak hlasové povely.
+
+### Průběžný přepis (`live_transcribe`, měřeno na 30 Pepových nahrávkách)
+- Během držení `Recorder._cut_at_pause` odřízne hotový kus v půlce pauzy a ten se hned přepisuje. Po puštění zbývá
+  jen poslední kus, text se vkládá **najednou po puštění** (Pepa nechtěl psaní během mluvení). Kusy jedné nahrávky
+  jdou za sebou v jednom vlákně (`Take`); do promptu každého jde konec předchozího textu (150 znaků).
+- Parametry: pauza = bloky 30 ms s RMS < 150 (HyperX v tichu 1–11, řeč 150–800) aspoň 0,5 s, kus aspoň 6 s.
+  Pepovy pauzy mezi větami mají 0,4–1,3 s, s prahem 0,6 s se 35 s diktát vůbec nerozdělil.
+- Výsledek: průměrné čekání po puštění 1,99 → 1,62 s, 35 s diktát 6,0 → 1,4 s, 31 s bez pauz v druhé půlce 5,3 → 4,0 s.
+  Nejhorší zpomalení +0,9 s: dělení těsně před puštěním, zbytek pak čeká na grafiku (každý požadavek má ~0,9 s
+  pevné režie, whisper-server přepisuje jen jeden naráz). Proto minimum 6 s; s 3 s bylo víc chyb na hranicích.
+- Cena: ~5 % slov se liší od přepisu celé nahrávky, většinou nevadí („teďka/teď“), občas horší na krátkém konci
+  („obrať pořadí“ → „Obratíš po řadě“), občas lepší. Proto je to přepínač v nastavení.
+
+### Učení slovníku (`learn_vocabulary`)
+- Pepa chtěl, aby se slovník „vylepšoval sám podle logu“. Orbit sám nepozná, co je chyba (naučil by se i chyby),
+  proto po každých 10 nových přepisech v logu pošle jejich **text (ne zvuk)** Claudovi, s Pepovým souhlasem.
+- `claude -p --safe-mode --model sonnet --tools "" --no-session-persistence --output-format json --json-schema ...`
+  bez `ANTHROPIC_API_KEY` a proměnných `CLAUDE*` (poběží na předplatném a nebude si myslet, že je vnořený
+  v Claude Code). Výsledek je v `structured_output`, běh trvá ~16 s. Při chybě se to hodinu nezkouší.
+- Slovník má strop 300 znaků: whisper.cpp z promptu drží ~224 tokenů a při přetečení zahazuje začátek.
+- Opravy jen pro fráze, které v češtině nemůžou být správně („cloud“ → „Claude“ ne, cloud je slovo).
+  Obojí je vidět a upravitelné v nastavení, v menu je „Naučit slovník z nových diktátů“.
 
 ### Volba modelu (měřeno, ne odhadem)
 Test: česká část FLEURS (test split, 723 nahrávek, vzato každé 4., tedy 150 vzorků), WER/CER přes `jiwer`
@@ -117,6 +150,38 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 - Vkládání přes schránku obnoví původní obsah po 700 ms a vloží formáty, které vyřadí text z historie schránky
   (Win+V). V režimu psaní se nový řádek posílá jako **Shift+Enter** (aby chat zprávu neodeslal).
 - Do oken spuštěných jako správce Windows vkládat nedovolí (UIPI).
+- Po 3 s nečinnosti (stav idle, myš mimo, žádné menu) tlačítko i panel zprůhlední na 30 % (`windowOpacity`,
+  animace), Pepa chtěl, aby bylo vidět „jen malinko“ (10 % i 20 % byly moc průhledné, 30 % schválil). Najetí myší, nahrávání nebo
+  přepis ho hned vrátí.
+
+### Relace Claude Code (`show_sessions`, `speak_answers`)
+- Pepa pouští Claude Code přes `cmd.exe` z Průzkumníka, **každá relace má vlastní okno Windows Terminalu**
+  (defterm handoff). Proces: `claude.exe ← cmd.exe ← explorer.exe`. Konzole relace je skryté `PseudoConsoleWindow`,
+  jeho vlastník (`GetAncestor(..., GA_ROOTOWNER)`) je okno WT → klik na řádek přepne přesně na tu relaci.
+  Titulek okna nastavuje Claude Code: téma relace se spinnerem (`◐ Katalog z Německa překlad`, `✳` = v klidu).
+- Hooky v `~/.claude/settings.json` (Pepa souhlasil): SessionStart, UserPromptSubmit, Notification, Stop,
+  StopFailure, SessionEnd → `"command": ".venv/Scripts/python.exe", "args": ["app/cc_hook.py"], "async": true`
+  (exec forma bez shellu). Orbit je přidá/odebere podle nastavení (`sessions.set_hooks`), ostatní obsah souboru
+  nechá, první změna uloží `settings.json.orbit-backup`. **Běžící relace si nové hooky načtou až po restartu.**
+- Hook píše jeden soubor na relaci a událost (souběžné async hooky se tak nepřepisují), s `pid` (předek `claude.exe`)
+  a `hwnd` (okno WT). Orbit je čte každou sekundu. Stav = nejnovější událost; Notification jen typů
+  `permission_prompt`/`elicitation_dialog` = „čeká na tebe“ (`idle_prompt` se ignoruje). Z „čeká“ zpět na „pracuje“
+  pozná podle změny souboru s přepisem. Mrtvý `claude.exe` (nebo jiný proces se stejným PID) = soubory smaže.
+- `claude -p --safe-mode` (učení slovníku) hooky nespouští – ověřeno, v přehledu se neobjeví.
+- Stop hook nese `last_assistant_message` → bublina a předčítání. Oznamuje se jen když okno relace není v popředí
+  a tah trval ≥ 20 s (`NOTIFY_TURN_S`). Dokud nějaká relace čeká na Pepu, panel se nezprůhlední.
+- Kontext = `input + cache_creation + cache_read` z posledního `usage` hlavní větve (`isSidechain` false) na konci
+  přepisu (čte se jen posledních 512 KB, podle mtime). Hook nemá model, proto velikost okna: 1 mil. když má
+  `~/.claude/settings.json` model s `[1m]` (Pepa má `opus[1m]`) nebo tokenů je přes 200 tis., jinak 200 tis.
+  Formát přepisu není oficiálně stabilní – když se změní, procento prostě zmizí.
+- Předčítání: `QTextToSpeech("winrt")`, hlas **Microsoft Jakub** (cs_CZ, jediný český ve Windows, OneCore; SAPI ho
+  nevidí). Při začátku nahrávání se okamžitě zastaví. `sessions.summary` čistí Markdown na první 2 věty.
+
+### Hlasové povely pro terminál
+- Věta „Odešli.“ (nebo „Odeslat.“) na konci diktátu = Enter; diktát jen „Stop.“ / „Zastav.“ = Esc (přeruší Clauda).
+  Jen jako samostatná věta, „…tak mu to odešli.“ zůstane textem. Patří pod přepínač „Hlasové povely“.
+- Enter jde po textu se zpožděním 300 ms + 1 ms na znak (max 1,5 s): terminál vkládá asynchronně a Claude Code bere
+  klávesu ve stejné dávce jako psaný text za součást vložení.
 
 ### Limity Clauda
 - `GET https://api.anthropic.com/api/oauth/usage`, hlavičky `Authorization: Bearer <token>` a
@@ -127,6 +192,9 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 - Obnova každé 2 minuty (`USAGE_REFRESH_MS`) plus položka v menu. **Token se jen čte, nikdy neobnovuje** (refresh by
   rotoval refresh token a mohl rozbít přihlášení Claude Code). Když vyprší, panel zešedne a ukáže „neaktuální“.
 - Bubliny potřebují `Qt.WA_AlwaysShowToolTips`, jinak se u neaktivního okna nezobrazí.
+- Předpověď: z odběrů 5h okna za posledních 30 min (aspoň 10 min a +1 bod) se spočítá, kdy dojde. Když dřív než
+  se okno obnoví, hlavička ukáže oranžově „dojde v 14:20“ a jednou za okno přijde bublina, pokud zbývá < 60 min.
+- Endpoint vrací 429, když se ptá moc často (např. několik restartů Orbitu za sebou) – za 2 minuty se to srovná.
 
 ### Vzhled „noční signál“
 - Barvy: pozadí `#121826`, pole `#1A2233`, linky `#2A3550`, text `#E7ECF5`, tlumený `#8B96AD`, akcent `#5B9DFF`
@@ -174,7 +242,8 @@ Autor commitů: `Josef Kotran <josef.kotran@seznam.cz>`. `whisper-server.exe` m�
 
 ## Nápady na další práci (Pepa zatím nevybral)
 
-1. Historie posledních ~10 diktátů v menu, kliknutím znovu vložit.
+1. Historie posledních ~10 diktátů v menu, kliknutím znovu vložit. K tomu bublina „Nic jsem nerozpoznal“, když
+   z delší nahrávky nic nevyjde (aby se diktát nikdy neztratil potichu).
 2. Volitelná úprava textu Claudem (podržet klávesu s Ctrl, vyčistit „ten, to“ nebo udělat e-mail). Text by odcházel
    na internet, proto jen volitelně.
 3. Hlasový povel „smaž to“, který vrátí poslední diktát.

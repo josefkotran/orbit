@@ -10,7 +10,7 @@ log = logging.getLogger(__name__)
 
 INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP, KEYEVENTF_UNICODE = 0x0002, 0x0004
-VK_SHIFT, VK_CONTROL, VK_RETURN, VK_V = 0x10, 0x11, 0x0D, 0x56
+VK_SHIFT, VK_CONTROL, VK_RETURN, VK_ESCAPE, VK_V = 0x10, 0x11, 0x0D, 0x1B, 0x56
 RESTORE_DELAY_MS = 700
 _RTF = 'application/x-qt-windows-mime;value="Rich Text Format"'
 # Keep dictated snippets out of Windows clipboard history (Win+V) and cloud clipboard.
@@ -87,6 +87,13 @@ class Inserter:
             type_text(text)
         else:
             self._paste(text)
+
+    def press(self, key: str, after_text: str = "") -> None:
+        """'send' = Enter, 'stop' = Esc. After inserted text Enter waits a moment: terminals paste asynchronously
+        and Claude Code treats a key arriving in the same burst as typed text as part of a paste."""
+        vk = VK_RETURN if key == "send" else VK_ESCAPE
+        delay = min(1500, 300 + len(after_text)) if after_text else 0
+        QTimer.singleShot(delay, lambda: _send([_key(vk), _key(vk, flags=KEYEVENTF_KEYUP)]))
 
     def _paste(self, text: str) -> None:
         cb = QGuiApplication.clipboard()

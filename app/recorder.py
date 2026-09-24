@@ -9,6 +9,12 @@ from .whisper_server import SAMPLE_RATE
 
 log = logging.getLogger(__name__)
 
+# Live transcription: a finished part of the speech is cut off at a pause and transcribed while the user keeps
+# talking. Tuned on Pepa's recordings (docs in CLAUDE.md): his pauses between sentences are 0.4–1.3 s.
+PAUSE_RMS = 150  # a block quieter than this is a pause (the HyperX idles at 1–11, speech is 150–800)
+PAUSE_S = 0.5
+MIN_PIECE_S = 6.0  # every piece costs ~0.9 s of fixed Whisper time and short ones are less accurate
+
 
 def _mme_inputs() -> list[tuple[int, str]]:
     """Input devices on the MME host API: one entry per microphone, named like in Windows sound settings."""
@@ -63,8 +69,10 @@ class Recorder:
     per recording when real audio starts flowing, so the app can say "speak now" only when it's true.
     """
 
-    def __init__(self, on_live=None):
+    def __init__(self, on_live=None, on_piece=None):
         self._on_live = on_live or (lambda: None)
+        self._on_piece = on_piece or (lambda: None)  # a piece is ready in pop_pieces()
+        self.split = False  # cut the recording at pauses (live transcription)
         self._stream: sd.InputStream | None = None
         self._rate = SAMPLE_RATE
         self._lock = threading.Lock()
@@ -72,6 +80,8 @@ class Recorder:
         self._live = False
         self._monitoring = False
         self._chunks: list[np.ndarray] = []
+        self._pieces: list[np.ndarray] = []
+        self._quiet_blocks = 0
         self._device_name: str | None = None
         self.level = 0.0  # 0..1, for the UI meters
 
@@ -112,6 +122,8 @@ class Recorder:
             already_live = True  # stream was running for the meter – audio is flowing already
         with self._lock:
             self._chunks = []
+            self._pieces = []
+            self._quiet_blocks = 0
             self._live = already_live
             self._recording = True
         if already_live:
@@ -133,11 +145,19 @@ class Recorder:
             self._close()
         if not chunks:
             return np.zeros(0, dtype=np.int16)
-        audio = np.concatenate(chunks)
-        if self._rate != SAMPLE_RATE:
-            n = int(len(audio) * SAMPLE_RATE / self._rate)
-            audio = np.interp(np.linspace(0, len(audio) - 1, n), np.arange(len(audio)), audio).astype(np.int16)
-        return audio
+        return self._to_16k(np.concatenate(chunks))
+
+    def pop_pieces(self) -> list[np.ndarray]:
+        """Parts of the recording already cut off at pauses (after stop() it returns the rest of them)."""
+        with self._lock:
+            pieces, self._pieces = self._pieces, []
+        return [self._to_16k(p) for p in pieces]
+
+    def _to_16k(self, audio: np.ndarray) -> np.ndarray:
+        if self._rate == SAMPLE_RATE:
+            return audio
+        n = int(len(audio) * SAMPLE_RATE / self._rate)
+        return np.interp(np.linspace(0, len(audio) - 1, n), np.arange(len(audio)), audio).astype(np.int16)
 
     def shutdown(self) -> None:
         self._recording = False
@@ -174,14 +194,31 @@ class Recorder:
 
     def _callback(self, indata, frames, time_info, status):
         chunk = indata[:, 0].copy()
-        went_live = False
+        rms = math.sqrt(float(np.mean(chunk.astype(np.float32) ** 2)))
+        went_live = cut = False
         with self._lock:
             if self._recording:
                 if not self._live and np.any(chunk):  # start-up silence is exact zeros
                     self._live = went_live = True
                 if self._live:  # the headset's start-up silence is useless, skip it
                     self._chunks.append(chunk)
+                    if self.split:
+                        cut = self._cut_at_pause(rms, len(chunk))
         if went_live:
             self._on_live()
-        rms = math.sqrt(float(np.mean(chunk.astype(np.float32) ** 2))) / 32768 + 1e-9
-        self.level = min(1.0, max(0.0, (20 * math.log10(rms) + 50) / 40))
+        if cut:
+            self._on_piece()
+        self.level = min(1.0, max(0.0, (20 * math.log10(rms / 32768 + 1e-9) + 50) / 40))
+
+    def _cut_at_pause(self, rms: float, block: int) -> bool:
+        """Once a pause is PAUSE_S long and at least MIN_PIECE_S of audio precedes it, move everything up to
+        the middle of the pause into a piece. Runs under the lock for every block."""
+        self._quiet_blocks = self._quiet_blocks + 1 if rms < PAUSE_RMS else 0
+        need = round(PAUSE_S * self._rate / block)
+        before = len(self._chunks) - need
+        if self._quiet_blocks != need or before * block < MIN_PIECE_S * self._rate:
+            return False
+        keep = before + need // 2
+        self._pieces.append(np.concatenate(self._chunks[:keep]))
+        del self._chunks[:keep]
+        return True

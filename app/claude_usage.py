@@ -5,7 +5,7 @@ The token is only read, never refreshed here – Claude Code refreshes it itself
 """
 import json
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -94,6 +94,19 @@ def fetch() -> Usage:
     if r.status_code != 200:
         raise UsageError(f"Claude odpověděl chybou {r.status_code}.")
     return parse(r.json())
+
+
+def forecast(samples: list[tuple[datetime, float]], resets_at: datetime | None) -> datetime | None:
+    """When the limit runs out at the pace of the last 30 minutes – only if that's before it resets."""
+    recent = [(t, p) for t, p in samples if t >= samples[-1][0] - timedelta(minutes=30)] if samples else []
+    if len(recent) < 2:
+        return None
+    (t0, p0), (t1, p1) = recent[0], recent[-1]
+    seconds = (t1 - t0).total_seconds()
+    if seconds < 600 or p1 - p0 < 1:  # too short to tell, or it barely moves
+        return None
+    eta = t1 + timedelta(seconds=(100 - p1) * seconds / (p1 - p0))
+    return eta if resets_at is None or eta < resets_at else None
 
 
 def countdown(when: datetime | None) -> str:

@@ -113,7 +113,28 @@ def clean_text(text: str) -> str:
     return text
 
 
+def apply_replacements(text: str, replacements: list[list[str]]) -> str:
+    """Fixes for phrases Whisper keeps getting wrong ("comgit" -> "Comgate"); whole words, any letter case."""
+    for wrong, right in replacements:
+        text = re.sub(rf"(?<!\w){re.escape(wrong)}(?!\w)", lambda _: right, text, flags=re.IGNORECASE)
+    return text
+
+
 _COMMAND_RE = re.compile(r"\s*\b(nov(?:ý|á)\s+(?:řádek|řádka|odstavec))\b[\s,.;:!?]*", re.IGNORECASE)
+
+
+# Terminal commands: only as a sentence of their own, so "… tak mu to odešli" stays text.
+_SEND_RE = re.compile(r"(?:^|(?<=[.!?…]))\s*(?:odešli|odeslat)\s*[.!?…]*\s*$", re.IGNORECASE)
+_STOP_RE = re.compile(r"^\s*(?:stop|zastav)\s*[.!?…]*\s*$", re.IGNORECASE)
+
+
+def terminal_command(text: str) -> tuple[str, str]:
+    """'… Odešli.' at the end -> (text without it, 'send'); a dictation of just 'Stop.' -> ('', 'stop')."""
+    if _STOP_RE.match(text):
+        return "", "stop"
+    if _SEND_RE.search(text):
+        return _SEND_RE.sub("", text).rstrip(), "send"
+    return text, ""
 
 
 def apply_voice_commands(text: str) -> str:

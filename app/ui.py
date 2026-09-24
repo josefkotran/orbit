@@ -2,15 +2,16 @@ import ctypes
 import math
 from datetime import datetime, timezone
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, QPointF, QPropertyAnimation, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (QColor, QFont, QFontDatabase, QFontMetricsF, QGuiApplication, QIcon, QPainter, QPen,
                            QPixmap)
-from PySide6.QtWidgets import (QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton, QToolTip,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QPlainTextEdit,
+                               QPushButton, QToolTip, QVBoxLayout, QWidget)
 
 from . import hotkey
 from .claude_usage import Usage, countdown, reset_text
 from .config import MODEL_LABELS
+from .sessions import STATE_LABELS, Session
 from .theme import GLYPH_KEYBOARD, GLYPH_MOUSE, LISTEN, TEXT, LevelWave, Toggle, glyph_icon, style_titlebar
 
 MIC_GLYPH = ""  # "Microphone" in Segoe Fluent Icons / Segoe MDL2 Assets
@@ -22,6 +23,15 @@ COLORS = {  # state: (background, glyph)
     "recording": ("#E5484D", "#FFFFFF"),
     "busy": ("#F5A524", "#2A1C00"),
     "error": ("#7A1F24", "#FFB4B4"),
+}
+
+
+SESSION_COLORS = {  # Claude Code session state -> status dot
+    "working": QColor("#5B9DFF"),
+    "waiting": QColor("#F5A524"),
+    "done": QColor("#3DD68C"),
+    "idle": QColor("#5B6272"),
+    "error": QColor("#E5484D"),
 }
 
 
@@ -67,14 +77,18 @@ class FloatingButton(QWidget):
     cancelled = Signal()
     moved = Signal(QPoint)  # new top-left of the button area, in screen coordinates
     menu_requested = Signal(QPoint)
+    session_clicked = Signal(str)
 
     DIAMETER = 52
     MARGIN = 10
-    PANEL_W = 196
+    PANEL_W = 224
     PAD = 8
     HEADER_H = 16
     ROW_H = 18
+    SEP_H = 9  # gap with a hairline between the limits and the sessions
     STALE_AFTER_S = 600
+    IDLE_FADE_MS = 3000  # nothing happening for this long -> almost fully transparent
+    FADED_OPACITY = 0.3
 
     def __init__(self, level_source):
         super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
@@ -92,10 +106,15 @@ class FloatingButton(QWidget):
         self._press_pos = QPoint()
         self._press_on_button = False
         self._dragging = False
+        self._hovered = False
 
         self._show_usage = False
         self._usage: Usage | None = None
         self._usage_error: str | None = None
+        self._forecast: datetime | None = None
+        self._sessions: list[Session] = []
+        self._session_rows: list[tuple[QRectF, Session]] = []
+        self._attention = False  # a session waits for Pepa – don't fade out
         self._align = "right"  # which circle edge the panel lines up with
         self._below = False  # panel under the button (when the button is near the top of the screen)
         self._btn_off = QPoint()
@@ -108,6 +127,9 @@ class FloatingButton(QWidget):
         self._clock = QTimer(self, interval=30_000)  # keeps the reset countdown current
         self._clock.timeout.connect(self.update)
         self._clock.start()
+        self._fade_timer = QTimer(self, singleShot=True, interval=self.IDLE_FADE_MS)
+        self._fade_timer.timeout.connect(self._fade_out)
+        self._fade = QPropertyAnimation(self, b"windowOpacity", self)
 
     # -- geometry ---------------------------------------------------------------------------
 
@@ -115,14 +137,22 @@ class FloatingButton(QWidget):
     def _side(self) -> int:
         return self.DIAMETER + 2 * self.MARGIN
 
+    @property
+    def _has_panel(self) -> bool:
+        return self._show_usage or bool(self._sessions)
+
     def _panel_height(self) -> int:
-        rows = len(self._usage.limits) if self._usage and self._usage.limits else 1
-        return self.PAD + self.HEADER_H + rows * self.ROW_H + self.PAD - 2
+        h = self.PAD + self.HEADER_H + self.PAD - 2
+        if self._show_usage:
+            h += (len(self._usage.limits) if self._usage and self._usage.limits else 1) * self.ROW_H
+        if self._sessions:
+            h += (self.SEP_H if self._show_usage else 0) + len(self._sessions) * self.ROW_H
+        return h
 
     def _relayout(self, keep_button_in_place: bool = True) -> None:
         anchor = self.button_pos()
         side = self._side
-        if not self._show_usage:
+        if not self._has_panel:
             self._panel = QRectF()
             self._btn_off = QPoint(0, 0)
             self.setFixedSize(side, side)
@@ -151,7 +181,7 @@ class FloatingButton(QWidget):
 
     def _auto_align(self) -> None:
         """Keep the panel on screen: line it up with the circle edge that faces the screen's middle."""
-        if not self._show_usage:
+        if not self._has_panel:
             return
         center = self.button_pos() + QPoint(self._side // 2, self._side // 2)
         screen = QGuiApplication.screenAt(center) or QGuiApplication.primaryScreen()
@@ -183,6 +213,7 @@ class FloatingButton(QWidget):
         if state != self._state:
             self._state = state
             self.update()
+            self._wake()
         animate = state in ("recording", "busy", "loading")
         if animate and not self._timer.isActive():
             self._timer.start()
@@ -207,6 +238,24 @@ class FloatingButton(QWidget):
             self._auto_align()
         self.update()
 
+    def set_forecast(self, eta: datetime | None) -> None:
+        """When the 5-hour limit runs out at the current pace (None = not before it resets)."""
+        self._forecast = eta
+        self.update()
+
+    def set_sessions(self, sessions: list[Session]) -> None:
+        count_before = len(self._sessions)
+        self._sessions = sessions
+        if len(sessions) != count_before:
+            self._relayout()
+            self._auto_align()
+        self.update()
+
+    def set_attention(self, on: bool) -> None:
+        if on != self._attention:
+            self._attention = on
+            self._wake()
+
     def _stale(self) -> bool:
         if self._usage is None:
             return True
@@ -219,12 +268,50 @@ class FloatingButton(QWidget):
         self._level += (target - self._level) * 0.45
         self.update()
 
+    # -- fading out when nothing happens ----------------------------------------------------
+
+    def wake(self) -> None:
+        """Something happened worth a look – full opacity for a moment."""
+        self._wake()
+
+    def _wake(self) -> None:
+        """Fully visible now; when idle, fade out again after IDLE_FADE_MS."""
+        self._animate_opacity(1.0, 150)
+        if self._state == "idle" and not self._hovered and not self._attention:
+            self._fade_timer.start()
+        else:
+            self._fade_timer.stop()
+
+    def _fade_out(self) -> None:
+        if QApplication.activePopupWidget():  # our context menu is open
+            self._fade_timer.start()
+        elif self._state == "idle" and not self._hovered and not self._attention and self._press_global is None:
+            self._animate_opacity(self.FADED_OPACITY, 600)
+
+    def _animate_opacity(self, target: float, ms: int) -> None:
+        self._fade.stop()
+        if abs(self.windowOpacity() - target) > 0.01:
+            self._fade.setDuration(ms)
+            self._fade.setStartValue(self.windowOpacity())
+            self._fade.setEndValue(target)
+            self._fade.start()
+
+    def enterEvent(self, event):
+        self._hovered = True
+        self._wake()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hovered = False
+        self._wake()
+        super().leaveEvent(event)
+
     # -- painting ---------------------------------------------------------------------------
 
     def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        if self._show_usage:
+        if self._has_panel:
             self._paint_panel(p)
         c = self._button_center()
         r = self.DIAMETER / 2
@@ -260,10 +347,29 @@ class FloatingButton(QWidget):
         p.setFont(bold)
         p.setPen(dim)
         p.drawText(header, Qt.AlignLeft | Qt.AlignVCenter, "Claude")
+        if self._show_usage:
+            self._paint_header_note(p, header, font, text, dim)
+        y += self.HEADER_H
+        if self._show_usage:
+            y = self._paint_limits(p, x, right, y, font, bold, text, dim)
+        self._session_rows = []
+        if self._sessions:
+            if self._show_usage:
+                p.setPen(QPen(QColor(255, 255, 255, 22), 1))
+                p.drawLine(QPointF(x, y + self.SEP_H / 2), QPointF(right, y + self.SEP_H / 2))
+                y += self.SEP_H
+            self._paint_sessions(p, x, right, y, font, bold, text, dim)
+
+    def _paint_header_note(self, p: QPainter, header: QRectF, font: QFont, text: QColor, dim: QColor) -> None:
+        """Right side of the header: when the 5-hour window resets – or when it runs out first at this pace."""
         session = self._usage.get("session") if self._usage else None
         note, refresh_icon = "", False
         if self._usage_error and self._stale():
             note = "neaktuální"
+        elif self._forecast:
+            local = self._forecast.astimezone()
+            note = f"dojde v {local.hour}:{local.minute:02d}"
+            p.setPen(QColor("#F5A524"))
         elif session and session.resets_at:
             note, refresh_icon = countdown(session.resets_at), True
         p.setFont(font)
@@ -276,13 +382,15 @@ class FloatingButton(QWidget):
             text_w = QFontMetricsF(font).horizontalAdvance(note)
             p.drawText(QRectF(header.right() - text_w - 18, header.top(), 14, header.height()),
                        Qt.AlignCenter, REFRESH_GLYPH)
-        y += self.HEADER_H
 
+    def _paint_limits(self, p: QPainter, x: float, right: float, y: float, font: QFont, bold: QFont, text: QColor,
+                      dim: QColor) -> float:
         if not self._usage or not self._usage.limits:
             p.setPen(dim)
+            p.setFont(font)
             msg = "Načítám…" if not self._usage_error else "Nedostupné – najeď myší"
             p.drawText(QRectF(x, y, right - x, self.ROW_H), Qt.AlignLeft | Qt.AlignVCenter, msg)
-            return
+            return y + self.ROW_H
 
         if self._stale():
             p.setOpacity(0.5)
@@ -306,6 +414,35 @@ class FloatingButton(QWidget):
                 p.drawRoundedRect(filled, 3, 3)
             y += self.ROW_H
         p.setOpacity(1.0)
+        return y
+
+    def _paint_sessions(self, p: QPainter, x: float, right: float, y: float, font: QFont, bold: QFont,
+                        text: QColor, dim: QColor) -> None:
+        """One row per Claude Code session: status dot, project, what it's doing, how full its context is."""
+        pct_w, state_w = 34, 78
+        for s in self._sessions:
+            row = QRectF(x, y, right - x, self.ROW_H)
+            self._session_rows.append((row.adjusted(-6, 0, 6, 0), s))
+            p.setPen(Qt.NoPen)
+            p.setBrush(SESSION_COLORS[s.state])
+            p.drawEllipse(QPointF(row.left() + 4, row.center().y()), 3.5, 3.5)
+            p.setFont(bold)
+            p.setPen(text)
+            name_rect = QRectF(row.left() + 13, row.top(), row.width() - 13 - state_w - pct_w, row.height())
+            p.drawText(name_rect, Qt.AlignLeft | Qt.AlignVCenter,
+                       QFontMetricsF(bold).elidedText(s.name, Qt.ElideRight, name_rect.width()))
+            p.setFont(font)
+            p.setPen(SESSION_COLORS[s.state] if s.state in ("waiting", "error") else dim)
+            p.drawText(QRectF(row.right() - pct_w - state_w, row.top(), state_w, row.height()),
+                       Qt.AlignRight | Qt.AlignVCenter, STATE_LABELS[s.state])
+            if s.context is not None:
+                p.setPen(QColor("#F5A524") if s.context >= 0.8 else dim)
+                p.drawText(QRectF(row.right() - pct_w, row.top(), pct_w, row.height()),
+                           Qt.AlignRight | Qt.AlignVCenter, f"{s.context * 100:.0f} %")
+            y += self.ROW_H
+
+    def _session_at(self, pos: QPointF) -> Session | None:
+        return next((s for rect, s in self._session_rows if rect.contains(pos)), None)
 
     def _usage_tooltip(self) -> str:
         lines = []
@@ -315,6 +452,10 @@ class FloatingButton(QWidget):
             for lim in self._usage.limits:
                 reset = reset_text(lim.resets_at)
                 lines.append(f"{lim.title}: {lim.percent:.0f} %" + (f" – {reset}" if reset else ""))
+        if self._forecast:
+            local = self._forecast.astimezone()
+            lines.append(f"Při současném tempu 5hodinové okno dojde v {local.hour}:{local.minute:02d}, "
+                         "dřív než se obnoví.")
         if self._usage_error:
             lines.append(("⚠ " if lines else "") + self._usage_error)
         return "\n".join(lines) or "Načítám využití Clauda…"
@@ -322,8 +463,10 @@ class FloatingButton(QWidget):
     def event(self, event):
         if event.type() == QEvent.ToolTip:
             pos = event.position() if hasattr(event, "position") else QPointF(event.pos())
-            on_panel = self._show_usage and self._panel.contains(pos)
-            QToolTip.showText(event.globalPos(), self._usage_tooltip() if on_panel else self._button_tip, self)
+            session = self._session_at(pos)
+            on_panel = self._has_panel and self._panel.contains(pos)
+            tip = session.tooltip() if session else self._usage_tooltip() if on_panel else self._button_tip
+            QToolTip.showText(event.globalPos(), tip, self)
             return True
         return super().event(event)
 
@@ -361,6 +504,8 @@ class FloatingButton(QWidget):
             self.moved.emit(self.button_pos())
         elif self._press_on_button:
             self.released.emit()
+        elif session := self._session_at(event.position()):
+            self.session_clicked.emit(session.id)
 
 
 _NON_DEDICATED_VK = set(range(0x08, 0x0E)) | set(range(0x20, 0x5B)) | set(range(0x60, 0x70)) | set(range(0xBA, 0xE3))
@@ -389,6 +534,15 @@ def _field(title: str, widget: QWidget, hint: str | None = None) -> QVBoxLayout:
     if hint:
         box.addWidget(_label(hint, "dim", wrap=True))
     return box
+
+
+def _parse_replacements(text: str) -> list[list[str]]:
+    pairs = []
+    for line in text.splitlines():
+        wrong, sep, right = line.replace("->", "→").partition("→")
+        if sep and wrong.strip() and right.strip():
+            pairs.append([wrong.strip(), right.strip()])
+    return pairs
 
 
 class _OptionRow(QWidget):
@@ -490,13 +644,23 @@ class SettingsDialog(QDialog):
         transcript.addLayout(_field("Model", self.model))
         self.vocabulary = QPlainTextEdit(cfg["vocabulary"])
         self.vocabulary.setPlaceholderText("např. Hommel Hercules, M-tex, HHW")
-        self.vocabulary.setFixedHeight(70)
+        self.vocabulary.setFixedHeight(64)
         transcript.addLayout(_field("Slovník", self.vocabulary,
                                     "Jména a značky, které má psát přesně takhle. Odděl je čárkou."))
-        self.commands = _OptionRow("Hlasové povely", "„Nový řádek“ a „nový odstavec“ vloží zalomení.",
-                                   cfg["voice_commands"])
+        self.replacements = QPlainTextEdit("\n".join(f"{w} → {r}" for w, r in cfg["replacements"]))
+        self.replacements.setPlaceholderText("comgit → Comgate")
+        self.replacements.setFixedHeight(64)
+        transcript.addLayout(_field("Opravy", self.replacements, "Co řádek, to oprava: špatně → správně."))
+        self.learn = _OptionRow("Učit se z diktátů", "Po každých 10 diktátech pošle jejich text (ne zvuk) Claudovi "
+                                "a ten doplní slovník a opravy.", cfg["learn_vocabulary"])
+        transcript.addWidget(self.learn)
+        self.live = _OptionRow("Přepisovat už během mluvení", "Dlouhý diktát je hotový skoro hned po puštění, "
+                               "občas o chlup méně přesně.", cfg["live_transcribe"])
+        self.commands = _OptionRow("Hlasové povely", "„Nový řádek“, „nový odstavec“. Věta „Odešli.“ na konci "
+                                   "zmáčkne Enter, samotné „Stop.“ zmáčkne Esc.", cfg["voice_commands"])
         self.keep = _OptionRow("Ukládat nahrávky", "Posledních 30 do složky recordings, pro ladění přesnosti.",
                                cfg["keep_recordings"])
+        transcript.addWidget(self.live)
         transcript.addWidget(self.commands)
         transcript.addWidget(self.keep)
         transcript.addStretch(1)
@@ -513,8 +677,13 @@ class SettingsDialog(QDialog):
         self.sounds = _OptionRow("Pípnout při nahrávání", "Na začátku a na konci.", cfg["sounds"])
         self.show_btn = _OptionRow("Plovoucí tlačítko", None, cfg["show_button"])
         self.show_usage = _OptionRow("Využití Clauda nad tlačítkem", "5 h, týden a Fable.", cfg["show_usage"])
+        self.show_sessions = _OptionRow("Přehled relací Claude Code", "Co která dělá, jestli čeká na tebe a kolik "
+                                        "má kontextu. Klik přepne do terminálu.", cfg["show_sessions"])
+        self.speak = _OptionRow("Předčítat hotové odpovědi", "Když relace doběhne, hlas Jakub přečte začátek "
+                                "odpovědi. Jen lokálně.", cfg["speak_answers"])
         self.autostart = _OptionRow("Spouštět s Windows", None, autostart)
-        for row in (self.trailing, self.sounds, self.show_btn, self.show_usage, self.autostart):
+        for row in (self.trailing, self.sounds, self.show_btn, self.show_usage, self.show_sessions, self.speak,
+                    self.autostart):
             behaviour.addWidget(row)
         behaviour.addStretch(1)
 
@@ -575,11 +744,16 @@ class SettingsDialog(QDialog):
             "model": self.model.currentData(),
             "insert_mode": self.mode.currentData(),
             "vocabulary": self.vocabulary.toPlainText().strip(),
+            "replacements": _parse_replacements(self.replacements.toPlainText()),
+            "learn_vocabulary": self.learn.isChecked(),
+            "live_transcribe": self.live.isChecked(),
             "voice_commands": self.commands.isChecked(),
             "keep_recordings": self.keep.isChecked(),
             "trailing_space": self.trailing.isChecked(),
             "sounds": self.sounds.isChecked(),
             "show_button": self.show_btn.isChecked(),
             "show_usage": self.show_usage.isChecked(),
+            "show_sessions": self.show_sessions.isChecked(),
+            "speak_answers": self.speak.isChecked(),
             "autostart": self.autostart.isChecked(),
         }

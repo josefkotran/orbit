@@ -4,6 +4,7 @@ __pycache__/
 # large or personal – never commit
 models/
 recordings/
+sessions/
 config.json
 *.log
 
