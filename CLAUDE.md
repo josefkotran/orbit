@@ -63,8 +63,13 @@ složce `diktovani`, řádek `command` v `pyvenv.cfg` je proto zastaralý, ale n
   z MSYS2 shellu, jinak nenajdou DLL.
 - Server běží jako podproces na volném portu, čeká se na `GET /health`. Proces je přiřazený do **Job objectu
   s KILL_ON_JOB_CLOSE**, takže zemře i při pádu aplikace a neblokuje VRAM.
-- Parametry `/inference`: `language=cs`, `beam_size=5`, `temperature=0`, `no_timestamps=true`, `prompt` = česká věta
-  + slovník. Flash attention je v serveru zapnutá defaultně.
+- Parametry `/inference`: `language=cs`, `beam_size=5`, `temperature=0`, `no_timestamps=false`, `prompt` = česká věta
+  + slovník, `response_format=json`. Flash attention je v serveru zapnutá defaultně.
+- **Časová razítka musí zůstat zapnutá** (`no_timestamps=false`), i když je nepoužíváme. Bez nich Whisper
+  (a) u nahrávek nad 30 s ztratil vše za prvním oknem: 35 s řeči vrátilo jen „Titulky vytvořil Jirka Kováč“,
+  filtr to smazal a nevložilo se nic; (b) při pauze 2–5 s uprostřed nahrávky zahodil celou větu i pod 30 s.
+  Ověřeno na Pepových nahrávkách slepených s tichem: s razítky se ve 24 testech neztratilo nic, rychlost ~ +3 %.
+  `verbose_json` (segmenty) by přidal ~0,7 s na každý přepis, proto zůstává `json`.
 - **`suppress_nst` je schválně vypnuté**, protože maže `: " ( ) /` (např. „10:30“ by se změnilo na „10 30“).
 - Filtry: nahrávka kratší než 0,3 s nebo s max. RMS pod 200 (≈ −44 dBFS) se nepřepisuje. Maže se známá halucinace
   „Titulky vytvořil JohnyX“ a samostatné „Děkuji za pozornost / sledování“, „Titulky“, „Hudba“.

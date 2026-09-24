@@ -242,6 +242,8 @@ class Dictation:
             if voice_commands:
                 text = apply_voice_commands(text)
             log.info("Přepis %.1f s zvuku za %.2f s: %r", len(audio) / SAMPLE_RATE, time.perf_counter() - t0, text)
+            if raw.strip() and not text:
+                log.info("Celý přepis odfiltrován jako halucinace: %r", raw)
             if keep:
                 self._save_recording(audio, raw)
             self.bridge.text_ready.emit(text)

@@ -182,7 +182,9 @@ class WhisperServer:
                 "response_format": "json",
                 "temperature": "0",
                 "beam_size": "5",
-                "no_timestamps": "true",
+                # Without timestamps Whisper drops whole sentences around pauses and loses everything
+                # past the first 30 s window (it came back as "Titulky vytvořil…"). Costs ~3 % speed.
+                "no_timestamps": "false",
                 "prompt": prompt,
             },
             timeout=120,
