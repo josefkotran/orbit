@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+
+# large or personal – never commit
+models/
+recordings/
+config.json
+*.log
+
+# generated at runtime
+assets/*.wav
+assets/chevron.png
