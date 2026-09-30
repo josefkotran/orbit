@@ -7,15 +7,15 @@ from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
 
 import numpy as np
-from PySide6.QtCore import QObject, QPoint, QTimer, Signal
-from PySide6.QtGui import QAction, QGuiApplication
+from PySide6.QtCore import QObject, QPoint, QTimer, QUrl, Signal
+from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication
 from PySide6.QtTextToSpeech import QTextToSpeech
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
-from . import claude_usage, config, hotkey, learning, sessions, theme, winutil
+from . import artifacts, claude_cli, claude_usage, config, hotkey, learning, sessions, theme, winutil
 from .inserter import Inserter
-from .recorder import Recorder, input_devices, is_silent
-from .ui import FloatingButton, SettingsDialog, mic_icon
+from .recorder import Recorder, input_devices, is_bluetooth_handsfree, is_silent
+from .ui import Bubble, FloatingButton, SettingsDialog, mic_icon
 from .whisper_server import (SAMPLE_RATE, WhisperServer, apply_replacements, apply_voice_commands, build_prompt,
                              clean_text, terminal_command, to_wav)
 
@@ -61,6 +61,8 @@ class Bridge(QObject):
     usage_failed = Signal(str)
     learned = Signal(object)
     learn_failed = Signal(str)
+    artifact_ready = Signal(object, object)  # artifacts.Published, artifacts.Summary
+    artifact_failed = Signal(object, str)
 
 
 class Dictation:
@@ -98,11 +100,20 @@ class Dictation:
         self.button.cancelled.connect(self.cancel_recording)
         self.button.moved.connect(self._button_moved)
         self.button.menu_requested.connect(self._show_menu)
+        self.bubble: Bubble | None = None
         self.button.session_clicked.connect(self._focus_session)
+        self.button.reader_toggled.connect(self._toggle_reader)
         self.tracker = sessions.SessionTracker()
         self.session_timer = QTimer(interval=SESSION_POLL_MS)
         self.session_timer.timeout.connect(self._poll_sessions)
         self.tts: QTextToSpeech | None = None
+        self._speech: list[tuple[str, bool]] = []  # (text, is an artifact) waiting to be read (see _speak)
+        self._speaking = False
+        self._reading_artifact = False  # what's being read now is an artifact summary
+        self._said_at = 0.0
+        self.summarizer = artifacts.Summarizer()
+        self._summary_lock = threading.Lock()  # one artifact after another
+        self._artifact_speech = ""  # the last artifact summary, for reading it again
         self._usage_samples: list[tuple[datetime, float]] = []
         self._samples_window = None  # resets_at of the 5-hour window the samples belong to
         self._forecast_warned = None  # the 5-hour window we already warned about
@@ -120,6 +131,8 @@ class Dictation:
         self.menu.addAction(self.toggle_action)
         self.menu.addAction("Obnovit využití Clauda", self._fetch_usage)
         self.menu.addAction("Naučit slovník z nových diktátů", lambda: self._maybe_learn(force=True))
+        self.reread_action = self.menu.addAction("Přečíst znovu poslední artefakt", self._reread_artifact)
+        self.reread_action.setEnabled(False)
         self.menu.addSeparator()
         self.menu.addAction("Ukončit", QApplication.quit)
         self.tray = QSystemTrayIcon(self.icons["loading"])
@@ -140,6 +153,8 @@ class Dictation:
         b.usage_failed.connect(self._usage_failed)
         b.learned.connect(self._learned)
         b.learn_failed.connect(self._learn_failed)
+        b.artifact_ready.connect(self._artifact_ready)
+        b.artifact_failed.connect(self._artifact_failed)
         self.usage_timer = QTimer(interval=USAGE_REFRESH_MS)
         self.usage_timer.timeout.connect(self._fetch_usage)
 
@@ -249,8 +264,7 @@ class Dictation:
             return
         if self.recorder.active:
             return
-        if self.tts:
-            self.tts.stop()  # don't talk over (or into) a dictation
+        self._stop_speech()  # don't talk over (or into) a dictation
         if self.server_state == "error":
             self._notify("Rozpoznávání řeči neběží, zkus aplikaci restartovat.", error=True)
             return
@@ -394,11 +408,12 @@ class Dictation:
     # -- Claude Code sessions ---------------------------------------------------------------
 
     def _apply_sessions_setting(self):
-        on = self.cfg["show_sessions"]
+        """The session overview and reading artifacts aloud both need Orbit's hooks in Claude Code."""
+        self.button.set_reader(self.cfg["read_artifacts"])
+        on = self.cfg["show_sessions"] or self.cfg["read_artifacts"]
         try:
             if sessions.set_hooks(on) and on:
-                self._notify("Přehled relací Claude Code je zapnutý. Relace, které už běží, se v něm objeví "
-                             "po restartu.")
+                self._notify("Orbit se napojil na Claude Code: přehled relací a čtení artefaktů.")
         except Exception as e:
             log.exception("Úprava hooků Claude Code selhala")
             self._notify(f"Nepodařilo se upravit nastavení Claude Code: {e}", error=True)
@@ -407,12 +422,22 @@ class Dictation:
             self._poll_sessions()
         else:
             self.session_timer.stop()
+        if not self.cfg["show_sessions"]:
             self.button.set_sessions([])
             self.button.set_attention(False)
 
     def _poll_sessions(self):
+        for pub in artifacts.take_new():
+            if not self.cfg["read_artifacts"]:
+                artifacts.done(pub)
+                continue
+            log.info("Relace %s zveřejnila artefakt %s (%s)", pub.name, pub.url or "?", pub.path)
+            # a daemon thread: quitting Orbit mustn't wait for Claude
+            threading.Thread(target=self._summarize_artifact, args=(pub,), daemon=True).start()
+        if not self.cfg["show_sessions"]:
+            return
         changes = self.tracker.poll()
-        current = sorted(self.tracker.sessions.values(), key=lambda s: (s.name.lower(), s.since))
+        current = sorted(self.tracker.sessions.values(), key=lambda s: (s.folder.lower(), s.started))
         self.button.set_sessions(current)
         self.button.set_attention(any(s.state == "waiting" for s in current))
         for s, state in changes:
@@ -422,31 +447,111 @@ class Dictation:
         log.info("Relace %s: %s (tah %.0f s)", s.name, state, s.turn_s)
         if sessions.is_foreground(s):
             return  # Pepa is looking at it
-        if state == "waiting":
-            self._notify(sessions.summary(s.message, 1) or "Čeká na tvoji odpověď.", title=f"{s.name} čeká na tebe")
-        elif state == "error":
-            self._notify(sessions.summary(s.message, 1) or "Claude skončil chybou.", error=True,
-                         title=f"{s.name}: chyba")
-        elif state == "done" and s.turn_s >= NOTIFY_TURN_S:
-            self.button.wake()
-            self._notify(sessions.summary(s.message, 1) or "Hotovo.", title=f"{s.name}: hotovo")
+        fallback = {"waiting": "Čeká na tvoji odpověď.", "error": "Claude skončil chybou.", "done": "Hotovo."}
+        if state in ("waiting", "error") or (state == "done" and s.turn_s >= NOTIFY_TURN_S):
+            self._notify(sessions.summary(s.message, 2) or fallback[state], title=s.name, kind=state,
+                         note=sessions.STATE_LABELS[state], session_id=s.id)
+        if state == "done" and s.turn_s >= NOTIFY_TURN_S:
             if self.cfg["speak_answers"]:
-                self._speak(f"{s.name} je hotový. {sessions.summary(s.message, 2)}")
+                self._speak(f"Hotovo: {s.name}. {sessions.summary(s.message, 2)}")
 
     def _focus_session(self, session_id: str):
         s = self.tracker.sessions.get(session_id)
         if s and not sessions.focus(s):
             self._notify(f"Okno terminálu relace {s.name} se nepodařilo najít.")
 
-    def _speak(self, text: str):
+    def _speak(self, text: str, wait: bool = False, artifact: bool = False):
+        """Reads text aloud after whatever is being read now. While Pepa dictates it's dropped, or with `wait`
+        read once he's done. artifact: an artifact summary (lights up the reading satellite)."""
         if self.recorder.active:
+            if wait:
+                QTimer.singleShot(1000, lambda: self._speak(text, wait, artifact))
+            return
+        if not winutil.accepts_notifications():
+            log.info("Nečtu nahlas: hra nebo prezentace na celou obrazovku")
             return
         if self.tts is None:
             self.tts = QTextToSpeech("winrt")
             voice = next((v for v in self.tts.availableVoices() if v.locale().name() == "cs_CZ"), None)
             if voice:
                 self.tts.setVoice(voice)
-        self.tts.say(text)
+            self.tts.stateChanged.connect(self._speech_state)
+            log.info("Předčítání: engine %s, hlas %s, hlasitost %.2f", self.tts.engine(),
+                     voice.name() if voice else "výchozí (český nenalezen)", self.tts.volume())
+        # Not QTextToSpeech.enqueue: with the winrt engine two texts queued before it starts speaking (in the same
+        # moment) drop the first one. The next text is said only once the previous one has finished.
+        self._speech.append((text, artifact))
+        stuck = self.tts.state() != QTextToSpeech.State.Speaking and time.monotonic() - self._said_at > 3
+        if not self._speaking or stuck:
+            self._say_next()
+
+    def _say_next(self):
+        self._speaking = bool(self._speech)
+        text, self._reading_artifact = self._speech.pop(0) if self._speech else ("", False)
+        self.button.set_reading(self._reading_artifact)
+        if text:
+            self._said_at = time.monotonic()
+            log.info("Čtu nahlas (%d znaků): %s", len(text), text[:80])
+            self.tts.say(text)
+
+    def _speech_state(self, state):
+        log.info("Předčítání: %s%s", state.name, f" – {self.tts.errorString()}" if state == QTextToSpeech.State.Error
+                 else "")
+        if state in (QTextToSpeech.State.Ready, QTextToSpeech.State.Error):
+            # not right here: after stop() winrt ignores a say() made while it reports Ready
+            QTimer.singleShot(0, self._say_next)
+
+    def _stop_speech(self, artifacts_only: bool = False):
+        """Silence now and forget what's queued (or only the artifact summaries; an answer after them still comes)."""
+        self._speech = [s for s in self._speech if not s[1]] if artifacts_only else []
+        if self.tts and (self._reading_artifact or not artifacts_only):
+            self.tts.stop()
+
+    # -- artifacts read aloud ---------------------------------------------------------------
+
+    def _summarize_artifact(self, pub: artifacts.Published):
+        """Worker thread (tens of seconds)."""
+        try:
+            with self._summary_lock:
+                summary = self.summarizer.summarize(pub)
+        except Exception as e:
+            log.warning("Souhrn artefaktu %s selhal: %s", pub.path, e,
+                        exc_info=not isinstance(e, (claude_cli.ClaudeError, OSError)))
+            self.bridge.artifact_failed.emit(pub, str(e))
+            return
+        finally:
+            artifacts.done(pub)
+        if summary:
+            self.bridge.artifact_ready.emit(pub, summary)
+
+    def _artifact_ready(self, pub: artifacts.Published, summary: artifacts.Summary):
+        log.info("Souhrn artefaktu %s: %s – %s", pub.url or pub.path, summary.title, " ".join(summary.sentences))
+        if not self.cfg["read_artifacts"]:
+            return
+        kind = "Aktualizovaný artefakt" if summary.updated else "Artefakt"
+        session = self.tracker.sessions.get(pub.session_id)
+        name = session.name if session else sessions.topic(pub.transcript) or pub.name
+        self._artifact_speech = f"{kind} z relace {name}: {summary.title}. {' '.join(summary.sentences)}"
+        self.reread_action.setEnabled(True)
+        self._notify(" ".join(summary.sentences[:2]), title=summary.title, kind="done", note=pub.name, url=pub.url)
+        self._speak(self._artifact_speech, wait=True, artifact=True)
+
+    def _artifact_failed(self, pub: artifacts.Published, msg: str):
+        if self.cfg["read_artifacts"]:
+            self._notify(f"Souhrn artefaktu {pub.title or pub.name} se nepovedl: {msg}", error=True, url=pub.url)
+
+    def _reread_artifact(self):
+        self._stop_speech()
+        self._speak(self._artifact_speech, artifact=True)
+
+    def _toggle_reader(self):
+        """The reading satellite by the mic button was clicked."""
+        on = self.cfg["read_artifacts"] = not self.cfg["read_artifacts"]
+        config.save(self.cfg)
+        log.info("Předčítání artefaktů %s", "zapnuto" if on else "vypnuto")
+        if not on:
+            self._stop_speech(artifacts_only=True)
+        self._apply_sessions_setting()
 
     # -- self-improving vocabulary ----------------------------------------------------------
 
@@ -468,7 +573,7 @@ class Dictation:
                 self.bridge.learned.emit({"force": force, "count": len(new), "until": new[-1][0],
                                           "suggestion": suggestion})
             except Exception as e:
-                log.warning("Učení slovníku selhalo: %s", e, exc_info=not isinstance(e, learning.LearningError))
+                log.warning("Učení slovníku selhalo: %s", e, exc_info=not isinstance(e, claude_cli.ClaudeError))
                 self.bridge.learn_failed.emit(str(e) if force else "")
 
         threading.Thread(target=run, daemon=True).start()
@@ -523,9 +628,35 @@ class Dictation:
         self.tray.setToolTip(tray_tip[:127])
         self.hint_action.setText(f"Mluvení: drž {key}")
 
-    def _notify(self, msg, error=False, title="Orbit"):
-        icon = QSystemTrayIcon.Warning if error else QSystemTrayIcon.Information
-        self.tray.showMessage(title, msg, icon, 6000)
+    def _notify(self, msg, error=False, title="Orbit", kind=None, note="", session_id=None, url=""):
+        """Orbit's bubble at the mic button, with Orbit's sound. kind: 'done', 'waiting', 'error' or 'info'
+        (default from `error`); note: small text right of the title; session_id: a click switches to it;
+        url: a click opens it."""
+        kind = kind or ("error" if error else "info")
+        if not winutil.accepts_notifications():  # full-screen game or presentation: Windows holds it for later
+            icon = QSystemTrayIcon.Warning if kind == "error" else QSystemTrayIcon.Information
+            self.tray.showMessage(title, msg, icon, 6000)
+            return
+        if self.bubble:
+            self.bubble.dismiss()
+        bubble = self.bubble = Bubble(kind, title, msg, note)
+        if session_id:
+            bubble.clicked.connect(lambda: self._focus_session(session_id))
+        elif url:
+            bubble.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(url)))
+        bubble.closed.connect(lambda: self._bubble_closed(bubble))
+        if self.button.isVisible():
+            self.button.set_held(True)
+            self.button.wake()
+            bubble.show_near(*self.button.bubble_anchor())
+        else:
+            bubble.show_near(None)
+        winutil.play(kind)
+
+    def _bubble_closed(self, bubble):
+        if self.bubble is bubble:
+            self.bubble = None
+            self.button.set_held(False)
 
     def _tray_activated(self, reason):
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
@@ -563,9 +694,10 @@ class Dictation:
         if refresh:
             self.recorder.shutdown()  # PortAudio re-init (to see newly plugged mics) needs the stream closed
         mics = input_devices(refresh=refresh)
+        handsfree = {m for m in (None, *mics) if is_bluetooth_handsfree(m)}
         self.recorder.set_monitor(True)  # the live meter in settings – only while the window is open
         dlg = SettingsDialog(self.cfg, mics, config.available_models(), winutil.autostart_enabled(),
-                             self.first_run, lambda: self.recorder.level)
+                             self.first_run, lambda: self.recorder.level, handsfree)
         self.dialog = dlg
         dlg.mic_changed.connect(self.recorder.configure)
         dlg.capture_requested.connect(lambda: self.ptt.capture(self.bridge.captured.emit))

@@ -2,9 +2,10 @@ import ctypes
 import math
 from datetime import datetime, timezone
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QPropertyAnimation, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import (QColor, QFont, QFontDatabase, QFontMetricsF, QGuiApplication, QIcon, QPainter, QPen,
-                           QPixmap)
+from PySide6.QtCore import (QEasingCurve, QEvent, QPoint, QPointF, QPropertyAnimation, QRect, QRectF, QSize, Qt,
+                            QTimer, Signal)
+from PySide6.QtGui import (QColor, QFont, QFontDatabase, QFontMetricsF, QGuiApplication, QIcon, QPainter,
+                           QPainterPath, QPen, QPixmap, QPolygonF, QTextLayout)
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QPlainTextEdit,
                                QPushButton, QToolTip, QVBoxLayout, QWidget)
 
@@ -16,6 +17,8 @@ from .theme import GLYPH_KEYBOARD, GLYPH_MOUSE, LISTEN, TEXT, LevelWave, Toggle,
 
 MIC_GLYPH = ""  # "Microphone" in Segoe Fluent Icons / Segoe MDL2 Assets
 REFRESH_GLYPH = chr(0xE72C)  # "Refresh" in Segoe Fluent Icons / Segoe MDL2 Assets
+SPEAKER_GLYPH = chr(0xE767)  # "Volume"
+MUTE_GLYPH = chr(0xE74F)  # "Mute"
 
 COLORS = {  # state: (background, glyph)
     "idle": ("#2F3542", "#FFFFFF"),
@@ -66,10 +69,40 @@ def _bar_color(percent: float) -> QColor:
     return QColor("#E5484D" if percent >= 90 else "#F5A524" if percent >= 70 else "#5B9DFF")
 
 
+def _no_activate(widget: QWidget) -> None:
+    """WS_EX_NOACTIVATE (+ tool window, topmost): clicking the window must not steal focus from the target window."""
+    user32 = ctypes.windll.user32
+    user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+    user32.SetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
+    hwnd = ctypes.c_void_p(int(widget.winId()))
+    ex = user32.GetWindowLongPtrW(hwnd, -20)
+    user32.SetWindowLongPtrW(hwnd, -20, ex | 0x08000000 | 0x00000080 | 0x00000008)
+
+
+def _wrap(text: str, font: QFont, width: float, max_lines: int) -> list[str]:
+    """Word-wrapped lines (\\n starts a new one); the last one ends with … when the text doesn't fit."""
+    spans = []  # (start in text, length)
+    offset = 0
+    for para in text.split("\n"):
+        layout = QTextLayout(para, font)
+        layout.beginLayout()
+        while (line := layout.createLine()).isValid():
+            line.setLineWidth(width)
+            spans.append((offset + line.textStart(), line.textLength()))
+        layout.endLayout()
+        offset += len(para) + 1
+    lines = [text[s:s + n].strip() for s, n in spans[:max_lines]]
+    if len(spans) > max_lines:
+        rest = text[spans[max_lines - 1][0]:].replace("\n", " ")
+        lines[-1] = QFontMetricsF(font).elidedText(rest, Qt.ElideRight, width)
+    return lines
+
+
 class FloatingButton(QWidget):
     """Always-on-top round mic button that never takes keyboard focus from the window you type into.
 
     Optionally shows a small Claude usage panel above (or below, near the top of the screen) the button.
+    A second circle of the same size left of the mic switches reading artifacts aloud on and off.
     """
 
     pressed = Signal()
@@ -78,10 +111,12 @@ class FloatingButton(QWidget):
     moved = Signal(QPoint)  # new top-left of the button area, in screen coordinates
     menu_requested = Signal(QPoint)
     session_clicked = Signal(str)
+    reader_toggled = Signal()
 
     DIAMETER = 52
     MARGIN = 10
-    PANEL_W = 224
+    GAP = 8  # between the reader circle and the mic circle
+    PANEL_W = 440
     PAD = 8
     HEADER_H = 16
     ROW_H = 18
@@ -105,8 +140,11 @@ class FloatingButton(QWidget):
         self._press_global: QPoint | None = None
         self._press_pos = QPoint()
         self._press_on_button = False
+        self._press_on_reader = False
         self._dragging = False
         self._hovered = False
+        self._reader_on = True  # artifacts are read aloud automatically
+        self._reading = False  # an artifact summary is being read right now
 
         self._show_usage = False
         self._usage: Usage | None = None
@@ -115,6 +153,7 @@ class FloatingButton(QWidget):
         self._sessions: list[Session] = []
         self._session_rows: list[tuple[QRectF, Session]] = []
         self._attention = False  # a session waits for Pepa – don't fade out
+        self._held = False  # a bubble points at the button – don't fade out either
         self._align = "right"  # which circle edge the panel lines up with
         self._below = False  # panel under the button (when the button is near the top of the screen)
         self._btn_off = QPoint()
@@ -135,7 +174,13 @@ class FloatingButton(QWidget):
 
     @property
     def _side(self) -> int:
+        """The mic's square (the circle and room for the level ring around it)."""
         return self.DIAMETER + 2 * self.MARGIN
+
+    @property
+    def _slot(self) -> int:
+        """Room left of the mic's square for the reader circle."""
+        return self.DIAMETER * 3 // 2 + self.GAP - self._side // 2 + 4
 
     @property
     def _has_panel(self) -> bool:
@@ -151,19 +196,23 @@ class FloatingButton(QWidget):
 
     def _relayout(self, keep_button_in_place: bool = True) -> None:
         anchor = self.button_pos()
-        side = self._side
+        side, slot = self._side, self._slot
         if not self._has_panel:
             self._panel = QRectF()
-            self._btn_off = QPoint(0, 0)
-            self.setFixedSize(side, side)
+            self._btn_off = QPoint(slot, 0)
+            self.setFixedSize(slot + side, side)
         else:
             ph = self._panel_height()
-            if self._align == "center":
-                w = max(self.PANEL_W, side)
-                bx, px = (w - side) // 2, (w - self.PANEL_W) // 2
-            else:
+            if self._align == "center":  # both circles centered under the panel
+                w = max(self.PANEL_W, slot + side)
+                bx, px = (w - slot - side) // 2 + slot, (w - self.PANEL_W) // 2
+            elif self._align == "right":  # panel's right edge = the mic circle's
                 w = self.PANEL_W + self.MARGIN
-                bx, px = (w - side, 0) if self._align == "right" else (0, self.MARGIN)
+                bx, px = w - side, 0
+            else:  # panel's left edge = the reader circle's
+                px = 4
+                w = px + self.PANEL_W
+                bx = slot
             by, py = (0, side) if self._below else (ph, 0)
             self._btn_off = QPoint(bx, by)
             self._panel = QRectF(px, py, self.PANEL_W, ph)
@@ -197,17 +246,26 @@ class FloatingButton(QWidget):
     def _button_center(self) -> QPointF:
         return QPointF(self._btn_off.x() + self._side / 2, self._btn_off.y() + self._side / 2)
 
+    def _reader_center(self) -> QPointF:
+        return self._button_center() - QPointF(self.DIAMETER + self.GAP, 0)
+
+    def _on_reader(self, pos: QPointF) -> bool:
+        d = pos - self._reader_center()
+        return math.hypot(d.x(), d.y()) <= self.DIAMETER / 2 + 2
+
     # -- state ------------------------------------------------------------------------------
 
     def showEvent(self, event):
         super().showEvent(event)
-        # WS_EX_NOACTIVATE: clicking the button must not steal focus from the target window.
-        user32 = ctypes.windll.user32
-        user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
-        user32.SetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
-        hwnd = ctypes.c_void_p(int(self.winId()))
-        ex = user32.GetWindowLongPtrW(hwnd, -20)
-        user32.SetWindowLongPtrW(hwnd, -20, ex | 0x08000000 | 0x00000080 | 0x00000008)
+        _no_activate(self)
+
+    def bubble_anchor(self) -> tuple[QRect, str | None]:
+        """Both circles (reader and mic) in screen coordinates, and where the panel is ('above', 'below' or None)."""
+        c = self.mapToGlobal(self._button_center().toPoint())
+        r = self.DIAMETER // 2
+        panel = ("below" if self._below else "above") if self._has_panel else None
+        left = c.x() - r - self.DIAMETER - self.GAP
+        return QRect(left, c.y() - r, c.x() + r - left, 2 * r), panel
 
     def set_state(self, state: str) -> None:
         if state != self._state:
@@ -256,6 +314,22 @@ class FloatingButton(QWidget):
             self._attention = on
             self._wake()
 
+    def set_held(self, on: bool) -> None:
+        if on != self._held:
+            self._held = on
+            self._wake()
+
+    def set_reader(self, on: bool) -> None:
+        if on != self._reader_on:
+            self._reader_on = on
+            self.update()
+
+    def set_reading(self, on: bool) -> None:
+        if on != self._reading:
+            self._reading = on
+            self.update()
+            self._wake()
+
     def _stale(self) -> bool:
         if self._usage is None:
             return True
@@ -277,15 +351,18 @@ class FloatingButton(QWidget):
     def _wake(self) -> None:
         """Fully visible now; when idle, fade out again after IDLE_FADE_MS."""
         self._animate_opacity(1.0, 150)
-        if self._state == "idle" and not self._hovered and not self._attention:
+        if self._can_fade():
             self._fade_timer.start()
         else:
             self._fade_timer.stop()
 
+    def _can_fade(self) -> bool:
+        return self._state == "idle" and not (self._hovered or self._attention or self._held or self._reading)
+
     def _fade_out(self) -> None:
         if QApplication.activePopupWidget():  # our context menu is open
             self._fade_timer.start()
-        elif self._state == "idle" and not self._hovered and not self._attention and self._press_global is None:
+        elif self._can_fade() and self._press_global is None:
             self._animate_opacity(self.FADED_OPACITY, 600)
 
     def _animate_opacity(self, target: float, ms: int) -> None:
@@ -328,6 +405,29 @@ class FloatingButton(QWidget):
             p.setBrush(Qt.NoBrush)
             arc = QRectF(c.x() - r + 4, c.y() - r + 4, 2 * r - 8, 2 * r - 8)
             p.drawArc(arc, int(-math.degrees(self._phase) * 16 * 2), 90 * 16)
+        self._paint_reader(p)
+
+    def _paint_reader(self, p: QPainter) -> None:
+        """The reader circle, styled like the mic: speaker = artifacts are read aloud, grey crossed speaker = they
+        aren't, blue = reading right now."""
+        c, r = self._reader_center(), self.DIAMETER / 2
+        rect = QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r)
+        p.setPen(QPen(QColor(0, 0, 0, 60), max(1.0, rect.width() / 40)))
+        p.setBrush(QColor("#5B9DFF" if self._reading else "#2F3542"))
+        p.drawEllipse(rect)
+        font = QFont(_icon_font())
+        font.setPixelSize(int(rect.height() * 0.46))
+        p.setFont(font)
+        p.setPen(QColor("#FFFFFF" if self._reading or self._reader_on else "#8B96AD"))
+        p.drawText(rect, Qt.AlignCenter, SPEAKER_GLYPH if self._reader_on or self._reading else MUTE_GLYPH)
+
+    def _reader_tooltip(self) -> str:
+        if self._reading:
+            return "Čtu souhrn artefaktu. Klikni a předčítání vypneš."
+        if self._reader_on:
+            return ("Předčítání artefaktů je zapnuté: když relace Claude Code zveřejní artefakt, přečtu ti jeho "
+                    "souhrn.\nKlikni a vypneš ho.")
+        return "Předčítání artefaktů je vypnuté.\nKlikni a zapneš ho."
 
     def _paint_panel(self, p: QPainter) -> None:
         rect = self._panel
@@ -418,8 +518,12 @@ class FloatingButton(QWidget):
 
     def _paint_sessions(self, p: QPainter, x: float, right: float, y: float, font: QFont, bold: QFont,
                         text: QColor, dim: QColor) -> None:
-        """One row per Claude Code session: status dot, project, what it's doing, how full its context is."""
-        pct_w, state_w = 34, 78
+        """One row per Claude Code session: status dot, its topic, its folder, what it's doing, how full its
+        context is."""
+        pct_w, state_w, gap = 34, 70, 10
+        metrics = QFontMetricsF(font)
+        folder_w = min(110.0, max(metrics.horizontalAdvance(s.folder) for s in self._sessions)) if any(
+            s.topic for s in self._sessions) else 0.0  # no topics: the names already are the folders
         for s in self._sessions:
             row = QRectF(x, y, right - x, self.ROW_H)
             self._session_rows.append((row.adjusted(-6, 0, 6, 0), s))
@@ -428,10 +532,15 @@ class FloatingButton(QWidget):
             p.drawEllipse(QPointF(row.left() + 4, row.center().y()), 3.5, 3.5)
             p.setFont(bold)
             p.setPen(text)
-            name_rect = QRectF(row.left() + 13, row.top(), row.width() - 13 - state_w - pct_w, row.height())
+            name_rect = QRectF(row.left() + 13, row.top(),
+                               row.width() - 13 - (folder_w + gap if folder_w else 0) - state_w - pct_w, row.height())
             p.drawText(name_rect, Qt.AlignLeft | Qt.AlignVCenter,
                        QFontMetricsF(bold).elidedText(s.name, Qt.ElideRight, name_rect.width()))
             p.setFont(font)
+            if folder_w and s.topic:
+                p.setPen(dim)
+                p.drawText(QRectF(name_rect.right() + gap, row.top(), folder_w, row.height()),
+                           Qt.AlignLeft | Qt.AlignVCenter, metrics.elidedText(s.folder, Qt.ElideRight, folder_w))
             p.setPen(SESSION_COLORS[s.state] if s.state in ("waiting", "error") else dim)
             p.drawText(QRectF(row.right() - pct_w - state_w, row.top(), state_w, row.height()),
                        Qt.AlignRight | Qt.AlignVCenter, STATE_LABELS[s.state])
@@ -465,7 +574,8 @@ class FloatingButton(QWidget):
             pos = event.position() if hasattr(event, "position") else QPointF(event.pos())
             session = self._session_at(pos)
             on_panel = self._has_panel and self._panel.contains(pos)
-            tip = session.tooltip() if session else self._usage_tooltip() if on_panel else self._button_tip
+            tip = session.tooltip() if session else self._usage_tooltip() if on_panel else \
+                self._reader_tooltip() if self._on_reader(pos) else self._button_tip
             QToolTip.showText(event.globalPos(), tip, self)
             return True
         return super().event(event)
@@ -478,7 +588,8 @@ class FloatingButton(QWidget):
             self._press_pos = self.pos()
             self._dragging = False
             d = event.position() - self._button_center()
-            self._press_on_button = math.hypot(d.x(), d.y()) <= self._side / 2
+            self._press_on_reader = self._on_reader(event.position())
+            self._press_on_button = not self._press_on_reader and math.hypot(d.x(), d.y()) <= self._side / 2
             if self._press_on_button:
                 self.pressed.emit()
         elif event.button() == Qt.RightButton:
@@ -504,8 +615,186 @@ class FloatingButton(QWidget):
             self.moved.emit(self.button_pos())
         elif self._press_on_button:
             self.released.emit()
+        elif self._press_on_reader:
+            self.reader_toggled.emit()
         elif session := self._session_at(event.position()):
             self.session_clicked.emit(session.id)
+
+
+class Bubble(QWidget):
+    """Orbit's notification: a card in the panel's style whose tail points at the mic button.
+    Never takes focus. Click = clicked + close, right click = close, hovering keeps it open."""
+
+    clicked = Signal()
+    closed = Signal()
+
+    W = 330
+    PAD = 12
+    ICON = 30
+    TAIL = 8
+    SHADOW = 12
+    GAP = 6  # between the tail tip and the circle
+    KINDS = {  # kind: (color, Segoe Fluent Icons glyph, how long it stays)
+        "done": ("#3DD68C", chr(0xE73E), 7000),  # CheckMark
+        "waiting": ("#F5A524", chr(0xE897), 12000),  # Help
+        "error": ("#E5484D", chr(0xE171), 10000),  # Important
+        "info": ("#5B9DFF", chr(0xE946), 7000),  # Info
+    }
+
+    def __init__(self, kind: str, title: str, text: str, note: str = ""):
+        super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
+                         | Qt.WindowDoesNotAcceptFocus)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        self.setCursor(Qt.PointingHandCursor)
+        self._color, self._glyph, self._duration = self.KINDS[kind]
+        self._title, self._note = title, note
+        self._title_font = QFont("Segoe UI Variable Text")
+        self._title_font.setPixelSize(13)
+        self._title_font.setWeight(QFont.DemiBold)
+        self._text_font = QFont("Segoe UI Variable Text")
+        self._text_font.setPixelSize(12)
+        self._lines = _wrap(text, self._text_font, self.W - 2 * self.PAD - self.ICON - 12, 4)
+        line_h = QFontMetricsF(self._text_font).lineSpacing()
+        self._card_h = int(self.PAD * 2 + max(self.ICON, 18 + (3 + len(self._lines) * line_h if self._lines else 0)))
+        self._tail = None  # which side of the card the tail sticks out of: "left", "right" or None
+        self._tail_y = 0.0
+        self._closing = False
+        self._timer = QTimer(self, singleShot=True)
+        self._timer.timeout.connect(self.dismiss)
+        self._fade = QPropertyAnimation(self, b"windowOpacity", self)
+        self._slide = QPropertyAnimation(self, b"pos", self)
+
+    def _card(self) -> QRectF:
+        x = self.SHADOW + (self.TAIL if self._tail == "left" else 0)
+        return QRectF(x, self.SHADOW, self.W, self._card_h)
+
+    def show_near(self, circle: QRect | None, panel: str | None = None) -> None:
+        """circle: the mic button on screen (None = the button is hidden: bottom right corner, no tail);
+        panel: 'above' / 'below' / None – where the limits panel is, so the bubble stays clear of it."""
+        screen = (QGuiApplication.screenAt(circle.center()) if circle else None) or QGuiApplication.primaryScreen()
+        geo = screen.availableGeometry()
+        s = self.SHADOW
+        if circle is None:
+            self.setFixedSize(self.W + 2 * s, self._card_h + 2 * s)
+            target = QPoint(geo.right() - self.W - s - 12, geo.bottom() - self._card_h - s - 12)
+            start = target + QPoint(0, 10)
+        else:
+            self._tail = "right" if circle.center().x() > geo.center().x() else "left"
+            self.setFixedSize(self.W + self.TAIL + 2 * s, self._card_h + 2 * s)
+            top = (circle.top() if panel == "above" else circle.bottom() - self._card_h if panel == "below"
+                   else circle.center().y() - self._card_h // 2)
+            top = max(geo.top() + 8, min(top, geo.bottom() - 8 - self._card_h))
+            if self._tail == "right":
+                x, dx = circle.left() - self.GAP - self.TAIL - self.W - s, 10
+            else:
+                x, dx = circle.left() + circle.width() + self.GAP - s, -10
+            target = QPoint(x, top - s)
+            start = target + QPoint(dx, 0)  # slides out of the button
+            self._tail_y = min(max(circle.center().y() - top, 16), self._card_h - 16) + s
+        self.move(start)
+        self.setWindowOpacity(0.0)
+        self.show()
+        self._fade.setDuration(180)
+        self._fade.setStartValue(0.0)
+        self._fade.setEndValue(1.0)
+        self._fade.start()
+        self._slide.setDuration(260)
+        self._slide.setEasingCurve(QEasingCurve.OutCubic)
+        self._slide.setStartValue(start)
+        self._slide.setEndValue(target)
+        self._slide.start()
+        self._timer.start(self._duration)
+
+    def dismiss(self) -> None:
+        if self._closing:
+            return
+        self._closing = True
+        self._timer.stop()
+        self._fade.stop()
+        self._fade.setDuration(220)
+        self._fade.setStartValue(self.windowOpacity())
+        self._fade.setEndValue(0.0)
+        self._fade.finished.connect(self.close)
+        self._fade.start()
+        self.closed.emit()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        _no_activate(self)
+
+    def enterEvent(self, event):
+        self._timer.stop()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        if not self._closing:
+            self._timer.start(2500)
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        self.dismiss()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        card = self._card()
+        p.setPen(Qt.NoPen)
+        for i in range(1, 7):  # soft shadow
+            p.setBrush(QColor(0, 0, 0, 9))
+            p.drawRoundedRect(card.adjusted(-i * 1.6, -i * 1.2 + 2, i * 1.6, i * 1.6 + 2), 12 + i, 12 + i)
+
+        shape = QPainterPath()
+        shape.addRoundedRect(card.adjusted(0.5, 0.5, -0.5, -0.5), 12, 12)
+        if self._tail:
+            edge = card.right() - 1 if self._tail == "right" else card.left() + 1
+            tip = card.right() + self.TAIL if self._tail == "right" else card.left() - self.TAIL
+            tail = QPainterPath()
+            tail.addPolygon(QPolygonF([QPointF(edge, self._tail_y - 7), QPointF(tip, self._tail_y),
+                                       QPointF(edge, self._tail_y + 7)]))
+            shape = shape.united(tail)
+        p.setPen(QPen(QColor(255, 255, 255, 28), 1))
+        p.setBrush(QColor(24, 27, 34, 245))
+        p.drawPath(shape)
+
+        color = QColor(self._color)
+        icon = QRectF(card.left() + self.PAD, card.top() + self.PAD, self.ICON, self.ICON)
+        halo = QColor(color)
+        halo.setAlpha(38)
+        p.setPen(Qt.NoPen)
+        p.setBrush(halo)
+        p.drawEllipse(icon)
+        glyph_font = QFont(_icon_font())
+        glyph_font.setPixelSize(15)
+        p.setFont(glyph_font)
+        p.setPen(color)
+        p.drawText(icon, Qt.AlignCenter, self._glyph)
+
+        x = icon.right() + 12
+        right = card.right() - self.PAD
+        title = QRectF(x, card.top() + self.PAD - 1, right - x, 18)
+        note_w = 0.0
+        if self._note:
+            note_font = QFont(self._text_font)
+            note_font.setPixelSize(11)
+            note_w = QFontMetricsF(note_font).horizontalAdvance(self._note) + 10
+            p.setFont(note_font)
+            p.drawText(title, Qt.AlignRight | Qt.AlignVCenter, self._note)  # pen is still the kind's color
+        p.setFont(self._title_font)
+        p.setPen(QColor("#E6E8EC"))
+        p.drawText(title.adjusted(0, 0, -note_w, 0), Qt.AlignLeft | Qt.AlignVCenter,
+                   QFontMetricsF(self._title_font).elidedText(self._title, Qt.ElideRight, title.width() - note_w))
+
+        p.setFont(self._text_font)
+        p.setPen(QColor("#AEB5C2"))
+        line_h = QFontMetricsF(self._text_font).lineSpacing()
+        y = title.bottom() + 3
+        for line in self._lines:
+            p.drawText(QRectF(x, y, right - x, line_h), Qt.AlignLeft | Qt.AlignVCenter, line)
+            y += line_h
 
 
 _NON_DEDICATED_VK = set(range(0x08, 0x0E)) | set(range(0x20, 0x5B)) | set(range(0x60, 0x70)) | set(range(0xBA, 0xE3))
@@ -576,7 +865,7 @@ class SettingsDialog(QDialog):
     mic_changed = Signal(object)
 
     def __init__(self, cfg: dict, mics: list[str], models: list[str], autostart: bool, first_run: bool,
-                 level_source):
+                 level_source, handsfree_mics: set):
         super().__init__(None, Qt.WindowStaysOnTopHint)
         self.setObjectName("settings")
         self.setWindowTitle("Orbit – nastavení")
@@ -621,6 +910,13 @@ class SettingsDialog(QDialog):
         self.mic.setCurrentIndex(max(0, self.mic.findData(cfg["mic"])))
         self.mic.currentIndexChanged.connect(lambda _: self.mic_changed.emit(self.mic.currentData()))
         right.addWidget(self.mic)
+        bt_warning = _label("Mikrofon Bluetooth sluchátek: během diktování přepnou sluchátka do režimu hovoru "
+                            "(hudba zhorší kvalitu) a nahrávají jen v telefonní kvalitě, takže přepis bude "
+                            "méně přesný. Lepší je jiný mikrofon.", "warn", wrap=True)
+        right.addWidget(bt_warning)
+        show_warning = lambda: bt_warning.setVisible(self.mic.currentData() in handsfree_mics)
+        self.mic.currentIndexChanged.connect(lambda _: show_warning())
+        show_warning()
         right.addWidget(_label("Mikrofon je zapnutý jen při držení klávesy a tady v nastavení. "
                                "Mluv, až pípne nebo tlačítko zčervená.", "dim", wrap=True))
         right.addStretch(1)
@@ -681,9 +977,11 @@ class SettingsDialog(QDialog):
                                         "má kontextu. Klik přepne do terminálu.", cfg["show_sessions"])
         self.speak = _OptionRow("Předčítat hotové odpovědi", "Když relace doběhne, hlas Jakub přečte začátek "
                                 "odpovědi. Jen lokálně.", cfg["speak_answers"])
+        self.artifacts = _OptionRow("Předčítat souhrn artefaktů", "Když relace zveřejní artefakt, Claude ho shrne "
+                                    "do 7 vět a Jakub je přečte.", cfg["read_artifacts"])
         self.autostart = _OptionRow("Spouštět s Windows", None, autostart)
         for row in (self.trailing, self.sounds, self.show_btn, self.show_usage, self.show_sessions, self.speak,
-                    self.autostart):
+                    self.artifacts, self.autostart):
             behaviour.addWidget(row)
         behaviour.addStretch(1)
 
@@ -755,5 +1053,6 @@ class SettingsDialog(QDialog):
             "show_usage": self.show_usage.isChecked(),
             "show_sessions": self.show_sessions.isChecked(),
             "speak_answers": self.speak.isChecked(),
+            "read_artifacts": self.artifacts.isChecked(),
             "autostart": self.autostart.isChecked(),
         }

@@ -1,19 +1,15 @@
 """Self-improving vocabulary: Claude (through the local Claude Code CLI) reads recent transcripts from the log and
 suggests names/terms for the Whisper prompt and fixes for phrases Whisper keeps getting wrong.
 
-Only transcript text is sent, never audio. The CLI runs headless in safe mode, without tools and without saving
-the session, so it can't touch anything and doesn't clutter Pepa's Claude Code history.
+Only transcript text is sent, never audio.
 """
 import ast
-import json
 import logging
-import os
 import re
-import shutil
-import subprocess
 from pathlib import Path
 
-from .config import LOG_PATH, ROOT
+from . import claude_cli
+from .config import LOG_PATH
 
 log = logging.getLogger(__name__)
 
@@ -62,10 +58,6 @@ SCHEMA = {
 }
 
 
-class LearningError(Exception):
-    pass
-
-
 def transcripts_since(since: str | None) -> list[tuple[str, str]]:
     """(timestamp, text) of non-empty transcripts in the log (incl. the rotated one) newer than `since`."""
     found = []
@@ -91,37 +83,13 @@ def parse_words(vocabulary: str) -> list[str]:
     return [w.strip() for w in re.split(r"[,;\n]", vocabulary) if w.strip()]
 
 
-def _claude_exe() -> str:
-    npm = Path(os.environ.get("APPDATA", "")) / "npm/node_modules/@anthropic-ai/claude-code/bin/claude.exe"
-    exe = npm if npm.exists() else shutil.which("claude.exe") or shutil.which("claude")
-    if not exe:
-        raise LearningError("Claude Code (claude.exe) nebyl nalezen.")
-    return str(exe)
-
-
 def suggest(transcripts: list[str], vocabulary: list[str], replacements: list[list[str]]) -> dict:
     """Blocking (tens of seconds): asks Claude for new vocabulary words and replacements."""
     known = ", ".join(vocabulary) or "(empty)"
     fixes = "; ".join(f"{w} -> {r}" for w, r in replacements) or "(none)"
     body = "\n".join(f"- {t}" for t in transcripts[-MAX_TRANSCRIPTS:])
     prompt = f"Current vocabulary: {known}\nCurrent replacements: {fixes}\n\nTranscripts:\n{body}"
-    cmd = [_claude_exe(), "-p", "--safe-mode", "--model", "sonnet", "--tools", "", "--no-session-persistence",
-           "--output-format", "json", "--json-schema", json.dumps(SCHEMA), "--system-prompt", SYSTEM_PROMPT]
-    # Without ANTHROPIC_API_KEY the CLI uses the Claude subscription login (Pepa's key has no credit), and without
-    # the CLAUDE* variables it doesn't think it runs inside another Claude Code session (when started from one).
-    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY" and not k.startswith("CLAUDE")}
-    try:
-        proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8", timeout=300,
-                              cwd=ROOT, env=env, creationflags=subprocess.CREATE_NO_WINDOW)
-    except subprocess.TimeoutExpired:
-        raise LearningError("Claude neodpověděl do 5 minut.")
-    try:
-        result = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        raise LearningError(f"Claude Code skončil s kódem {proc.returncode}: {(proc.stderr or proc.stdout)[:300]}")
-    if result.get("is_error") or not isinstance(result.get("structured_output"), dict):
-        raise LearningError(f"Claude Code vrátil chybu: {str(result.get('result'))[:300]}")
-    return result["structured_output"]
+    return claude_cli.ask(prompt, SYSTEM_PROMPT, SCHEMA)
 
 
 def merge(vocabulary: str, replacements: list[list[str]], suggestion: dict) -> tuple[str, list[list[str]], list[str],

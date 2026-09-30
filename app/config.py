@@ -34,6 +34,7 @@ DEFAULTS = {
     "show_usage": True,  # Claude plan usage panel above the mic button
     "show_sessions": True,  # Claude Code sessions in that panel (needs Orbit's hooks in ~/.claude/settings.json)
     "speak_answers": True,  # read the start of a finished session's answer aloud
+    "read_artifacts": True,  # a session published an artifact: Claude sums it up in 7 sentences, read aloud
     "button_pos": None,
 }
 

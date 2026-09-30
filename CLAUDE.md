@@ -25,8 +25,8 @@ projekt s TWLanem). Původní název byl „Diktování“ a složka `C:\Users\j
 
 Push-to-talk je **boční tlačítko myši vpřed** (`{"kind": "mouse", "code": 6}`), model `ggml-large-v3.bin`, mikrofon HyperX,
 vkládání **psaním znaků** (`insert_mode: "type"`), bez mezery za textem, povely zapnuté, pípání zapnuté, panel Clauda
-zapnutý, **ukládání nahrávek zapnuté** (`recordings/`), spouštění s Windows zapnuté. Průběžný přepis a učení
-slovníku jsou zapnuté (výchozí). Slovník a opravy (`vocabulary`, `replacements`) doplňuje Claude, `learned_until`
+zapnutý, **ukládání nahrávek zapnuté** (`recordings/`), spouštění s Windows zapnuté. Průběžný přepis, učení
+slovníku a předčítání artefaktů jsou zapnuté (výchozí). Slovník a opravy (`vocabulary`, `replacements`) doplňuje Claude, `learned_until`
 je čas posledního přepisu z logu, který už Claude viděl.
 
 ## Struktura
@@ -39,15 +39,17 @@ je čas posledního přepisu z logu, který už Claude viděl.
 | `app/recorder.py` | nahrávání přes sounddevice (MME, 16 kHz mono int16), detekce „zvuk opravdu teče“, režim měřáku |
 | `app/hotkey.py` | globální push-to-talk přes pynput low-level hooky, zachytávání nové klávesy, české názvy kláves |
 | `app/inserter.py` | vložení textu: schránka + Ctrl+V (se zálohou schránky), nebo psaní přes `SendInput` Unicode |
-| `app/ui.py` | `FloatingButton` (mikrofon + panel limitů), `SettingsDialog` (nastavení), kreslení ikony |
+| `app/ui.py` | `FloatingButton` (mikrofon + panel limitů), `Bubble` (oznámení), `SettingsDialog` (nastavení), kreslení ikony |
 | `app/theme.py` | vzhled „noční signál“: barvy, QSS, `Toggle` přepínač, `LevelWave` živá vlna, tmavý titulek přes DWM |
 | `app/claude_usage.py` | načtení limitů Clauda, parsování, české texty pro odpočty |
+| `app/claude_cli.py` | společné volání `claude -p` (bez nástrojů, na předplatném) pro učení slovníku a souhrny artefaktů |
 | `app/learning.py` | učení slovníku: přepisy z logu → `claude -p` → nová slova a opravy |
+| `app/artifacts.py` | předčítání artefaktů: záznam od hooku → text stránky → souhrn 7 vět od Clauda |
 | `app/sessions.py` | přehled relací Claude Code: stav z hook souborů, kontext z přepisu, přepnutí okna, instalace hooků |
 | `app/cc_hook.py` | hook, který Claude Code spouští (jen stdlib, rychlý): zapíše `sessions/<id>.<událost>.json` |
-| `sessions/` | stavové soubory relací od hooku – nejsou v gitu |
+| `sessions/` | stavové soubory relací od hooku, v `sessions/artifacts/` zveřejněné artefakty – nejsou v gitu |
 | `app/config.py` | výchozí nastavení, cesty, popisky modelů |
-| `app/winutil.py` | jedna instance (mutex), AppUserModelID, spouštění s Windows (registry), pípání |
+| `app/winutil.py` | jedna instance (mutex), AppUserModelID, spouštění s Windows (registry), pípání a zvuky bublin |
 | `whisper/` | `whisper-server.exe` (Vulkan build, 59 MB), `libwinpthread-1.dll`, licence whisper.cpp |
 | `models/` | `ggml-large-v3.bin` (3,1 GB) a `ggml-large-v3-turbo.bin` (1,6 GB) – nejsou v gitu |
 | `recordings/` | posledních 30 nahrávek (`.wav` + `.txt` s přepisem), když je zapnuté ukládání – nejsou v gitu |
@@ -134,6 +136,13 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   Záloha: když přijdou jen nuly (ztlumený mic), po 600 ms (`LIVE_FALLBACK_MS`) se pokračuje i tak.
 - Po puštění se nahrává ještě 250 ms (`TAIL_MS`), lidé pouštějí klávesu během posledního slova.
 - Šum HyperXu v tichu má amplitudu jen 1–3, proto je detekce „živého“ zvuku `np.any(chunk)`, ne práh.
+- **Bluetooth sluchátka (Pepa má i AirPods Max)**: jejich mikrofon jede jen v profilu hands-free, takže při jeho
+  otevření Windows přepne sluchátka z hudby (A2DP) do režimu hovoru – hudba zhorší kvalitu a po zavření mikrofonu
+  „přeskočí“ zpět. V softwaru to obejít nejde (u AirPods Max ani LE Audio). Nahrávky z AirPods jsou 8 kHz
+  (nad 4 kHz nulová energie, HyperX 7–12 %), což Whisperu v češtině škodí (sykavky). Nastavení proto u takového
+  mikrofonu ukáže oranžové varování (`is_bluetooth_handsfree`: WASAPI dvojče MME zařízení má ≤ 16 kHz).
+- Seznam zařízení PortAudio je v cache; když zvolený mikrofon chybí (nebo žádný výchozí), `Recorder` ho jednou
+  obnoví (~30 ms), teprve pak použije výchozí mikrofon nebo ohlásí „Windows teď nevidí žádný mikrofon“.
 
 ### Push-to-talk
 - pynput `Listener(win32_event_filter=...)`, zvolená klávesa/tlačítko se **potlačí** (`SystemHook.SuppressException`),
@@ -159,23 +168,78 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   (defterm handoff). Proces: `claude.exe ← cmd.exe ← explorer.exe`. Konzole relace je skryté `PseudoConsoleWindow`,
   jeho vlastník (`GetAncestor(..., GA_ROOTOWNER)`) je okno WT → klik na řádek přepne přesně na tu relaci.
   Titulek okna nastavuje Claude Code: téma relace se spinnerem (`◐ Katalog z Německa překlad`, `✳` = v klidu).
+  Pepa má často víc relací ve stejné složce (třeba 4× `m-tex`), proto se relace jmenují podle tématu.
 - Hooky v `~/.claude/settings.json` (Pepa souhlasil): SessionStart, UserPromptSubmit, Notification, Stop,
-  StopFailure, SessionEnd → `"command": ".venv/Scripts/python.exe", "args": ["app/cc_hook.py"], "async": true`
-  (exec forma bez shellu). Orbit je přidá/odebere podle nastavení (`sessions.set_hooks`), ostatní obsah souboru
-  nechá, první změna uloží `settings.json.orbit-backup`. **Běžící relace si nové hooky načtou až po restartu.**
+  StopFailure, SessionEnd a PostToolUse s `"matcher": "Artifact"` → `"command": ".venv/Scripts/python.exe",
+  "args": ["app/cc_hook.py"], "async": true` (exec forma bez shellu). Orbit je přidá, když je zapnutý přehled
+  relací nebo předčítání artefaktů, jinak odebere (`sessions.set_hooks`), ostatní obsah souboru
+  nechá, první změna uloží `settings.json.orbit-backup`. Běžící relace si změněné hooky načtou samy (ověřeno
+  30. 9. s Claude Code 2.1.28x: relace spuštěná v 18:26 spustila hook PostToolUse přidaný v 19:29).
+- **Které relace běží**, bere Orbit ze seznamu, který si vede sám Claude Code: `~/.claude/sessions/<pid>.json`
+  (`sessionId`, `cwd`, `status` busy/idle, `startedAt` v ms, `kind` interactive). Relace jsou tak v přehledu hned,
+  i bez jediné události z hooku (dřív se objevila až po první události). Přepis se dohledá jako
+  `~/.claude/projects/*/<sessionId>.jsonl`. Neoficiální formát, stejně jako přepis.
 - Hook píše jeden soubor na relaci a událost (souběžné async hooky se tak nepřepisují), s `pid` (předek `claude.exe`)
-  a `hwnd` (okno WT). Orbit je čte každou sekundu. Stav = nejnovější událost; Notification jen typů
-  `permission_prompt`/`elicitation_dialog` = „čeká na tebe“ (`idle_prompt` se ignoruje). Z „čeká“ zpět na „pracuje“
-  pozná podle změny souboru s přepisem. Mrtvý `claude.exe` (nebo jiný proces se stejným PID) = soubory smaže.
+  a `hwnd` (okno WT). Async hooky **nemají konzoli** (`GetConsoleWindow` = 0), proto se hook na chvíli připojí ke
+  konzoli `claude.exe` (`AttachConsole` → okno → `FreeConsole`). U relací bez toho se okno hledá podle titulku
+  (třída `CASCADIA_HOSTING_WINDOW_CLASS`, titulek bez spinneru = název relace). Orbit čte vše každou sekundu. Stav =
+  nejnovější událost; Notification jen typů `permission_prompt`/`elicitation_dialog` = „čeká na tebe“
+  (`idle_prompt` se ignoruje). Z „čeká“ zpět na „pracuje“ pozná podle změny souboru s přepisem. Bez událostí stav
+  z `status` seznamu. Mrtvý `claude.exe` (nebo jiný proces se stejným PID) = soubory smaže.
+- **Pozor na automatickou aktualizaci Claude Code**: běžícímu procesu přejmenuje exe na `claude.exe.old.<číslo>`.
+  Kontrola živosti proto bere jméno souboru začínající `claude.exe`. Dřív to Orbit bral jako ukončenou relaci a mazal
+  její soubory, takže po aktualizaci (30. 9. i třikrát za den) byla v přehledu jen část relací.
+- **Název relace** = `aiTitle` z přepisu (záznam `{"type":"ai-title","aiTitle":"Analýza ceníků a katalogů
+  Profodu"}`, opakuje se v přepisu, čte se z konce, celý soubor jen napoprvé). Bez něj název složky. Stejný text dává
+  Claude Code do titulku okna. Používá se v panelu, v bublinách i v hlasu („Hotovo: …“). V panelu je za názvem
+  tlumeně i složka (Pepa chtěl vidět, kde relace pracuje), proto je panel široký 440 px (s 320 px se názvy
+  ořezávaly). Relace jsou seřazené podle složky a začátku relace (pořadí neskáče se změnou stavu).
 - `claude -p --safe-mode` (učení slovníku) hooky nespouští – ověřeno, v přehledu se neobjeví.
 - Stop hook nese `last_assistant_message` → bublina a předčítání. Oznamuje se jen když okno relace není v popředí
   a tah trval ≥ 20 s (`NOTIFY_TURN_S`). Dokud nějaká relace čeká na Pepu, panel se nezprůhlední.
+- **Bubliny jsou Orbitovy, ne Windows** (Pepa chtěl hezčí vzhled i zvuk): `ui.Bubble` je tmavá karta ve stylu
+  panelu s ocáskem k tlačítku mikrofonu (na straně ke středu obrazovky, horní hranou u horní hrany kruhu, aby
+  nezakryla panel). Barevná ikona podle druhu: hotovo zeleně ✓, čeká oranžově ?, chyba červeně !, info modře.
+  U relací je nadpis název relace, vpravo stav, text jsou první 2 věty odpovědi (max. 4 řádky). Klik = přepnutí
+  do relace, pravý klik = zavřít, najetí myší ji podrží. Zmizí po 7 s (čeká 12 s, chyba 10 s), naráz je jen jedna.
+  Tlačítko se po dobu bubliny nezprůhlední. Když je tlačítko skryté, bublina je vpravo dole bez ocásku.
+- Zvuky bublin (`winutil._chime`, měkké tóny jako kalimba): hotovo G5 → C6, čeká C6 C6 (zaklepání), chyba
+  C6 → G5, info A5. Při hře/prezentaci na celou obrazovku (`SHQueryUserNotificationState`) se místo bubliny použije
+  bublina Windows (ta počká). Režim Nerušit ve Windows 11 se tak nepozná. Bubliny nejsou v Centru oznámení.
+  Soubory `assets/*.wav` vznikají při prvním použití, po změně zvuku je smazat.
 - Kontext = `input + cache_creation + cache_read` z posledního `usage` hlavní větve (`isSidechain` false) na konci
   přepisu (čte se jen posledních 512 KB, podle mtime). Hook nemá model, proto velikost okna: 1 mil. když má
   `~/.claude/settings.json` model s `[1m]` (Pepa má `opus[1m]`) nebo tokenů je přes 200 tis., jinak 200 tis.
   Formát přepisu není oficiálně stabilní – když se změní, procento prostě zmizí.
 - Předčítání: `QTextToSpeech("winrt")`, hlas **Microsoft Jakub** (cs_CZ, jediný český ve Windows, OneCore; SAPI ho
-  nevidí). Při začátku nahrávání se okamžitě zastaví. `sessions.summary` čistí Markdown na první 2 věty.
+  nevidí). Při začátku nahrávání se okamžitě zastaví (i s frontou). `sessions.summary` čistí Markdown na první 2 věty.
+  Texty jdou přes vlastní frontu (`Dictation._speech`), ne `QTextToSpeech.enqueue`: winrt při dvou `enqueue` těsně
+  po sobě (než začne mluvit) první text zahodí – ověřeno. Další text se posílá až po stavu Ready přes
+  `QTimer.singleShot(0)`: `say()` přímo v obsluze Ready po `stop()` winrt ignoruje (ověřeno). Při hře/prezentaci na
+  celou obrazovku se nečte.
+
+### Předčítání artefaktů (`read_artifacts`)
+- Pepa chtěl: když kterákoli relace Claude Code zveřejní artefakt (nástroj Artifact), udělá se souhrn toho
+  nejdůležitějšího v 7 větách a přečte se z reproduktorů.
+- Hook PostToolUse (matcher `Artifact`) zapíše `sessions/artifacts/<relace>.<tool_use_id>.json`, jen pro publikování
+  stránky (`file_path`, bez `asset`, akce publish). `tool_response` je slovník `{url, path, title, updated, seq, …}`
+  (zjištěno z Pepových přepisů), URL se pro jistotu hledá i regexem v textu. Záznamy starší 5 min se zahodí.
+  Záznam se maže až po dokončení souhrnu (`artifacts.done`), ne při převzetí: jeden artefakt se ztratil, protože
+  se Orbit restartoval uprostřed souhrnu. Teď ho po startu převezme nový Orbit.
+- Text se bere z **lokálního souboru**, který relace publikovala (kopie na claude.ai by chtěla přihlášení):
+  viditelný text HTML a za ním obsah vložených skriptů, protože data tabulek a grafů bývají v `const D = {…}`
+  (u stránky o zdražení PROFOD bylo viditelného textu 1,8 tis. znaků ze 100 KB). Max 60 tis. znaků.
+- Souhrn: `claude -p` se Sonnetem, JSON `{title, sentences}`, česky, tykání, věty pro poslech (bez Markdownu, URL).
+  Trvá ~7–8 s. Pak bublina (klik otevře artefakt v prohlížeči) a Jakub přečte „Artefakt z relace m-tex: …“.
+  Čte se vždy, i když je okno relace v popředí. Během diktování počká, až Pepa pustí klávesu.
+- Znovu publikovaný artefakt (oprava překlepu) se nečte, pokud je text z ≥ 80 % stejný (`difflib` po slovech);
+  při větší změně „Aktualizovaný artefakt…“. Paměť jen do restartu Orbitu. V menu „Přečíst znovu poslední artefakt“.
+- **Tlačítko reproduktoru** vlevo od mikrofonu, stejně velké (Pepa chtěl nejdřív ikonu vedle mikrofonu, malý
+  satelit 24 px mu byl malý). `button_pos` je dál levý horní roh čtverce mikrofonu, reproduktor je v pruhu vlevo
+  (`_slot`), bublina míří na oba kruhy. Bílý reproduktor (E767) = čte se samo, šedý přeškrtnutý (E74F) = nečte se,
+  modrý kruh = právě čte (tlačítko se mezitím nezprůhlední). Klik přepne `read_artifacts` (totéž co přepínač
+  v nastavení) a vypnutí hned utne čtený souhrn; odpověď relace ve frontě za ním se přečte.
+- Neumí artefakty z chatu na claude.ai / v aplikaci Claude (tam hook není) ani dokumenty přes konektor Claude Docs.
 
 ### Hlasové povely pro terminál
 - Věta „Odešli.“ (nebo „Odeslat.“) na konci diktátu = Enter; diktát jen „Stop.“ / „Zastav.“ = Esc (přeruší Clauda).

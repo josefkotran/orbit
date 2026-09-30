@@ -16,12 +16,13 @@ PAUSE_S = 0.5
 MIN_PIECE_S = 6.0  # every piece costs ~0.9 s of fixed Whisper time and short ones are less accurate
 
 
+def _hostapi(name: str) -> int | None:
+    return next((i for i, h in enumerate(sd.query_hostapis()) if h["name"] == name), None)
+
+
 def _mme_inputs() -> list[tuple[int, str]]:
     """Input devices on the MME host API: one entry per microphone, named like in Windows sound settings."""
-    try:
-        mme = next(i for i, h in enumerate(sd.query_hostapis()) if h["name"] == "MME")
-    except StopIteration:
-        mme = None
+    mme = _hostapi("MME")
     result = []
     for i, d in enumerate(sd.query_devices()):
         if d["max_input_channels"] <= 0 or (mme is not None and d["hostapi"] != mme):
@@ -32,23 +33,52 @@ def _mme_inputs() -> list[tuple[int, str]]:
     return result
 
 
+def _refresh() -> None:
+    """PortAudio caches the device list; re-initialize (~30 ms) to see newly plugged microphones.
+    Only while no stream is open."""
+    try:
+        sd._terminate()
+        sd._initialize()
+    except Exception:
+        log.exception("Obnovení seznamu zařízení selhalo")
+
+
 def input_devices(refresh: bool = False) -> list[str]:
     if refresh:
-        # PortAudio caches the device list; re-initialize to see newly plugged microphones.
-        try:
-            sd._terminate()
-            sd._initialize()
-        except Exception:
-            log.exception("Obnovení seznamu zařízení selhalo")
+        _refresh()
     return [name for _, name in _mme_inputs()]
+
+
+def is_bluetooth_handsfree(name: str | None) -> bool:
+    """A Bluetooth headset's mic works only in the hands-free (call) profile: while it's open, Windows switches
+    the headset from stereo music to mono call sound and the mic records in telephone quality (AirPods Max:
+    8 kHz, nothing above 4 kHz). Recognized by the WASAPI twin of the MME device (MME cuts names to 31 chars)
+    running at 16 kHz or less; USB and analog mics run at 44.1/48 kHz. None = the Windows default mic."""
+    try:
+        if not name:
+            mme = _hostapi("MME")
+            default = sd.query_hostapis(mme)["default_input_device"] if mme is not None else -1
+            if default < 0:
+                return False
+            name = sd.query_devices(default)["name"]
+        wasapi = _hostapi("Windows WASAPI")
+        for d in sd.query_devices():
+            if d["hostapi"] == wasapi and d["max_input_channels"] > 0 and d["name"].startswith(name):
+                return d["default_samplerate"] <= 16000
+    except Exception:
+        log.exception("Zjištění typu mikrofonu selhalo")
+    return False
 
 
 def _find_device(name: str | None) -> int | None:
     if not name:
         return None
-    for i, n in _mme_inputs():
-        if n == name:
-            return i
+    for attempt in range(2):
+        for i, n in _mme_inputs():
+            if n == name:
+                return i
+        if attempt == 0:
+            _refresh()  # plugged in (or reconnected over Bluetooth) since the list was read
     log.warning("Mikrofon '%s' nenalezen, používám výchozí", name)
     return None
 
@@ -168,6 +198,10 @@ class Recorder:
 
     def _open(self) -> None:
         device = _find_device(self._device_name)
+        if device is None and sd.default.device[0] < 0:
+            _refresh()
+            if sd.default.device[0] < 0:
+                raise RuntimeError("Windows teď nevidí žádný mikrofon.")
         try:
             self._open_at(device, SAMPLE_RATE)
         except sd.PortAudioError:
