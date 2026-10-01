@@ -177,7 +177,8 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   30. 9. s Claude Code 2.1.28x: relace spuštěná v 18:26 spustila hook PostToolUse přidaný v 19:29).
 - **Které relace běží**, bere Orbit ze seznamu, který si vede sám Claude Code: `~/.claude/sessions/<pid>.json`
   (`sessionId`, `cwd`, `status` busy/idle, `startedAt` v ms, `kind` interactive). Relace jsou tak v přehledu hned,
-  i bez jediné události z hooku (dřív se objevila až po první události). Přepis se dohledá jako
+  i bez jediné události z hooku (dřív se objevila až po první události). Složka relace je `cwd` z tohoto seznamu
+  (složka, kde relace začala), ne z hooku: hook hlásí aktuální složku, která se po `cd www` změní na `www`. Přepis se dohledá jako
   `~/.claude/projects/*/<sessionId>.jsonl`. Neoficiální formát, stejně jako přepis.
 - Hook píše jeden soubor na relaci a událost (souběžné async hooky se tak nepřepisují), s `pid` (předek `claude.exe`)
   a `hwnd` (okno WT). Async hooky **nemají konzoli** (`GetConsoleWindow` = 0), proto se hook na chvíli připojí ke

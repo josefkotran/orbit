@@ -115,7 +115,8 @@ class SessionTracker:
                 continue
             s = self.sessions.get(sid) or Session(sid)
             before = s.state
-            s.cwd = latest.get("cwd") or reg.get("cwd") or s.cwd
+            # the folder the session started in: hooks report the current one, which follows a `cd` (m-tex → www)
+            s.cwd = reg.get("cwd") or events.get("SessionStart", {}).get("cwd") or s.cwd or latest.get("cwd", "")
             s.transcript = latest.get("transcript_path") or s.transcript or _find_transcript(sid)
             s.pid = reg.get("pid") or latest.get("pid") or s.pid
             s.hwnd = next((r["hwnd"] for r in sorted(events.values(), key=lambda r: -r.get("time", 0))

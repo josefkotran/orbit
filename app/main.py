@@ -533,7 +533,8 @@ class Dictation:
         name = session.name if session else sessions.topic(pub.transcript) or pub.name
         self._artifact_speech = f"{kind} z relace {name}: {summary.title}. {' '.join(summary.sentences)}"
         self.reread_action.setEnabled(True)
-        self._notify(" ".join(summary.sentences[:2]), title=summary.title, kind="done", note=pub.name, url=pub.url)
+        self._notify(" ".join(summary.sentences[:2]), title=summary.title, kind="done",
+                     note=session.folder if session else pub.name, url=pub.url)
         self._speak(self._artifact_speech, wait=True, artifact=True)
 
     def _artifact_failed(self, pub: artifacts.Published, msg: str):
