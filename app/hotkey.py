@@ -2,6 +2,7 @@
 import ctypes
 import logging
 import threading
+import time
 
 from pynput import keyboard, mouse
 from pynput._util.win32 import SystemHook
@@ -57,6 +58,11 @@ def binding_name(binding: dict) -> str:
     return f"Klávesa 0x{code:02X}"
 
 
+def in_sentence(key_name: str) -> str:
+    """"Pravý Ctrl" → "pravý Ctrl" inside a sentence; one-word names (F9, Pause) stay as they are."""
+    return key_name[:1].lower() + key_name[1:] if " " in key_name and key_name[:3] != "Num" else key_name
+
+
 class PushToTalk:
     """Calls on_press/on_release (from the hook thread) while the bound key/button is held.
 
@@ -68,6 +74,9 @@ class PushToTalk:
         self._on_press = on_press
         self._on_release = on_release
         self._held = False
+        self._last_down = 0.0  # when the held key last sent a key-down (Windows repeats them while it's held)
+        self._repeats = 0  # repeated key-downs seen in this hold
+        self._other_key = False  # another key went down during the hold: the repeating moved to that one
         self._capture_cb = None
         self._swallow_up: tuple[str, int] | None = None  # release of the key that was just captured
         self._lock = threading.Lock()
@@ -104,6 +113,32 @@ class PushToTalk:
         with self._lock:
             self._capture_cb = None
         self._sync_mouse_hook()
+
+    def released(self) -> bool:
+        """Not capturing, and the captured key's release has been swallowed too (safe to stop the hook)."""
+        with self._lock:
+            return self._capture_cb is None and self._swallow_up is None
+
+    def reset(self) -> None:
+        """Forget that the key is held (the recording ended another way): its release then does nothing, the next
+        press starts again."""
+        with self._lock:
+            self._held = False
+
+    def check_stuck(self, after: float = 1.5) -> bool:
+        """Was the held key's release missed? The hook never sees it when it happens on Windows' secure desktop (a
+        UAC prompt, a locked screen), in a window running as administrator, or when Windows drops a slow hook. A held
+        key repeats its key-down every ~30–50 ms, so none for `after` seconds means it's up: on_release is called
+        then. Keys only (mouse buttons don't repeat), and only once the repeating was seen in this hold."""
+        with self._lock:
+            stuck = (self._held and self._binding.get("kind") == "key" and self._repeats > 0 and not self._other_key
+                     and time.monotonic() - self._last_down > after)
+            if stuck:
+                self._held = False
+        if stuck:
+            log.warning("Puštění klávesy %s se ztratilo, beru ji jako puštěnou", binding_name(self._binding))
+            self._on_release()
+        return stuck
 
     # -- hooks ------------------------------------------------------------------------------
 
@@ -167,10 +202,15 @@ class PushToTalk:
             else:
                 capture_done = None
                 if self._binding.get("kind") != kind or self._binding.get("code") != code:
+                    if down and kind == "key" and self._held:
+                        self._other_key = True  # Windows repeats only the newest key: the held one goes quiet
                     return False
                 fire = None
                 if down and not self._held:
                     self._held, fire = True, self._on_press
+                    self._last_down, self._repeats, self._other_key = time.monotonic(), 0, False
+                elif down:
+                    self._last_down, self._repeats = time.monotonic(), self._repeats + 1
                 elif not down and self._held:
                     self._held, fire = False, self._on_release
 

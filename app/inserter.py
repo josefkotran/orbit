@@ -1,6 +1,7 @@
 """Puts text into whatever window currently has keyboard focus."""
 import ctypes
 import logging
+import time
 from ctypes import wintypes
 
 from PySide6.QtCore import QMimeData, QTimer
@@ -12,7 +13,11 @@ INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP, KEYEVENTF_UNICODE = 0x0002, 0x0004
 VK_SHIFT, VK_CONTROL, VK_RETURN, VK_ESCAPE, VK_V = 0x10, 0x11, 0x0D, 0x1B, 0x56
 RESTORE_DELAY_MS = 700
-_RTF = 'application/x-qt-windows-mime;value="Rich Text Format"'
+SNAPSHOT_MAX_BYTES = 20 * 2 ** 20  # a clipboard format bigger than this isn't backed up
+SNAPSHOT_MAX_S = 0.5  # backing up stops after this long (some programs render every format only when asked)
+# Remote desktops and virtual machines fetch the clipboard only when their own Ctrl+V gets there: restoring the old
+# content after RESTORE_DELAY_MS could paste that instead (mstsc, RemoteApp, VMware, Citrix)
+_REMOTE_CLASSES = {"TscShellContainerClass", "RAIL_WINDOW", "VMUIFrame", "Transparent Windows Client"}
 # Keep dictated snippets out of Windows clipboard history (Win+V) and cloud clipboard.
 _NO_HISTORY = {
     'application/x-qt-windows-mime;value="ExcludeClipboardContentFromMonitorProcessing"': b"\x00\x00\x00\x00",
@@ -42,6 +47,19 @@ class _INPUT(ctypes.Structure):
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 _user32.SendInput.argtypes = [wintypes.UINT, ctypes.POINTER(_INPUT), ctypes.c_int]
 _user32.SendInput.restype = wintypes.UINT
+_user32.GetForegroundWindow.restype = wintypes.HWND
+_user32.GetAncestor.restype = wintypes.HWND
+_user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+_user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_kernel32.OpenProcess.restype = wintypes.HANDLE
+_kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+_kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+_kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+_advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+_advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+_advapi32.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+                                          ctypes.POINTER(wintypes.DWORD)]
 
 
 def _key(vk: int = 0, scan: int = 0, flags: int = 0) -> _INPUT:
@@ -50,15 +68,77 @@ def _key(vk: int = 0, scan: int = 0, flags: int = 0) -> _INPUT:
     return inp
 
 
-def _send(events: list[_INPUT]) -> None:
+def _send(events: list[_INPUT]) -> bool:
+    """False when Windows didn't take all of them (it doesn't always say so for a window running as administrator)."""
     arr = (_INPUT * len(events))(*events)
     sent = _user32.SendInput(len(events), arr, ctypes.sizeof(_INPUT))
     if sent != len(events):
         log.warning("SendInput odeslal %s/%s událostí (chyba %s) – cílové okno běží asi jako správce",
                     sent, len(events), ctypes.get_last_error())
+        return False
+    return True
 
 
-def type_text(text: str) -> None:
+def foreground() -> int:
+    """The window in front now (0 = none, e.g. in the middle of switching)."""
+    return int(_user32.GetForegroundWindow() or 0)
+
+
+def own_window(hwnd: int) -> bool:
+    """A window of Orbit itself (its menu, its hidden tray window)."""
+    pid = wintypes.DWORD()
+    _user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
+    return bool(hwnd) and pid.value == _kernel32.GetCurrentProcessId()
+
+
+def same_window(a: int, b: int) -> bool:
+    """The same top-level window (a dialog it owns counts as the same)."""
+    if not a or not b:
+        return a == b
+    root = lambda h: int(_user32.GetAncestor(wintypes.HWND(h), 3) or h)  # GA_ROOTOWNER
+    return root(a) == root(b)
+
+
+def _elevated(process: int) -> bool | None:
+    """Is the process's token elevated? None when it can't be told (the token can't be opened)."""
+    token = wintypes.HANDLE()
+    if not _advapi32.OpenProcessToken(process, 0x0008, ctypes.byref(token)):  # TOKEN_QUERY
+        return None
+    try:
+        value, size = wintypes.DWORD(), wintypes.DWORD()
+        if not _advapi32.GetTokenInformation(token, 20, ctypes.byref(value), ctypes.sizeof(value),
+                                             ctypes.byref(size)):  # TokenElevation
+            return None
+        return bool(value.value)
+    finally:
+        _kernel32.CloseHandle(token)
+
+
+def runs_as_admin(hwnd: int) -> bool:
+    """Does the window belong to a program running as administrator while Orbit doesn't? Windows then silently
+    drops the keys Orbit sends there (UIPI)."""
+    if not hwnd or _elevated(_kernel32.GetCurrentProcess()):
+        return False
+    pid = wintypes.DWORD()
+    _user32.GetWindowThreadProcessId(wintypes.HWND(hwnd), ctypes.byref(pid))
+    process = _kernel32.OpenProcess(0x1000, False, pid.value)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not process:  # not even that: a system process (also above Orbit)
+        return ctypes.get_last_error() == 5
+    try:
+        elevated = _elevated(process)
+        # its token can't be opened: from a normal program that means an elevated one
+        return elevated if elevated is not None else ctypes.get_last_error() == 5
+    finally:
+        _kernel32.CloseHandle(process)
+
+
+def _class_name(hwnd: int) -> str:
+    buf = ctypes.create_unicode_buffer(64)
+    _user32.GetClassNameW(wintypes.HWND(hwnd), buf, 64)
+    return buf.value
+
+
+def type_text(text: str) -> bool:
     events = []
     for ch in text:
         if ch == "\n":  # Shift+Enter: a line break even in chat apps where plain Enter sends the message
@@ -70,7 +150,7 @@ def type_text(text: str) -> None:
             unit = int.from_bytes(data[i:i + 2], "little")
             events += [_key(scan=unit, flags=KEYEVENTF_UNICODE),
                        _key(scan=unit, flags=KEYEVENTF_UNICODE | KEYEVENTF_KEYUP)]
-    _send(events)
+    return _send(events)
 
 
 class Inserter:
@@ -82,11 +162,25 @@ class Inserter:
         self._restore_timer = QTimer(singleShot=True, interval=RESTORE_DELAY_MS)
         self._restore_timer.timeout.connect(self._restore)
 
-    def insert(self, text: str, mode: str) -> None:
+    def insert(self, text: str, mode: str) -> bool:
+        """False when Windows didn't take the keys: the text is left on the clipboard then."""
         if mode == "type":
-            type_text(text)
+            ok = type_text(text)
         else:
-            self._paste(text)
+            ok = self._paste(text)
+        if not ok:
+            self.to_clipboard(text)
+        return ok
+
+    def to_clipboard(self, text: str) -> None:
+        """The text on the clipboard for the user's own Ctrl+V (what was there before isn't brought back)."""
+        self._restore_timer.stop()
+        self._saved, self._ours = None, None
+        md = QMimeData()
+        md.setText(text)
+        for fmt, data in _NO_HISTORY.items():
+            md.setData(fmt, data)
+        QGuiApplication.clipboard().setMimeData(md)
 
     def press(self, key: str, after_text: str = "") -> None:
         """'send' = Enter, 'stop' = Esc. After inserted text Enter waits a moment: terminals paste asynchronously
@@ -95,7 +189,7 @@ class Inserter:
         delay = min(1500, 300 + len(after_text)) if after_text else 0
         QTimer.singleShot(delay, lambda: _send([_key(vk), _key(vk, flags=KEYEVENTF_KEYUP)]))
 
-    def _paste(self, text: str) -> None:
+    def _paste(self, text: str) -> bool:
         cb = QGuiApplication.clipboard()
         if not self._restore_timer.isActive():  # otherwise the clipboard still holds our previous snippet
             self._saved = self._snapshot()
@@ -104,28 +198,45 @@ class Inserter:
         for fmt, data in _NO_HISTORY.items():
             md.setData(fmt, data)
         cb.setMimeData(md)
+        if cb.text() != text:
+            # another program holds the clipboard open (a clipboard manager, rdpclip): Ctrl+V would paste what was
+            # there before, maybe a password. Typed instead.
+            log.warning("Schránka nejde nastavit, text píšu po znacích")
+            if not self._restore_timer.isActive():
+                self._saved = None  # the clipboard didn't change: nothing to bring back
+            return type_text(text)
         self._ours = text
-        _send([_key(VK_CONTROL), _key(VK_V), _key(VK_V, flags=KEYEVENTF_KEYUP),
-               _key(VK_CONTROL, flags=KEYEVENTF_KEYUP)])
-        self._restore_timer.start()
+        ok = _send([_key(VK_CONTROL), _key(VK_V), _key(VK_V, flags=KEYEVENTF_KEYUP),
+                    _key(VK_CONTROL, flags=KEYEVENTF_KEYUP)])
+        if _class_name(foreground()) in _REMOTE_CLASSES:
+            self._saved = None  # it may fetch it only later: the text stays on the clipboard
+            self._restore_timer.stop()
+        else:
+            self._restore_timer.start()
+        return ok
 
     @staticmethod
     def _snapshot() -> QMimeData | None:
+        """A copy of every clipboard format (Excel's cells, Office objects, files cut in Explorer), within limits."""
         src = QGuiApplication.clipboard().mimeData()
         if src is None or not src.formats():
             return None
         copy = QMimeData()
+        start = time.monotonic()
         try:
             if src.hasText():
                 copy.setText(src.text())
-            if src.hasHtml():
-                copy.setHtml(src.html())
-            if src.hasUrls():
-                copy.setUrls(src.urls())
             if src.hasImage():
                 copy.setImageData(src.imageData())
-            if src.hasFormat(_RTF):
-                copy.setData(_RTF, src.data(_RTF))
+            for fmt in src.formats():
+                if time.monotonic() - start > SNAPSHOT_MAX_S:
+                    log.info("Záloha schránky trvá moc dlouho, zbytek formátů vynechávám")
+                    break
+                if fmt in ("text/plain", "application/x-qt-image") or copy.hasFormat(fmt):
+                    continue
+                data = src.data(fmt)
+                if 0 < data.size() <= SNAPSHOT_MAX_BYTES:
+                    copy.setData(fmt, data)
         except Exception:
             log.exception("Nepodařilo se zálohovat schránku")
         return copy

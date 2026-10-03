@@ -1,17 +1,30 @@
-"""Claude plan usage (the same numbers Claude Code's /usage shows).
+"""Claude plan usage: the 5-hour and the weekly limit (what Claude Code's /usage shows).
 
-Reads the OAuth token Claude Code keeps in ~/.claude/.credentials.json and asks the usage endpoint.
-The token is only read, never refreshed here – Claude Code refreshes it itself whenever it runs.
+Two sources (config "usage_source"):
+- "statusline" (the default): Orbit's status line in Claude Code (app/cc_status.py) leaves the limits Claude Code
+  reports after each answer in <data>/sessions/status/; the newest of them count. Official, needs nothing else, but
+  only Pro and Max report limits, and only once a session has had an answer. No per-model weekly limit there.
+- "oauth" (opt-in, not in the settings window; kept for configs from before the status line): reads the OAuth token
+  Claude Code keeps in .credentials.json in its folder and asks the internal usage endpoint. The token is only read,
+  never refreshed here – Claude Code refreshes it itself whenever it runs.
 """
 import json
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import requests
 
-CREDENTIALS = Path.home() / ".claude" / ".credentials.json"
+from . import paths
+from .config import SESSIONS_DIR
+
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
+STATUS_DIR = SESSIONS_DIR / "status"
+SOURCES = ("statusline", "oauth")
+STATUS_KEEP_S = 8 * 86400  # status files older than this (past any weekly window) are deleted
+NO_DATA = "Limity se ukážou po první zprávě v Claude Code."
+NOT_REPORTED = "Claude Code limity tvého účtu nehlásí (hlásí je jen předplatné Pro a Max)."
+WINDOWS = (("five_hour", "session"), ("seven_day", "weekly_all"))  # status line key -> kind
 
 
 class UsageError(Exception):
@@ -31,18 +44,29 @@ class Limit:
 class Usage:
     limits: list[Limit]
     fetched_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    note: str = ""  # instead of the bars when there are none yet
+    action: str = ""  # with the note, a link in the panel: "statusline" = the user's yes to Orbit's status line
+    source: str = "oauth"
+    updated_at: datetime | None = None  # status line: when Claude Code last reported them
 
     def get(self, kind: str) -> Limit | None:
         return next((lim for lim in self.limits if lim.kind == kind), None)
 
 
 def _parse_time(value) -> datetime | None:
-    if not value:
+    """ISO text (the endpoint) or Unix seconds (the status line)."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            return datetime.fromtimestamp(value, timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    if not value or not isinstance(value, str):
         return None
     try:
-        return datetime.fromisoformat(value)
+        when = datetime.fromisoformat(value)
     except ValueError:
         return None
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
 
 
 def _describe(kind: str, scope) -> tuple[str, str]:
@@ -56,34 +80,101 @@ def _describe(kind: str, scope) -> tuple[str, str]:
     return kind, kind
 
 
+def fetch(source: str = "statusline") -> Usage:
+    return fetch_oauth() if source == "oauth" else from_status_line()
+
+
+# --- the status line ----------------------------------------------------------------------------
+
+_pruned_at = 0.0
+
+
+def from_status_line(now: float | None = None) -> Usage:
+    """The newest limits any session's status line reported (a window that has reset since doesn't count)."""
+    global _pruned_at
+    now = time.time() if now is None else now
+    newest: dict[str, tuple[float, float, datetime | None]] = {}  # kind -> (reported at, percent, resets at)
+    seen_limits = answered = False
+    try:
+        files = list(STATUS_DIR.glob("*.json"))
+    except OSError:
+        files = []
+    prune = now - _pruned_at > 3600
+    for f in files:
+        try:
+            if prune and f.stat().st_mtime < now - STATUS_KEEP_S:
+                f.unlink(missing_ok=True)
+                continue
+            record = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        reported = float(record.get("time") or 0)
+        window = record.get("context_window") if isinstance(record.get("context_window"), dict) else {}
+        answered = answered or bool(window.get("current_usage"))
+        limits = record.get("rate_limits") if isinstance(record.get("rate_limits"), dict) else {}
+        for key, kind in WINDOWS:
+            item = limits.get(key) if isinstance(limits.get(key), dict) else {}
+            pct = item.get("used_percentage")
+            if not isinstance(pct, (int, float)) or isinstance(pct, bool):
+                continue
+            seen_limits = True
+            resets = _parse_time(item.get("resets_at"))
+            if resets is not None and resets.timestamp() <= now:
+                continue  # that window is over: the next answer brings the new one
+            if kind not in newest or reported > newest[kind][0]:
+                newest[kind] = (reported, float(pct), resets)
+    if prune:
+        _pruned_at = now
+    result = []
+    for _, kind in WINDOWS:
+        if kind in newest:
+            label, title = _describe(kind, None)
+            result.append(Limit(kind, label, title, newest[kind][1], newest[kind][2]))
+    note = "" if result else NOT_REPORTED if answered and not seen_limits else NO_DATA
+    updated = max((t for t, _, _ in newest.values()), default=0.0)
+    return Usage(result, note=note, source="statusline",
+                 updated_at=datetime.fromtimestamp(updated, timezone.utc) if updated else None)
+
+
+# --- the OAuth usage endpoint (opt-in) ------------------------------------------------------------
+
 def parse(data: dict) -> Usage:
     limits = []
     for item in data.get("limits") or []:
-        if item.get("percent") is None:
+        if not isinstance(item, dict) or item.get("percent") is None:
             continue
         label, title = _describe(item.get("kind", ""), item.get("scope"))
         limits.append(Limit(item.get("kind", ""), label, title, float(item["percent"]),
                             _parse_time(item.get("resets_at"))))
     if not limits:  # older response shape
         for key, kind in (("five_hour", "session"), ("seven_day", "weekly_all")):
-            if data.get(key):
+            if isinstance(data.get(key), dict):
                 label, title = _describe(kind, None)
                 limits.append(Limit(kind, label, title, float(data[key]["utilization"]),
                                     _parse_time(data[key].get("resets_at"))))
-    return Usage(limits)
+    return Usage(limits, source="oauth")
 
 
-def fetch() -> Usage:
+_retry_at = 0.0  # after a 429: no asking before this
+
+
+def fetch_oauth() -> Usage:
+    global _retry_at
+    if time.time() < _retry_at:
+        raise UsageError("Claude teď odpovídá, že se ptáme moc často. Zkusím to za pár minut.")
     try:
-        creds = json.loads(CREDENTIALS.read_text(encoding="utf-8"))["claudeAiOauth"]
+        creds = json.loads((paths.claude_dir() / ".credentials.json").read_text(encoding="utf-8"))["claudeAiOauth"]
+        token = creds["accessToken"]
     except FileNotFoundError:
         raise UsageError("Claude Code není na tomhle počítači přihlášený.")
-    except (KeyError, ValueError):
+    except (KeyError, TypeError, ValueError, OSError):
         raise UsageError("Nerozumím souboru s přihlášením Claude Code.")
 
     try:
         r = requests.get(USAGE_URL, timeout=10, headers={
-            "Authorization": f"Bearer {creds['accessToken']}",
+            "Authorization": f"Bearer {token}",
             "anthropic-beta": "oauth-2025-04-20",
             "Content-Type": "application/json",
         })
@@ -91,10 +182,22 @@ def fetch() -> Usage:
         raise UsageError("Nepodařilo se spojit s Claude.")
     if r.status_code == 401:
         raise UsageError("Přihlášení vypršelo – stačí spustit Claude Code, ten ho obnoví.")
+    if r.status_code == 429:
+        try:
+            wait = float(r.headers.get("Retry-After") or 0)
+        except ValueError:
+            wait = 0
+        _retry_at = time.time() + min(max(wait, 300), 3600)
+        raise UsageError("Claude teď odpovídá, že se ptáme moc často. Zkusím to za pár minut.")
     if r.status_code != 200:
         raise UsageError(f"Claude odpověděl chybou {r.status_code}.")
-    return parse(r.json())
+    try:
+        return parse(r.json())
+    except (ValueError, TypeError, KeyError):
+        raise UsageError("Odpovědi Clauda o využití nerozumím.")
 
+
+# --- forecast and texts ------------------------------------------------------------------------------
 
 def forecast(samples: list[tuple[datetime, float]], resets_at: datetime | None) -> datetime | None:
     """When the limit runs out at the pace of the last 30 minutes – only if that's before it resets."""

@@ -6,8 +6,17 @@ models/
 recordings/
 sessions/
 config.json
+config.json.*
 *.log
+portable
 
-# generated at runtime
+# generated at runtime (cache/ now; assets/ in older versions)
+cache/
 assets/*.wav
 assets/chevron.png
+
+# build outputs (build/build_installer.py, whisper build)
+build/cache/
+build/tools/
+build/dist/
+build/output/

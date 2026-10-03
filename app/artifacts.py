@@ -1,7 +1,7 @@
 """Artifacts read aloud: when a Claude Code session publishes a page with the Artifact tool, Orbit lets Claude sum
 it up in 7 sentences and reads them to Pepa.
 
-Orbit's PostToolUse hook (app/cc_hook.py) leaves a file per publish in sessions/artifacts/. The page's text comes
+Orbit's PostToolUse hook (app/cc_hook.py) leaves a file per publish in <data>/sessions/artifacts/. The page's text comes
 from the local file the session published (the claude.ai copy would need a login), only that text goes to Claude.
 """
 import difflib
@@ -14,11 +14,11 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 from . import claude_cli
-from .config import ROOT
+from .config import SESSIONS_DIR
 
 log = logging.getLogger(__name__)
 
-ARTIFACTS_DIR = ROOT / "sessions" / "artifacts"
+ARTIFACTS_DIR = SESSIONS_DIR / "artifacts"
 MAX_AGE_S = 300  # publishes older than this (Orbit wasn't running) are not read anymore
 MAX_FILE_BYTES = 5_000_000
 MAX_CHARS = 60_000  # of page text sent to Claude
@@ -28,15 +28,16 @@ SENTENCES = 7
 _URL_RE = re.compile(r"https://claude\.ai/(?:code/)?artifact/[\w-]+")
 
 SYSTEM_PROMPT = """\
-Claude Code just published a page (an "artifact") for Josef. He works on something else and will hear your \
+Claude Code just published a page (an "artifact") for the user. They work on something else and will hear your \
 summary read aloud by a Czech text-to-speech voice instead of reading the page.
 
 Write in Czech. Return:
 - title: what the page is, in 2 to 6 Czech words.
 - sentences: exactly 7 sentences with the most important content. First what the page is about, then the key \
-findings, numbers, decisions and recommendations, last what Josef should do or check (if the page says). Concrete \
-facts beat describing the layout ("the page has a table and a chart" is useless). Speak to Josef directly and \
-informally (tykání), without his name.
+findings, numbers, decisions and recommendations, last what the user should do or check (if the page says). \
+Concrete facts beat describing the layout ("the page has a table and a chart" is useless). Speak to the user \
+directly and informally (tykání), without a name. You don't know if the listener is a man or a woman: avoid Czech \
+forms that show gender (say "zkontroluj" or "je potřeba zkontrolovat", not "měl bys zkontrolovat").
 
 It will be heard, not seen: plain spoken sentences, each under about 25 words. No Markdown, lists, emoji, URLs, file \
 paths, code or symbols like arrows and slashes. Round long numbers unless the exact value matters.
@@ -112,18 +113,23 @@ def done(pub: Published) -> None:
         _taken.discard(pub.record)
 
 
-def _parse(record: dict) -> Published | None:
-    args = record.get("tool_input") or {}  # the hook keeps only publishes of a page
-    if not args.get("file_path"):
+def _parse(record) -> Published | None:
+    """None for a record that isn't a publish of a page (or that Orbit can't read: it's dropped, not retried)."""
+    args = record.get("tool_input") if isinstance(record, dict) else None  # the hook keeps only publishes of a page
+    if not isinstance(args, dict) or not isinstance(args.get("file_path"), str) or not args["file_path"]:
         return None
     response = record.get("tool_response")
     info = response if isinstance(response, dict) else {}
-    url = args.get("url") or info.get("url") or ""
+    url = str(args.get("url") or info.get("url") or "")
     if not url and (m := _URL_RE.search(json.dumps(response, ensure_ascii=False))):
         url = m.group(0)
-    return Published(session_id=record.get("session_id", ""), cwd=record.get("cwd", ""),
-                     transcript=record.get("transcript_path") or "", path=args["file_path"],
-                     url=url, title=str(info.get("title") or args.get("title") or ""), time=record.get("time", 0))
+    try:
+        when = float(record.get("time") or 0)
+    except (TypeError, ValueError):
+        return None
+    return Published(session_id=str(record.get("session_id") or ""), cwd=str(record.get("cwd") or ""),
+                     transcript=str(record.get("transcript_path") or ""), path=args["file_path"],
+                     url=url, title=str(info.get("title") or args.get("title") or ""), time=when)
 
 
 class _TextParser(HTMLParser):
@@ -195,7 +201,7 @@ class Summarizer:
         key = pub.url or pub.path
         before = self._read.get(key)
         if before is not None and _similar(before, text):
-            log.info("Artefakt %s se změnil jen málo, znovu ho nečtu", key)
+            log.info("Artefakt ze složky %s se změnil jen málo, znovu ho nečtu", pub.name)
             return None
         cut = " (cut short)" if len(text) >= MAX_CHARS else ""
         prompt = f"Page title: {pub.title or Path(pub.path).stem}\n\nPage text{cut}:\n{text}"

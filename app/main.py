@@ -1,21 +1,28 @@
+import faulthandler
 import logging
+import os
+import re
 import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import QObject, QPoint, QTimer, QUrl, Signal
+from PySide6.QtCore import QObject, QPoint, QtMsgType, QTimer, QUrl, Signal, qInstallMessageHandler
 from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication
 from PySide6.QtTextToSpeech import QTextToSpeech
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
-from . import artifacts, claude_cli, claude_usage, config, hotkey, learning, sessions, theme, winutil
+from . import (agent, artifacts, claude_cli, claude_settings, claude_usage, config, downloads, hotkey, inserter,
+               learning, paths, sessions, theme, vocab, voice, winutil)
 from .inserter import Inserter
+from .onboarding import CANCELLED, ClaudeConnection, Downloads, Wizard
 from .recorder import Recorder, input_devices, is_bluetooth_handsfree, is_silent
-from .ui import Bubble, FloatingButton, SettingsDialog, mic_icon
+from .ui import Bubble, FloatingButton, SettingsDialog, export_vocabulary, import_vocabulary, message_box, mic_icon
+from .version import VERSION
 from .whisper_server import (SAMPLE_RATE, WhisperServer, apply_replacements, apply_voice_commands, build_prompt,
                              clean_text, terminal_command, to_wav)
 
@@ -24,19 +31,29 @@ log = logging.getLogger("orbit")
 TAIL_MS = 250  # keep recording a moment after release – people let go while finishing the last word
 KEEP_RECORDINGS = 30
 LIVE_FALLBACK_MS = 600  # if the mic sends only exact zeros (e.g. muted), start anyway after this
-USAGE_REFRESH_MS = 120_000
+USAGE_REFRESH_MS = 120_000  # the OAuth endpoint (it answers 429 when asked more often)
+STATUS_REFRESH_MS = 5_000  # the status line's files (local, cheap)
 SESSION_POLL_MS = 1000
 NOTIFY_TURN_S = 20  # a finished turn is announced only if Claude worked at least this long (else Pepa watched it)
 FORECAST_WARN = timedelta(minutes=60)  # warn when the 5-hour limit runs out sooner than this at the current pace
 CONTEXT_CHARS = 150  # the end of the previous piece goes into the prompt; Whisper keeps only ~224 prompt tokens
+CLICK_S = 0.35  # the agent's button let go sooner than this = a click: it listens until Pepa stops talking
+LISTEN_MAX_MS = 30_000  # hands-free listening ends after this at the latest
+CONFIRM_TIMEOUT_MS = 120_000  # a message for a session that Pepa doesn't confirm within this isn't sent
+CONFIRM_MAX_CHARS = 500  # longer messages aren't confirmed by voice: the agent has to shorten them
+FEED_KEEP_MS = 90_000  # the agent's part of the panel goes away after this long without anything new
+MAX_RECORDING_S = 300  # a recording ends after this at the latest (a key-up the hook never saw)
+WATCH_MS = 1000  # how often a running recording is checked (the key's release, the secure desktop, its length)
+SILENT_TELL_S = 1.5  # a recording this long that had nothing in it gets a bubble saying why
 
 
 class Take:
     """One push-to-talk recording. With live transcription it arrives in pieces cut at pauses, which are
     transcribed while the user keeps talking; the text is inserted once, after release."""
 
-    def __init__(self, prompt: str):
+    def __init__(self, prompt: str, for_agent: bool = False):
         self.prompt = prompt
+        self.agent = for_agent  # said to the voice agent, not typed into a window
         self.audio: list[np.ndarray] = []
         self.raw: list[str] = []
         self.texts: list[str] = []
@@ -44,6 +61,8 @@ class Take:
         self.cancelled = False
         self.error: str | None = None
         self.released_at = 0.0
+        self.target = 0  # the window in front when it ended: the text goes there only if it still is
+        self.confirm_id: str | None = None  # for the agent: the "Mám to poslat?" already heard when it started
 
 
 class Bridge(QObject):
@@ -53,37 +72,66 @@ class Bridge(QObject):
     piece_ready = Signal()
     ptt_up = Signal()
     captured = Signal(object)
-    server_ready = Signal()
-    server_failed = Signal(str)
-    text_ready = Signal(str, str)  # text, key to press after it ("send" / "stop" / "")
-    transcribe_failed = Signal(str)
+    agent_captured = Signal(object)  # the agent's new button (settings), None = Esc
+    server_ready = Signal(int)  # which start (a newer one makes an older one's result moot)
+    server_failed = Signal(int, str)
+    server_event = Signal(str, str)  # see WhisperServer: backend / restarting / restarted / failed
+    text_ready = Signal(str, str, object)  # text, key to press after it ("send" / "stop" / ""), Take.target
+    transcribe_failed = Signal(str, object)  # message, the Take
     usage_ready = Signal(object)
     usage_failed = Signal(str)
     learned = Signal(object)
     learn_failed = Signal(str)
     artifact_ready = Signal(object, object)  # artifacts.Published, artifacts.Summary
     artifact_failed = Signal(object, str)
+    agent_down = Signal()
+    agent_up = Signal()
+    speech_over = Signal()  # hands-free listening: Pepa stopped talking
+    agent_heard = Signal(str, object)  # text, the confirmation it may answer (Take.confirm_id)
+    agent_event = Signal(str, object)  # see agent.VoiceAgent
 
 
 class Dictation:
     def __init__(self):
-        self.first_run = config.is_first_run()
+        first_run = config.is_first_run()
         self.cfg = config.load()
-        if self.first_run:
+        if first_run:
+            self.cfg["wizard_pending"] = True  # cleared when the wizard closes; a crash before that shows it again
+        if "claude_hooks" in config.missing:
+            # config.json from before the consents: the hooks this copy already has stay (Pepa's setup)
+            self.cfg["claude_hooks"] = claude_settings.hooks_installed()
+            log.info("Souhlas s hooky Claude Code převzat ze stávajícího nastavení: %s", self.cfg["claude_hooks"])
+        if "usage_source" in config.missing:
+            self.cfg["usage_source"] = "oauth"  # config.json from before the status line: its limits stay as they were
+        if first_run or config.missing:
             config.save(self.cfg)
-        self.server_state = "loading"
+        theme.set_theme(self.cfg["theme"])
+        theme.apply(QApplication.instance())
+        self.server_state = "loading"  # loading / ready / error / nomodel (not downloaded yet)
+        self._server_gen = 0
         self.pending = 0
         self.dialog: SettingsDialog | None = None
+        self.wizard: Wizard | None = None
+        self.claude = ClaudeConnection()  # checked in the background; what needs Claude waits for it
+        self._claude_was: bool | None = None
+        self.downloads = Downloads()
         self.usage: claude_usage.Usage | None = None
         self.usage_error: str | None = None
         self._usage_inflight = False
         self.take: Take | None = None
+        self._retry_take: Take | None = None  # the last dictation whose transcription failed (Přepsat znovu)
+        self._recording_since = 0.0
+        self._desktop_ok = True  # the user's desktop was the input desktop when the recording started
+        self._cpu_told = False  # told once that the transcription runs on the processor
+        self._restart_told = False  # told once that Whisper died and comes back
         self._learning = False
         self._learn_retry_at = 0.0
 
         self.bridge = Bridge()
-        self.server = WhisperServer()
-        self.recorder = Recorder(on_live=self.bridge.mic_live.emit, on_piece=self.bridge.piece_ready.emit)
+        self.server = WhisperServer(on_event=self.bridge.server_event.emit)
+        self.recorder = Recorder(on_live=self.bridge.mic_live.emit, on_piece=self.bridge.piece_ready.emit,
+                                 on_end=self.bridge.speech_over.emit)
+        self.recorder.may_refresh = self._release_sound_card
         self.recorder.configure(self.cfg["mic"])
         self.recorder.split = self.cfg["live_transcribe"]
         self.live_timer = QTimer(singleShot=True, interval=LIVE_FALLBACK_MS)
@@ -92,6 +140,8 @@ class Dictation:
         self.executor = ThreadPoolExecutor(max_workers=1)
         self.stop_timer = QTimer(singleShot=True, interval=TAIL_MS)
         self.stop_timer.timeout.connect(self._finish_recording)
+        self.watch_timer = QTimer(interval=WATCH_MS)
+        self.watch_timer.timeout.connect(self._watch_recording)
 
         self.icons = {s: mic_icon(s) for s in ("idle", "loading", "recording", "busy", "error")}
         self.button = FloatingButton(lambda: self.recorder.level)
@@ -102,12 +152,15 @@ class Dictation:
         self.button.menu_requested.connect(self._show_menu)
         self.bubble: Bubble | None = None
         self.button.session_clicked.connect(self._focus_session)
-        self.button.reader_toggled.connect(self._toggle_reader)
+        self.button.mute_toggled.connect(self._toggle_mute)
+        self.button.theme_chosen.connect(self._set_theme)
+        self.button.set_muted(self.cfg["muted"])
         self.tracker = sessions.SessionTracker()
         self.session_timer = QTimer(interval=SESSION_POLL_MS)
         self.session_timer.timeout.connect(self._poll_sessions)
         self.tts: QTextToSpeech | None = None
-        self._speech: list[tuple[str, bool]] = []  # (text, is an artifact) waiting to be read (see _speak)
+        self.piper: voice.PiperSpeaker | None = None
+        self._speech: list[tuple[str, str]] = []  # (text, kind) waiting to be read (see _speak)
         self._speaking = False
         self._reading_artifact = False  # what's being read now is an artifact summary
         self._said_at = 0.0
@@ -117,20 +170,49 @@ class Dictation:
         self._usage_samples: list[tuple[datetime, float]] = []
         self._samples_window = None  # resets_at of the 5-hour window the samples belong to
         self._forecast_warned = None  # the 5-hour window we already warned about
+        self.agent = agent.VoiceAgent(self.cfg["agent_model"], self.bridge.agent_event.emit, self.cfg["name"],
+                                      bypass=self._sessions_bypass)
+        self._saying: tuple[str, str] | None = None  # (text, kind) being read aloud right now
+        self._no_voice_told = False  # told once that there's no voice to read Czech with
+        self.agent_ptt: hotkey.PushToTalk | None = None
+        self._agent_capture: hotkey.PushToTalk | None = None  # a hook capturing the agent's new button (settings)
+        self._agent_capture_wait = 0
+        self._agent_capture_timer = QTimer(interval=100)
+        self._agent_capture_timer.timeout.connect(self._poll_agent_capture)
+        self._agent_state = "idle"  # what its chip shows (listening comes from the recorder)
+        self._agent_pressed_at = 0.0
+        self._hands_free = False  # the agent listens until Pepa stops talking (a click, not a hold)
+        self._feed: dict = {}  # the agent's last exchange, as shown in the panel
+        self._confirm: dict | None = None  # a message the agent wants to send, waiting for Pepa's yes
+        self.listen_timer = QTimer(singleShot=True, interval=LISTEN_MAX_MS)
+        self.listen_timer.timeout.connect(self._speech_over)
+        self.confirm_timer = QTimer(singleShot=True, interval=CONFIRM_TIMEOUT_MS)
+        self.confirm_timer.timeout.connect(self._confirm_expired)
+        self.feed_timer = QTimer(singleShot=True, interval=FEED_KEEP_MS)
+        self.feed_timer.timeout.connect(self._feed_expired)
+        self.button.agent_clicked.connect(self._agent_clicked)
+        self.button.connect_clicked.connect(lambda: self.open_wizard("claude"))
+        self.button.statusline_clicked.connect(self._enable_statusline)
         self.button.set_usage_visible(self.cfg["show_usage"])
         self._place_button()
+        self._watch_screens()
 
         self.menu = QMenu()
         self.hint_action = self.menu.addAction("")
         self.hint_action.setEnabled(False)
         self.menu.addSeparator()
         self.menu.addAction("Nastavení…", self.open_settings)
+        self.menu.addAction("Průvodce nastavením…", self.open_wizard)
         self.toggle_action = QAction("Zobrazovat plovoucí tlačítko", self.menu, checkable=True)
         self.toggle_action.setChecked(self.cfg["show_button"])
         self.toggle_action.toggled.connect(self._set_button_visible)
         self.menu.addAction(self.toggle_action)
+        self.retry_action = self.menu.addAction("Přepsat znovu poslední diktát", self._retry_dictation)
+        self.retry_action.setEnabled(False)
         self.menu.addAction("Obnovit využití Clauda", self._fetch_usage)
         self.menu.addAction("Naučit slovník z nových diktátů", lambda: self._maybe_learn(force=True))
+        self.menu.addAction("Exportovat slovník…", self._export_vocabulary)
+        self.menu.addAction("Importovat slovník…", self._import_vocabulary)
         self.reread_action = self.menu.addAction("Přečíst znovu poslední artefakt", self._reread_artifact)
         self.reread_action.setEnabled(False)
         self.menu.addSeparator()
@@ -147,6 +229,7 @@ class Dictation:
         b.piece_ready.connect(self._take_pieces)
         b.server_ready.connect(self._server_ready)
         b.server_failed.connect(self._server_failed)
+        b.server_event.connect(self._server_event)
         b.text_ready.connect(self._insert_text)
         b.transcribe_failed.connect(self._transcribe_failed)
         b.usage_ready.connect(self._usage_ready)
@@ -155,64 +238,213 @@ class Dictation:
         b.learn_failed.connect(self._learn_failed)
         b.artifact_ready.connect(self._artifact_ready)
         b.artifact_failed.connect(self._artifact_failed)
+        b.agent_down.connect(self._agent_down)
+        b.agent_up.connect(self._agent_up)
+        b.speech_over.connect(self._speech_over)
+        b.agent_heard.connect(self._agent_heard)
+        b.agent_event.connect(self._agent_event)
+        b.captured.connect(self._key_captured)
+        b.agent_captured.connect(self._agent_key_captured)
         self.usage_timer = QTimer(interval=USAGE_REFRESH_MS)
         self.usage_timer.timeout.connect(self._fetch_usage)
+        self.claude.changed.connect(self._claude_changed)
+        self.downloads.progress.connect(self._download_progress)
+        self.downloads.finished.connect(self._download_finished)
 
         self.ptt = hotkey.PushToTalk(self.cfg["ptt"], b.ptt_down.emit, b.ptt_up.emit)
         self.ptt.start()
         self._start_server()
         self._set_button_visible(self.cfg["show_button"])
+        # Claude's features (limits, sessions and their hooks, the agent) start once the check says it's connected
         self._apply_usage_setting()
         self._apply_sessions_setting()
+        self._apply_agent_setting()
+        self.claude.refresh()
+        self._prepare_voice()
         self.refresh()
-        if self.first_run:
-            QTimer.singleShot(0, self.open_settings)
+        if config.problem:
+            QTimer.singleShot(0, lambda: self._notify(config.problem, error=True))
+        if self.cfg["wizard_pending"]:
+            QTimer.singleShot(0, self.open_wizard)
 
     # -- whisper server ---------------------------------------------------------------------
 
     def _start_server(self):
+        """(Re)starts Whisper with the model from the settings. Without the model file (not downloaded yet) there is
+        nothing to start: the button says so and dictation waits for the download."""
+        self._server_gen += 1
+        gen, model = self._server_gen, self.cfg["model"]
+        if not config.model_present(model):
+            log.info("Model %s není stažený, rozpoznávání čeká", model)
+            # another model's server goes (in a thread: killing it can take a moment), unless a newer start came
+            threading.Thread(target=lambda: gen == self._server_gen and self.server.stop(), daemon=True).start()
+            self.server_state = "nomodel"
+            self.refresh()
+            return
         self.server_state = "loading"
         self.refresh()
-        model = self.cfg["model"]
 
         def run():
             try:
                 self.server.start(model)
-                self.bridge.server_ready.emit()
+                self.bridge.server_ready.emit(gen)
             except Exception as e:
                 log.exception("Start whisper serveru selhal")
-                self.bridge.server_failed.emit(str(e))
+                self.bridge.server_failed.emit(gen, str(e))
 
         threading.Thread(target=run, daemon=True).start()
 
-    def _server_ready(self):
-        self.server_state = "ready"
-        self.refresh()
+    def _server_ready(self, gen: int):
+        if gen == self._server_gen:
+            self.server_state = "ready"
+            self.refresh()
 
-    def _server_failed(self, msg):
+    def _server_failed(self, gen: int, msg):
+        if gen != self._server_gen:  # a newer start (another model, a finished download) replaced this one
+            return
         self.server_state = "error"
         self.refresh()
         self._notify(f"Rozpoznávání řeči se nespustilo: {msg}", error=True)
 
+    def _server_event(self, kind: str, text: str):
+        """What the Whisper server says on its own (WhisperServer.on_event)."""
+        if kind == "backend":
+            if text == "cpu":
+                self._tell_cpu()
+            return
+        if self.server_state == "nomodel":  # a start for a model that's gone since: nothing of it matters
+            return
+        if kind == "restarting":
+            self.server_state = "loading"
+            if not self._restart_told:  # once: it may die again, the button shows it anyway
+                self._restart_told = True
+                self._notify("Rozpoznávání řeči spadlo, spouštím ho znovu. Za chvilku zase můžeš diktovat, rozpracovaný "
+                             "diktát se dopíše.", title="Rozpoznávání řeči")
+        elif kind == "restarted":
+            self.server_state = "ready"
+        elif kind == "failed":
+            self.server_state = "error"
+            self._notify(text, error=True, title="Rozpoznávání řeči")
+        self.refresh()
+
+    def _tell_cpu(self):
+        """Once per run: the transcription runs on the processor. Not when that's expected (no usable graphics card)
+        and the model is already the one recommended for it."""
+        if self._cpu_told:
+            return
+        self._cpu_told = True
+        turbo = "turbo" in self.cfg["model"]
+        if turbo and downloads.advise().slow:
+            return
+        if turbo:
+            text = ("Přepis běží jen na procesoru, takže bude pomalejší. Whisper nemůže použít grafickou kartu, pomoct "
+                    "může nový ovladač grafiky.")
+        else:
+            text = ("Přepis běží na procesoru, takže bude pomalý. Doporučuju model turbo (Nastavení › Přepis › "
+                    "Model).")
+        self._notify(text, title="Rozpoznávání řeči")
+
+    def _model_missing_text(self) -> str:
+        model = self.cfg["model"]
+        if self.downloads.running(model):
+            return (f"Model pro rozpoznávání řeči se ještě stahuje ({self.downloads.percent(model)} %). Diktovat půjde, "
+                    "až bude hotový.")
+        return "Chybí model pro rozpoznávání řeči. Stáhneš ho v nastavení (Přepis › Model) nebo v průvodci."
+
+    # -- downloads (models, voices) ----------------------------------------------------------
+
+    def _download_progress(self, key: str, done, total):
+        if key == self.cfg["model"] and self.server_state == "nomodel":
+            self.refresh()
+
+    def _download_finished(self, key: str, error: str):
+        item = downloads.ITEMS.get(key)
+        label = item.label if item else key
+        if error == CANCELLED:
+            log.info("Stahování %s zrušeno", key)
+        elif error:
+            self._notify(f"Stahování ({label}) se nepovedlo: {error}", error=True)
+        elif key == self.cfg["model"]:
+            self._notify("Model je stažený, za chvilku můžeš diktovat.", title="Rozpoznávání řeči", kind="done")
+            self._start_server()
+        elif key in voice.VOICES:
+            self._notify(f"Český {label} je stažený.", title="Předčítání", kind="done")
+            self._prepare_voice()
+        else:  # a model that isn't the one in use (downloaded from the settings and not saved)
+            self._notify(f"{label[:1].upper()}{label[1:]} je stažený.", kind="done")
+        self.refresh()
+
     # -- Claude usage -----------------------------------------------------------------------
 
     def _apply_usage_setting(self):
+        """Without Claude connected the panel shows a "Připojit Clauda" link instead (FloatingButton.set_claude).
+        The limits come from Orbit's status line (read every few seconds) or, opted in, from the OAuth endpoint."""
         self.button.set_usage_visible(self.cfg["show_usage"])
-        if self.cfg["show_usage"]:
-            if not self.usage_timer.isActive():
-                self.usage_timer.start()
+        self._apply_statusline()
+        if self.cfg["show_usage"] and self.claude.connected:
+            interval = USAGE_REFRESH_MS if self.cfg["usage_source"] == "oauth" else STATUS_REFRESH_MS
+            if not self.usage_timer.isActive() or self.usage_timer.interval() != interval:
+                self.usage_timer.start(interval)
                 self._fetch_usage()
         else:
             self.usage_timer.stop()
 
+    def _apply_statusline(self):
+        """Orbit's status line in Claude Code (the limits, the sessions' exact context): put in with the user's yes
+        (claude_statusline), taken out without it. Like the hooks: only while Claude is connected, and Claude Code's
+        folder is never created."""
+        if not self.claude.connected or not paths.claude_dir().is_dir():
+            return
+        try:
+            claude_settings.set_statusline(self.cfg["claude_statusline"])
+        except claude_settings.SettingsError as e:
+            self._notify(str(e), error=True)
+        except Exception as e:
+            log.exception("Stavový řádek Claude Code nejde nastavit")
+            self._notify(f"Stavový řádek v Claude Code nejde nastavit: {e}", error=True)
+
+    def _enable_statusline(self):
+        """The "Zapnout →" link in the panel: the user's yes to the status line."""
+        self.cfg["claude_statusline"] = True
+        config.save(self.cfg)
+        log.info("Stavový řádek pro limity zapnut z panelu")
+        self._apply_usage_setting()
+        self._fetch_usage()  # the link goes away right now, not with the next read
+        if claude_settings.statusline_installed():
+            self._notify("V Claude Code teď běží stavový řádek Orbitu. Limity se ukážou po první zprávě v kterékoli "
+                         "relaci.", title="Limity Clauda", kind="done")
+
+    # -- Claude connection ------------------------------------------------------------------
+
+    def _claude_changed(self, status):
+        """After every check of Claude Code (start, every 5 min while it isn't connected, during install / login).
+        What needs it is switched on or off only when "connected" itself changes."""
+        connected = self.claude.connected
+        self.button.set_claude(connected)
+        if connected == self._claude_was:
+            return
+        self._claude_was = connected
+        if not connected:
+            self.usage, self.usage_error = None, None
+            self.button.set_usage(None, None)
+        self._apply_usage_setting()
+        self._apply_sessions_setting()
+        self._apply_agent_setting()
+        self.refresh()
+
     def _fetch_usage(self):
         if self._usage_inflight:
+            return
+        source = self.cfg["usage_source"]
+        if source == "statusline" and not self.cfg["claude_statusline"]:  # no yes to the status line yet
+            self._usage_ready(claude_usage.Usage([], note="Limity Orbit čte ze stavového řádku Claude Code.",
+                                                 source=source, action="statusline"))
             return
         self._usage_inflight = True
 
         def run():
             try:
-                self.bridge.usage_ready.emit(claude_usage.fetch())
+                self.bridge.usage_ready.emit(claude_usage.fetch(source))
             except claude_usage.UsageError as e:
                 self.bridge.usage_failed.emit(str(e))
             except Exception as e:
@@ -237,7 +469,10 @@ class Dictation:
         if samples and (lim.percent < samples[-1][1] - 1 or self._samples_window != lim.resets_at):
             samples.clear()  # a new window started
         self._samples_window = lim.resets_at
-        samples.append((now, lim.percent))
+        # a sample when it moved or every 2 minutes (the status line's files are read every few seconds): 60 of them
+        # still reach back further than the 30 minutes the forecast looks at
+        if not samples or lim.percent != samples[-1][1] or now - samples[-1][0] >= timedelta(minutes=2):
+            samples.append((now, lim.percent))
         del samples[:-60]
         eta = claude_usage.forecast(samples, lim.resets_at)
         self.button.set_forecast(eta)
@@ -258,18 +493,36 @@ class Dictation:
 
     # -- recording --------------------------------------------------------------------------
 
-    def start_recording(self):
+    def start_recording(self, for_agent: bool = False):
         if self.stop_timer.isActive():  # pressed again during the tail – just keep recording
-            self.stop_timer.stop()
+            if self.take and self.take.agent == for_agent:
+                self.stop_timer.stop()
             return
         if self.recorder.active:
             return
         self._stop_speech()  # don't talk over (or into) a dictation
-        if self.server_state == "error":
-            self._notify("Rozpoznávání řeči neběží, zkus aplikaci restartovat.", error=True)
+        if self.server_state == "error":  # the mic stays closed; maybe it starts this time (a driver came back)
+            self._notify("Rozpoznávání řeči neběží, zkouším ho spustit znovu. Za chvilku to zkus.",
+                         title="Rozpoznávání řeči")
+            self._start_server()
             return
+        if self.server_state == "nomodel":  # the mic stays closed: there'd be nothing to transcribe with
+            self._notify(self._model_missing_text(), title="Rozpoznávání řeči")
+            return
+        vocabulary = self.cfg["vocabulary"]
+        if for_agent:
+            try:
+                self.agent.start()  # gets ready while Pepa talks
+            except Exception as e:
+                log.exception("Agent nejde spustit")
+                self._notify(f"Agent nejde spustit: {e}", error=True)
+                return
+            # the sessions' folders, so Whisper spells them right
+            vocabulary = ", ".join([vocabulary, *sorted({s.folder for s in self.tracker.sessions.values()})])
         self.live_timer.start()
-        self.take = Take(build_prompt(self.cfg["vocabulary"]))
+        self.take = Take(build_prompt(vocabulary), for_agent)
+        if for_agent and self._confirm and self._confirm.get("asked"):
+            self.take.confirm_id = self._confirm["id"]  # only then can what's said be the answer to it
         try:
             self.recorder.start()
         except Exception as e:
@@ -278,6 +531,9 @@ class Dictation:
             log.exception("Mikrofon nejde spustit")
             self._notify(f"Mikrofon nejde spustit: {e}", error=True)
             return
+        self._recording_since = time.monotonic()
+        self._desktop_ok = winutil.on_user_desktop()
+        self.watch_timer.start()
         self.refresh()
 
     def _mic_live(self):
@@ -285,56 +541,136 @@ class Dictation:
         self.live_timer.stop()
         if not self.recorder.active:
             return
-        if self.cfg["sounds"]:
+        if self.cfg["sounds"] and not self.cfg["muted"]:
             winutil.play("start")
         self.refresh()
 
-    def stop_recording(self):
+    def stop_recording(self, for_agent: bool = False):
+        if self.take and self.take.agent != for_agent:  # the other button's recording
+            return
         if self.recorder.active and not self.stop_timer.isActive():
             self.stop_timer.start()
 
     def cancel_recording(self):
+        """The mic button was dragged: it only ever starts dictation, so the agent's recording goes on."""
+        if self.take and self.take.agent:
+            return
+        self._drop_recording()
+
+    def _drop_recording(self):
+        """Ends the recording and throws it away."""
         self.stop_timer.stop()
         self.live_timer.stop()
+        self.listen_timer.stop()
+        self.watch_timer.stop()
+        self._hands_free = False
         if self.take:
+            if self.take.agent:
+                self._agent_state = self._agent_rest()
             self.take.cancelled = True
             self.take = None
         if self.recorder.active:
             self.recorder.stop()
             self.recorder.pop_pieces()
-            self.refresh()
+        self.refresh()
+
+    def _watch_recording(self):
+        """Every second while recording: a key-up the hook never saw, Windows' secure desktop, the length cap."""
+        if not self.recorder.active:
+            self.watch_timer.stop()
+            return
+        if self._desktop_ok and not winutil.on_user_desktop():
+            # the lock screen or a UAC prompt: the user isn't dictating any more, and the key's release won't come
+            log.warning("Windows přepnul na zabezpečenou plochu (zamčení, UAC), nahrávání ruším")
+            for ptt in (self.ptt, self.agent_ptt):
+                if ptt:
+                    ptt.reset()
+            self._drop_recording()
+            return
+        if time.monotonic() - self._recording_since > MAX_RECORDING_S and not self.stop_timer.isActive():
+            log.warning("Nahrávání trvá přes %d s, ukončuji ho", MAX_RECORDING_S)
+            for ptt in (self.ptt, self.agent_ptt):
+                if ptt:
+                    ptt.reset()
+            self._finish_recording()
+            self._notify(f"Nahrávání jsem po {MAX_RECORDING_S // 60} minutách zastavil a přepisuju, co zaznělo. "
+                         "Nedržíš omylem klávesu?", title="Diktování")
+            return
+        for ptt in (self.ptt, self.agent_ptt):
+            if ptt:
+                ptt.check_stuck()  # calls its on_release: the recording ends the usual way
 
     def _take_pieces(self):
         if self.take:
             for piece in self.recorder.pop_pieces():
                 self._queue_piece(self.take, piece)
 
+    def _submit(self, fn, *args):
+        """On the transcription worker; an exception there would otherwise vanish in its Future."""
+        def run():
+            try:
+                fn(*args)
+            except Exception:
+                log.exception("Chyba ve vlákně přepisu (%s)", fn.__name__)
+        return self.executor.submit(run)
+
     def _queue_piece(self, take: Take, audio):
         take.audio.append(audio)
-        if not is_silent(audio):
+        if not is_silent(audio, self.recorder.noise):
             take.spoken = True
-            self.executor.submit(self._transcribe_piece, take, audio)
+            self._submit(self._transcribe_piece, take, audio)
 
     def _finish_recording(self):
         self.live_timer.stop()
+        self.listen_timer.stop()
+        self.stop_timer.stop()
+        self.watch_timer.stop()
+        self._hands_free = False
+        if not self.recorder.active or self.take is None:
+            return
         was_live = self.recorder.live
         tail = self.recorder.stop()
         take, self.take = self.take, None
-        if self.cfg["sounds"] and was_live:
-            winutil.play("stop")
+        take.target = inserter.foreground()
         for piece in self.recorder.pop_pieces():  # cut just before release, not picked up yet
             self._queue_piece(take, piece)
         self._queue_piece(take, tail)
+        if self.cfg["sounds"] and not self.cfg["muted"] and was_live:
+            winutil.play("stop")  # after queueing: nothing may cost the dictation
         if not take.spoken:
-            log.info("Nahrávka %.2f s je ticho nebo moc krátká – přeskakuji",
-                     sum(map(len, take.audio)) / SAMPLE_RATE)
+            seconds = sum(map(len, take.audio)) / SAMPLE_RATE
+            log.info("Nahrávka %.2f s je ticho nebo moc krátká – přeskakuji (signál: %s, šum %.0f)", seconds,
+                     self.recorder.got_signal, self.recorder.noise)
+            if take.agent:
+                self._agent_state = self._agent_rest()
+            if seconds >= SILENT_TELL_S:
+                self._tell_silence(take.agent)
             self.refresh()
             return
         take.released_at = time.perf_counter()
-        self.pending += 1
+        if take.agent:
+            self._agent_state = "transcribing"
+        else:
+            self.pending += 1
         self.refresh()
-        self.executor.submit(self._finish_take, take, list(self.cfg["replacements"]), self.cfg["voice_commands"],
-                             self.cfg["keep_recordings"])
+        self._submit(self._finish_take, take, list(self.cfg["replacements"]), self.cfg["voice_commands"],
+                     self.cfg["keep_recordings"], self.cfg["learn_vocabulary"])
+
+    def _tell_silence(self, for_agent: bool):
+        """A recording long enough to be meant had nothing in it: say why, or it looks like Orbit ignored it."""
+        if not self.recorder.got_signal:  # exact zeros all the time: muted, or Windows doesn't let apps use the mic
+            text = ("Mikrofon posílá jen ticho. Není ztlumený? A mají aplikace přístup k mikrofonu (Nastavení "
+                    "Windows › Soukromí a zabezpečení › Mikrofon)?")
+        elif self.recorder.voiced_s >= 0.5:  # something like speech, only too quiet to count
+            text = ("Skoro nic jsem neslyšel, mikrofon je moc potichu. Zesil ho v nastavení zvuku ve Windows, nebo "
+                    "mluv blíž k němu.")
+        else:
+            return  # nothing above the mic's own noise: nothing was said
+        log.info("Nahrávka bez řeči: %s", "jen nuly" if not self.recorder.got_signal else "moc potichu")
+        if for_agent:
+            self._feed_update(you="…", reply=text, send=None)
+        else:
+            self._notify(text, title="Diktování")
 
     def _transcribe_piece(self, take: Take, audio):
         """Worker thread. Pieces of one take run in order, so the previous piece's text is known here."""
@@ -343,37 +679,51 @@ class Dictation:
         context = " ".join(take.texts)[-CONTEXT_CHARS:]
         try:
             raw = self.server.transcribe(audio, f"{take.prompt} {context}" if context else take.prompt)
+            text = clean_text(raw)
         except Exception as e:
-            log.exception("Přepis selhal")
+            log.warning("Přepis selhal: %s", e, exc_info=not isinstance(e, RuntimeError))
             take.error = str(e)
             return
-        text = clean_text(raw)
         if raw.strip() and not text:
-            log.info("Přepis odfiltrován jako halucinace: %r", raw)
+            log.info("Přepis odfiltrován jako halucinace (%d znaků)", len(raw.strip()))
+            log.debug("Odfiltrováno: %r", raw)
         take.raw.append(raw.strip())
         if text:
             take.texts.append(text)
 
-    def _finish_take(self, take: Take, replacements, voice_commands, keep):
-        """Worker thread, queued after all pieces of the take."""
-        if take.error:
-            self.bridge.transcribe_failed.emit(take.error)
+    def _finish_take(self, take: Take, replacements, voice_commands, keep, learn):
+        """Worker thread, queued after all pieces of the take. Always ends with a signal, or the button would stay
+        on "Přepisuji…" (an exception in an executor task is lost otherwise)."""
+        try:
+            if take.error:
+                self.bridge.transcribe_failed.emit(take.error, take)
+                return
+            text, key = apply_replacements(" ".join(take.texts), replacements), ""
+            if voice_commands and not take.agent:
+                text, key = terminal_command(apply_voice_commands(text))
+            audio = np.concatenate(take.audio)
+            # the text only when vocabulary learning (which reads it back from the log) is on
+            log.info("Přepis %.1f s zvuku za %.2f s po puštění (kusů: %d)%s: %s%s", len(audio) / SAMPLE_RATE,
+                     time.perf_counter() - take.released_at, len(take.raw), " pro agenta" if take.agent else "",
+                     repr(text) if learn else f"{len(text)} znaků", f" + {key}" if key else "")
+            if keep:
+                self._save_recording(audio, " ".join(take.raw))
+        except Exception as e:
+            log.exception("Dokončení přepisu selhalo")
+            self.bridge.transcribe_failed.emit(str(e), take)
             return
-        text, key = apply_replacements(" ".join(take.texts), replacements), ""
-        if voice_commands:
-            text, key = terminal_command(apply_voice_commands(text))
-        audio = np.concatenate(take.audio)
-        log.info("Přepis %.1f s zvuku za %.2f s po puštění (kusů: %d): %r%s", len(audio) / SAMPLE_RATE,
-                 time.perf_counter() - take.released_at, len(take.raw), text, f" + {key}" if key else "")
-        if keep:
-            self._save_recording(audio, " ".join(take.raw))
-        self.bridge.text_ready.emit(text, key)
+        if take.agent:
+            self.bridge.agent_heard.emit(text, take.confirm_id)
+        else:
+            self.bridge.text_ready.emit(text, key, take.target)
 
     @staticmethod
     def _save_recording(audio, text):
         try:
-            config.RECORDINGS_DIR.mkdir(exist_ok=True)
+            config.RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
             stem = config.RECORDINGS_DIR / datetime.now().strftime("%Y%m%d-%H%M%S")
+            if stem.with_suffix(".wav").exists():  # two in one second
+                stem = stem.with_name(f"{stem.name}-2")
             stem.with_suffix(".wav").write_bytes(to_wav(audio))
             stem.with_suffix(".txt").write_text(text.strip(), encoding="utf-8")
             for old in sorted(config.RECORDINGS_DIR.glob("*.wav"))[:-KEEP_RECORDINGS]:
@@ -382,16 +732,37 @@ class Dictation:
         except Exception:
             log.exception("Uložení nahrávky selhalo")
 
-    def _insert_text(self, text, key):
+    def _insert_text(self, text, key, target=0):
+        """Into the window that was in front when the recording ended, only if it still is (no text, and above all
+        no Enter, for another chat or terminal). Otherwise, and where Windows won't let Orbit type (a window running
+        as administrator), the text goes to the clipboard."""
         self.pending -= 1
         self.refresh()
         if not text and not key:
             return
         if text and self.cfg["trailing_space"] and not text.endswith("\n") and key != "send":
             text += " "
+        window = inserter.foreground()
+        problem = ""
+        if target == -1:  # a retry from Orbit's own menu: no window of the user's to type into
+            problem = "Přepis je hotový"
+        elif target and not inserter.same_window(target, window):
+            problem = "Okno se mezitím změnilo"
+        elif inserter.runs_as_admin(window):
+            problem = "Okno běží jako správce a Windows do něj Orbitu nedovolí psát"
         try:
-            if text:
-                self.inserter.insert(text, self.cfg["insert_mode"])
+            if problem:
+                log.info("Text nevkládám: %s", problem)
+                if text.strip():
+                    self.inserter.to_clipboard(text)
+                    self._notify(f"{problem}, text máš ve schránce (vlož ho Ctrl+V).", title="Diktování")
+                elif key:
+                    self._notify(f"{problem}, povel jsem neprovedl.", title="Diktování")
+                return
+            if text and not self.inserter.insert(text, self.cfg["insert_mode"]):
+                self._notify("Windows nevzal všechny klávesy, text máš pro jistotu ve schránce (Ctrl+V).",
+                             title="Diktování")
+                return  # no Enter after a text that may not be there
             if key:
                 self.inserter.press(key, after_text=text)
         except Exception as e:
@@ -400,29 +771,69 @@ class Dictation:
         if text:
             self._maybe_learn()
 
-    def _transcribe_failed(self, msg):
-        self.pending -= 1
+    def _transcribe_failed(self, msg, take):
+        """The transcription failed (the server died twice, it took too long): the recording is kept, a click on
+        the bubble or the menu item transcribes it again."""
+        retry = not take.agent and bool(take.audio)
+        if take.agent:
+            self._agent_state = self._agent_rest()
+        else:
+            self.pending -= 1
+        if retry:
+            self._retry_take = take
+            self.retry_action.setEnabled(True)
         self.refresh()
-        self._notify(f"Přepis selhal: {msg}", error=True)
+        self._notify(f"Přepis selhal: {msg}" + (" Klikni sem a zkusím ho znovu." if retry else ""), error=True,
+                     on_click=self._retry_dictation if retry else None)
+
+    def _retry_dictation(self):
+        """The last dictation whose transcription failed, transcribed again as one piece, into the window in front."""
+        take = self._retry_take
+        if take is None:
+            return
+        if self.server_state != "ready":
+            if self.server_state == "error":
+                self._start_server()
+            self._notify("Rozpoznávání řeči ještě není připravené, zkus to za chvilku znovu.",
+                         title="Rozpoznávání řeči")
+            return
+        self._retry_take = None
+        self.retry_action.setEnabled(False)
+        again = Take(take.prompt)
+        again.audio, again.spoken = [np.concatenate(take.audio)], True
+        window = inserter.foreground()  # the bubble takes no focus; the tray menu does (then: the clipboard)
+        again.released_at, again.target = time.perf_counter(), -1 if inserter.own_window(window) else window
+        log.info("Přepisuji znovu diktát, který selhal (%.1f s)", len(again.audio[0]) / SAMPLE_RATE)
+        self.pending += 1
+        self.refresh()
+        self._submit(self._transcribe_piece, again, again.audio[0])
+        self._submit(self._finish_take, again, list(self.cfg["replacements"]), self.cfg["voice_commands"],
+                     self.cfg["keep_recordings"], self.cfg["learn_vocabulary"])
 
     # -- Claude Code sessions ---------------------------------------------------------------
 
     def _apply_sessions_setting(self):
-        """The session overview and reading artifacts aloud both need Orbit's hooks in Claude Code."""
-        self.button.set_reader(self.cfg["read_artifacts"])
-        on = self.cfg["show_sessions"] or self.cfg["read_artifacts"]
-        try:
-            if sessions.set_hooks(on) and on:
-                self._notify("Orbit se napojil na Claude Code: přehled relací a čtení artefaktů.")
-        except Exception as e:
-            log.exception("Úprava hooků Claude Code selhala")
-            self._notify(f"Nepodařilo se upravit nastavení Claude Code: {e}", error=True)
+        """The session overview and reading artifacts aloud both need Orbit's hooks in Claude Code, which are added
+        only with the user's yes (claude_hooks) and only while Claude Code is connected. Not connected (or not
+        checked yet): the hooks aren't touched either way and nothing is polled."""
+        on = self.cfg["claude_hooks"] and (self.cfg["show_sessions"] or self.cfg["read_artifacts"])
+        if not self.claude.connected or (on and not paths.claude_dir().is_dir()):  # never create Claude's folder
+            on = False
+        else:
+            try:
+                if claude_settings.set_hooks(on) and on:
+                    self._notify("Orbit se napojil na Claude Code: přehled relací a čtení artefaktů.")
+            except claude_settings.SettingsError as e:
+                self._notify(str(e), error=True)
+            except Exception as e:
+                log.exception("Úprava hooků Claude Code selhala")
+                self._notify(f"Nepodařilo se upravit nastavení Claude Code: {e}", error=True)
         if on:
             self.session_timer.start()
             self._poll_sessions()
         else:
             self.session_timer.stop()
-        if not self.cfg["show_sessions"]:
+        if not (on and self.cfg["show_sessions"]):
             self.button.set_sessions([])
             self.button.set_attention(False)
 
@@ -431,7 +842,8 @@ class Dictation:
             if not self.cfg["read_artifacts"]:
                 artifacts.done(pub)
                 continue
-            log.info("Relace %s zveřejnila artefakt %s (%s)", pub.name, pub.url or "?", pub.path)
+            log.info("Relace ve složce %s zveřejnila artefakt", pub.name)
+            log.debug("Artefakt %s (%s)", pub.url or "?", pub.path)
             # a daemon thread: quitting Orbit mustn't wait for Claude
             threading.Thread(target=self._summarize_artifact, args=(pub,), daemon=True).start()
         if not self.cfg["show_sessions"]:
@@ -444,7 +856,7 @@ class Dictation:
             self._session_changed(s, state)
 
     def _session_changed(self, s: sessions.Session, state: str):
-        log.info("Relace %s: %s (tah %.0f s)", s.name, state, s.turn_s)
+        log.info("Relace ve složce %s: %s (tah %.0f s)", s.folder, state, s.turn_s)  # (the topic is content)
         if sessions.is_foreground(s):
             return  # Pepa is looking at it
         fallback = {"waiting": "Čeká na tvoji odpověď.", "error": "Claude skončil chybou.", "done": "Hotovo."}
@@ -456,43 +868,90 @@ class Dictation:
                 self._speak(f"Hotovo: {s.name}. {sessions.summary(s.message, 2)}")
 
     def _focus_session(self, session_id: str):
+        """Its window to the front as well as it goes (a terminal, an IDE); without a known window nothing happens."""
         s = self.tracker.sessions.get(session_id)
-        if s and not sessions.focus(s):
-            self._notify(f"Okno terminálu relace {s.name} se nepodařilo najít.")
+        if s and s.hwnd and not sessions.focus(s):
+            log.info("Okno relace ve složce %s nejde přenést do popředí", s.folder)
 
-    def _speak(self, text: str, wait: bool = False, artifact: bool = False):
+    def _sessions_bypass(self) -> bool:
+        """Do the user's sessions run without permission prompts (the agent may then send in that class)?"""
+        tracked = list(self.tracker.sessions.values())
+        return any(s.mode_class == "bypass" for s in tracked) or sessions.bypass_in_use(tracked)
+
+    def _speak(self, text: str, wait: bool = False, kind: str = "", force: bool = False) -> bool:
         """Reads text aloud after whatever is being read now. While Pepa dictates it's dropped, or with `wait`
-        read once he's done. artifact: an artifact summary (lights up the reading satellite)."""
+        read once he's done. kind: "artifact" (lights up the speaker button), "agent" (its chip glows) or "confirm"
+        (the agent's question, see _ask_confirm); force: even when Orbit is muted (he asked for it).
+        False when it won't be read at all (muted, a full-screen game, no Czech voice)."""
+        if self.cfg["muted"] and not force:
+            return False
         if self.recorder.active:
             if wait:
-                QTimer.singleShot(1000, lambda: self._speak(text, wait, artifact))
-            return
+                QTimer.singleShot(1000, lambda: self._speak(text, wait, kind, force))
+            return wait
         if not winutil.accepts_notifications():
             log.info("Nečtu nahlas: hra nebo prezentace na celou obrazovku")
-            return
-        if self.tts is None:
-            self.tts = QTextToSpeech("winrt")
-            voice = next((v for v in self.tts.availableVoices() if v.locale().name() == "cs_CZ"), None)
-            if voice:
-                self.tts.setVoice(voice)
-            self.tts.stateChanged.connect(self._speech_state)
-            log.info("Předčítání: engine %s, hlas %s, hlasitost %.2f", self.tts.engine(),
-                     voice.name() if voice else "výchozí (český nenalezen)", self.tts.volume())
+            return False
+        speaker = self._speaker()
+        if speaker is None:  # no Czech voice here: Czech read by an English voice is gibberish
+            if not self._no_voice_told:
+                self._no_voice_told = True
+                log.warning("Nečtu nahlas: žádný český hlas")
+                self._notify(voice.missing_text(), title="Předčítání",
+                             on_click=self._download_voice if voice.piper_installed() else None)
+            return False
         # Not QTextToSpeech.enqueue: with the winrt engine two texts queued before it starts speaking (in the same
         # moment) drop the first one. The next text is said only once the previous one has finished.
-        self._speech.append((text, artifact))
-        stuck = self.tts.state() != QTextToSpeech.State.Speaking and time.monotonic() - self._said_at > 3
-        if not self._speaking or stuck:
+        self._speech.append((text, kind))
+        busy = speaker.speaking if speaker is self.piper else speaker.state() == QTextToSpeech.State.Speaking
+        if not self._speaking or (not busy and time.monotonic() - self._said_at > 3):
             self._say_next()
+        return True
+
+    def _speaker(self):
+        """The voice from settings: a local Piper voice (voice.PiperSpeaker), or Windows' Jakub (QTextToSpeech).
+        Another one when that one isn't there; None when there's no Czech voice at all."""
+        model = voice.effective(self.cfg["voice"])
+        if model is None:
+            return None
+        if model != voice.JAKUB:
+            if self.piper is None or self.piper.model != model:
+                if self.piper:
+                    self.piper.stop()
+                self.piper = voice.PiperSpeaker(model)
+                self.piper.finished.connect(lambda: QTimer.singleShot(0, self._say_next))
+            return self.piper
+        if self.tts is None:
+            self.tts = QTextToSpeech("winrt")
+            czech = next((v for v in self.tts.availableVoices() if v.locale().name() == "cs_CZ"), None)
+            if czech:
+                self.tts.setVoice(czech)
+            self.tts.stateChanged.connect(self._speech_state)
+            log.info("Předčítání: engine %s, hlas %s, hlasitost %.2f", self.tts.engine(),
+                     czech.name() if czech else "výchozí (český nenalezen)", self.tts.volume())
+        return self.tts
 
     def _say_next(self):
+        finished, self._saying = self._saying, None
+        if finished and finished[1] == "confirm" and self._confirm and self._confirm.get("speech") == finished[0]:
+            self._confirm["asked"] = True  # read to the end: from now on the agent's button answers it
         self._speaking = bool(self._speech)
-        text, self._reading_artifact = self._speech.pop(0) if self._speech else ("", False)
+        text, kind = self._speech.pop(0) if self._speech else ("", "")
+        self._reading_artifact = kind == "artifact"
         self.button.set_reading(self._reading_artifact)
-        if text:
+        if kind in ("agent", "confirm"):
+            self._set_agent_state("speaking")
+        elif self._agent_state == "speaking":
+            self._set_agent_state(self._agent_rest())
+        speaker = self._speaker() if text else None
+        if speaker:
             self._said_at = time.monotonic()
-            log.info("Čtu nahlas (%d znaků): %s", len(text), text[:80])
-            self.tts.say(text)
+            self._saying = (text, kind)
+            log.info("Čtu nahlas (%d znaků)", len(text))
+            log.debug("Čtu: %s", text)
+            speaker.say(text)
+        elif text:
+            self._speaking = False
 
     def _speech_state(self, state):
         log.info("Předčítání: %s%s", state.name, f" – {self.tts.errorString()}" if state == QTextToSpeech.State.Error
@@ -503,9 +962,36 @@ class Dictation:
 
     def _stop_speech(self, artifacts_only: bool = False):
         """Silence now and forget what's queued (or only the artifact summaries; an answer after them still comes)."""
-        self._speech = [s for s in self._speech if not s[1]] if artifacts_only else []
-        if self.tts and (self._reading_artifact or not artifacts_only):
-            self.tts.stop()
+        self._speech = [s for s in self._speech if s[1] != "artifact"] if artifacts_only else []
+        if self._reading_artifact or not artifacts_only:
+            self._saying = None  # cut short: not heard to the end
+            for speaker in (self.tts, self.piper):
+                if speaker:
+                    speaker.stop()
+
+    def _prepare_voice(self):
+        """A Piper voice loads its model in the background right away, so the first text doesn't wait for it.
+        A chosen Piper voice that isn't here yet gets downloaded."""
+        choice = self.cfg["voice"]
+        if choice == voice.JAKUB:
+            return
+        if voice.piper_installed() and not voice.downloaded(choice):
+            self.downloads.start(choice)
+        if voice.effective(choice) not in (None, voice.JAKUB):
+            self._speaker()
+
+    def _download_voice(self):
+        """The "no Czech voice" bubble was clicked: Jirka, the Piper voice offered then."""
+        self.cfg["voice"] = voice.FALLBACK
+        config.save(self.cfg)
+        self._no_voice_told = False
+        self.downloads.start(voice.FALLBACK)
+
+    def _preview_voice(self, model: str):
+        """The settings' "Poslechnout" button: a sample sentence in that voice (kept only if the settings are saved)."""
+        self.cfg["voice"] = model
+        self._stop_speech()
+        self._speak(voice.PREVIEW, force=True)
 
     # -- artifacts read aloud ---------------------------------------------------------------
 
@@ -515,7 +1001,7 @@ class Dictation:
             with self._summary_lock:
                 summary = self.summarizer.summarize(pub)
         except Exception as e:
-            log.warning("Souhrn artefaktu %s selhal: %s", pub.path, e,
+            log.warning("Souhrn artefaktu ze složky %s selhal: %s", pub.name, e,
                         exc_info=not isinstance(e, (claude_cli.ClaudeError, OSError)))
             self.bridge.artifact_failed.emit(pub, str(e))
             return
@@ -525,7 +1011,8 @@ class Dictation:
             self.bridge.artifact_ready.emit(pub, summary)
 
     def _artifact_ready(self, pub: artifacts.Published, summary: artifacts.Summary):
-        log.info("Souhrn artefaktu %s: %s – %s", pub.url or pub.path, summary.title, " ".join(summary.sentences))
+        log.info("Souhrn artefaktu hotový (%d vět)", len(summary.sentences))
+        log.debug("Souhrn artefaktu %s: %s – %s", pub.url or pub.path, summary.title, " ".join(summary.sentences))
         if not self.cfg["read_artifacts"]:
             return
         kind = "Aktualizovaný artefakt" if summary.updated else "Artefakt"
@@ -535,7 +1022,7 @@ class Dictation:
         self.reread_action.setEnabled(True)
         self._notify(" ".join(summary.sentences[:2]), title=summary.title, kind="done",
                      note=session.folder if session else pub.name, url=pub.url)
-        self._speak(self._artifact_speech, wait=True, artifact=True)
+        self._speak(self._artifact_speech, wait=True, kind="artifact")
 
     def _artifact_failed(self, pub: artifacts.Published, msg: str):
         if self.cfg["read_artifacts"]:
@@ -543,16 +1030,282 @@ class Dictation:
 
     def _reread_artifact(self):
         self._stop_speech()
-        self._speak(self._artifact_speech, artifact=True)
+        self._speak(self._artifact_speech, kind="artifact", force=True)
 
-    def _toggle_reader(self):
-        """The reading satellite by the mic button was clicked."""
-        on = self.cfg["read_artifacts"] = not self.cfg["read_artifacts"]
+    def _toggle_mute(self):
+        """The speaker button by the mic was clicked: no beeps, chimes or reading aloud (or all of them back)."""
+        muted = self.cfg["muted"] = not self.cfg["muted"]
         config.save(self.cfg)
-        log.info("Předčítání artefaktů %s", "zapnuto" if on else "vypnuto")
-        if not on:
-            self._stop_speech(artifacts_only=True)
-        self._apply_sessions_setting()
+        log.info("Zvuky %s", "ztlumeny" if muted else "zapnuty")
+        self.button.set_muted(muted)
+        if muted:
+            self._stop_speech()
+
+    def _set_theme(self, name: str):
+        """A colour dot above the panel was clicked."""
+        self.cfg["theme"] = name
+        config.save(self.cfg)
+        log.info("Barva vzhledu: %s", name)
+        theme.set_theme(name)
+        theme.apply(QApplication.instance())
+        self.icons = {s: mic_icon(s) for s in self.icons}
+        self.button.update()
+        if self.bubble:
+            self.bubble.update()
+        self.refresh()
+
+    # -- voice agent ------------------------------------------------------------------------
+
+    def _apply_agent_setting(self):
+        """The agent (and its button, which it takes over system-wide) only while Claude is connected."""
+        on = self.cfg["agent"] and bool(self.claude.connected) and self.cfg["agent_ptt"] != self.cfg["ptt"]
+        self.button.set_agent(on, hotkey.binding_name(self.cfg["agent_ptt"]))
+        if on and self.agent_ptt is None:
+            if self._agent_capture is not None:  # its button is being captured right now: back on after that
+                return
+            self.agent_ptt = hotkey.PushToTalk(self.cfg["agent_ptt"], self.bridge.agent_down.emit,
+                                               self.bridge.agent_up.emit)
+            self.agent_ptt.start()
+        elif on:
+            self.agent_ptt.set_binding(self.cfg["agent_ptt"])  # (changed in the settings)
+        elif self.agent_ptt is not None:
+            self.agent_ptt.stop()
+            self.agent_ptt = None
+            self.agent.stop()
+
+    def _agent_down(self):
+        """The agent's button (mouse back): hold = push-to-talk, a click = it listens until Pepa stops talking."""
+        if self.recorder.active:
+            if self.take and self.take.agent and self._hands_free:
+                self._finish_recording()  # a second click: done talking
+            return
+        self._agent_pressed_at = time.monotonic()
+        self.start_recording(for_agent=True)
+
+    def _agent_up(self):
+        if not (self.take and self.take.agent) or self._hands_free:
+            return
+        if time.monotonic() - self._agent_pressed_at < CLICK_S:
+            self._listen_hands_free()
+        else:
+            self.stop_recording(for_agent=True)
+
+    def _agent_clicked(self):
+        """The agent's chip by the colour dots: like a click of its button."""
+        if self.recorder.active:
+            if self.take and self.take.agent and self._hands_free:
+                self._finish_recording()
+            return
+        self.start_recording(for_agent=True)
+        if self.take and self.take.agent:
+            self._listen_hands_free()
+
+    def _listen_hands_free(self):
+        self._hands_free = True
+        self.recorder.end_on_silence = True
+        self.listen_timer.start()
+
+    def _speech_over(self):
+        if self._hands_free and self.take and self.take.agent and self.recorder.active:
+            self._finish_recording()
+
+    def _agent_heard(self, text: str, confirm_id=None):
+        """What Pepa said to the agent: an answer to "Mám to poslat?" (only when the question had been heard before
+        the recording started, confirm_id), or something for the agent."""
+        text = text.strip()
+        if self._confirm:
+            if not text:
+                self._set_agent_state(self._agent_rest())
+            elif confirm_id is not None and confirm_id == self._confirm["id"]:
+                self._feed_update(you=text)
+                self._answer_confirm(text)
+            else:  # said before the question came (or while it was being read): it's no answer to it
+                request, self._confirm = self._confirm, None
+                self.confirm_timer.stop()
+                log.info("Agent: věta přišla dřív, než zazněla otázka, nic neodchází")
+                self.agent.resolve(request["id"], False, f"Než otázka na potvrzení zazněla, uživatel řekl: „{text}“. "
+                                   "Nic neodešlo. Reaguj na to a případně požádej o potvrzení znovu.")
+                send = self._feed.get("send")
+                self._feed_update(you=text, **({"send": dict(send, status="changed")} if send else {}))
+                self._set_agent_state("thinking")
+            return
+        if not text:
+            self._feed_update(you="…", reply="Nic jsem nezachytil.", send=None)
+            self._set_agent_state(self._agent_rest())
+            return
+        self._feed_update(you=text, reply="", send=None)
+        if not self.cfg["show_sessions"]:
+            self.tracker.poll()  # the overview doesn't keep it current then
+        current = sorted(self.tracker.sessions.values(), key=lambda s: (s.folder.lower(), s.started))
+        try:
+            self.agent.ask(agent.context(current, text, self.cfg["name"]))
+        except Exception as e:
+            log.exception("Agentovi nejde nic poslat")
+            self._feed_update(reply=f"Agent nejde spustit: {e}")
+            self._set_agent_state(self._agent_rest())
+            return
+        self._set_agent_state("thinking")
+
+    def _agent_event(self, kind: str, data):
+        if kind == "reply":
+            log.info("Agent odpověděl (%d znaků)", len(data))
+            log.debug("Agent říká: %s", data)
+            self._feed_update(reply=data)
+            self._speak(data, kind="agent")
+        elif kind == "confirm":
+            self._ask_confirm(data)
+        elif kind == "page":  # opens straight away, nothing to confirm: just show which page
+            host = data["url"].split("://", 1)[-1].removeprefix("www.")
+            log.info("Agent otevírá v Chromu stránku z %s", host.split("/")[0])
+            log.debug("Stránka %s (%s)", data["url"], data["title"])
+            self._feed_update(send={"tool": "page", "name": data["title"] or host.split("/")[0], "folder": "Chrome",
+                                    "message": host, "status": "opening", "session_id": ""})
+        elif kind == "send_result":
+            send = self._feed.get("send")
+            if send and send.get("status") in ("sending", "opening"):
+                done = "opened" if send.get("tool") in ("open", "page") else "sent"
+                text = data["text"].lower()
+                if send.get("tool") == "send" and "held" in text and "approv" in text:
+                    done = "held"  # the session holds it for approval in its window (another permission class)
+                log.info("Agent: %s %s", "stránka" if send.get("tool") == "page" else data["to"],
+                         done if data["ok"] else "nepovedlo se")
+                log.debug("Výsledek: %s", data["text"])
+                self._feed_update(send=dict(send, status=done if data["ok"] else "failed"))
+        elif kind == "done":
+            if data["error"]:
+                log.warning("Agent: chyba %s", data["error"])
+                self._feed_update(reply=f"Chyba agenta: {sessions.summary(data['error'], 2, 200)}")
+            if self._agent_state == "thinking":
+                self._set_agent_state(self._agent_rest())
+        elif kind in ("exit", "reset"):
+            if self._confirm:
+                self._confirm = None
+                self.confirm_timer.stop()
+                if send := self._feed.get("send"):
+                    self._feed_update(send=dict(send, status="expired"))
+            if kind == "exit" and self._agent_state in ("thinking", "confirm"):
+                self._feed_update(reply="Agent se ukončil, zkus to prosím znovu.")
+                self._set_agent_state(self._agent_rest())
+
+    @staticmethod
+    def _readable(text: str) -> str:
+        """The whole message as it's read out: Markdown marks dropped, an address as its server (the panel shows it
+        whole)."""
+        text = re.sub(r"https?://([^\s/?#]+)\S*", lambda m: m.group(1).removeprefix("www."), text)
+        return sessions.summary(text, 10_000, 1_000_000)
+
+    @staticmethod
+    def _unreadable(text: str) -> str:
+        """Why a message can't be confirmed by voice ("" = it can): what's heard must be all that's sent."""
+        if "```" in text:
+            return ("Zpráva obsahuje blok kódu a ten nejde přečíst nahlas. Napiš ji prostým textem bez kódu a pošli "
+                    "ji znovu ke schválení.")
+        if len(text) > CONFIRM_MAX_CHARS or text.count("\n") > 6:
+            return (f"Zpráva je na přečtení nahlas moc dlouhá. Zkrať ji pod {CONFIRM_MAX_CHARS} znaků (pár vět na "
+                    "jednom řádku) a pošli ji znovu ke schválení.")
+        return ""
+
+    def _ask_confirm(self, data: dict):
+        """The agent wants to send a message to a session or open a new one: show it, read all of it out and wait
+        for Pepa's yes. What can't be read out whole, or a folder that isn't one of his, goes back to the agent."""
+        if self._confirm:  # a second one while the first waits: the first is off
+            self.agent.resolve(self._confirm["id"], False, "Mezitím přišel jiný požadavek, tohle neproběhlo.")
+            self._confirm = None
+            self.confirm_timer.stop()
+        if data["tool"] == "open":
+            known, prompt = agent.known_folder(data["folder"]), agent.without_prefix(data["prompt"])
+            refused = self._unreadable(prompt) if known else \
+                f"Složka {data['folder']} není v seznamu složek pro nové relace. Vezmi celou cestu ze seznamu."
+            label = agent.folder_label(known) if known else Path(data["folder"]).name
+            log.info("Agent chce otevřít relaci v %s (zadání %d znaků)", data["folder"], len(prompt))
+            log.debug("Zadání: %r", prompt)
+            send = {"tool": "open", "name": "nová relace", "folder": label, "status": "confirm",
+                    "message": prompt or "jen otevřít, bez zadání", "session_id": ""}
+            speech = f"Otevřu novou relaci ve složce {label}" + (
+                f" se zadáním: {self._readable(prompt)}" if prompt else ".") + " Mám?"
+            mode = ""
+        else:
+            to = data["to"].split(" [")[0].strip()
+            s = next((s for s in self.tracker.sessions.values() if s.peer == to), None)
+            name, folder = (s.name, s.folder) if s else (to, "")
+            folder = "" if folder == name else folder
+            message = agent.without_prefix(data["message"])
+            refused = self._unreadable(message)
+            log.info("Agent chce poslat do %s zprávu (%d znaků)", to, len(message))
+            log.debug("Zpráva pro %s: %r", name, message)
+            send = {"tool": "send", "name": name, "folder": folder, "message": message, "status": "confirm",
+                    "session_id": s.id if s else ""}
+            where = f"{name}, složka {folder}" if folder else name
+            speech = f"Pošlu do relace {where}: {self._readable(message)}"
+            # sent in the target's permission class, or the session would hold it for approval in its window; a
+            # session that hasn't told its mode yet runs the way the user's sessions usually do
+            target = s.mode_class if s else ""
+            bypass = target == "bypass" or (not target and sessions.bypass_in_use(self.tracker.sessions.values()))
+            mode = agent.BYPASS_MODE if bypass and self.agent.can_bypass else agent.DEFAULT_MODE
+            if bypass and not self.agent.can_bypass:
+                speech += " Relace běží bez ptaní na oprávnění, takže tam zpráva počká, až ji v jejím okně schválíš."
+            speech += " Mám to poslat?"
+        if refused:
+            log.info("Agent: návrh vrácen (%s)", refused)
+            self.agent.resolve(data["id"], False, refused)
+            self._feed_update(send=dict(send, status="changed"))
+            return
+        self._confirm = dict(data, speech=speech, mode=mode, asked=False)
+        self.confirm_timer.start()
+        self._feed_update(send=send)
+        self._set_agent_state("confirm")
+        if not self._speak(speech, wait=True, kind="confirm"):
+            self._confirm["asked"] = True  # it won't be read (muted, no voice): the panel shows it all
+
+    def _answer_confirm(self, text: str):
+        request, self._confirm = self._confirm, None
+        self.confirm_timer.stop()
+        verdict = agent.confirmation(text)
+        if verdict:
+            self.agent.resolve(request["id"], True, mode=request.get("mode", ""))
+            status = "sending"
+        elif verdict is False:
+            self.agent.resolve(request["id"], False, "Uživatel odeslání zrušil, nic neodešlo. Jen to krátce potvrď.")
+            status = "cancelled"
+        else:
+            self.agent.resolve(request["id"], False, f"Místo potvrzení přišlo: „{text}“. Uprav podle toho zprávu "
+                               "a pošli ji znovu ke schválení, nebo krátce odpověz.")
+            status = "changed"
+        log.info("Agent: odeslání %s", status)
+        log.debug("Odpověď na potvrzení: %r", text)
+        if send := self._feed.get("send"):
+            self._feed_update(send=dict(send, status=status))
+        self._set_agent_state("thinking")
+
+    def _confirm_expired(self):
+        if not self._confirm:
+            return
+        request, self._confirm = self._confirm, None
+        self.agent.resolve(request["id"], False, "Do dvou minut nepřišlo potvrzení, zpráva neodešla. Nic neříkej.")
+        if send := self._feed.get("send"):
+            self._feed_update(send=dict(send, status="expired"))
+        self._set_agent_state(self._agent_rest())
+
+    def _agent_rest(self) -> str:
+        """What the agent's chip shows when it isn't listening or speaking."""
+        return "confirm" if self._confirm else "thinking" if self.agent.busy else "idle"
+
+    def _set_agent_state(self, state: str):
+        self._agent_state = state
+        self.refresh()
+
+    def _feed_update(self, **changes):
+        self._feed.update(changes)
+        self._feed = {k: v for k, v in self._feed.items() if v}
+        self.button.set_agent_feed(dict(self._feed))
+        self.feed_timer.start()
+
+    def _feed_expired(self):
+        if self._agent_state != "idle":
+            self.feed_timer.start()
+            return
+        self._feed = {}
+        self.button.set_agent_feed(None)
 
     # -- self-improving vocabulary ----------------------------------------------------------
 
@@ -560,9 +1313,14 @@ class Dictation:
         """After every LEARN_EVERY new transcripts in the log (or on request), let Claude extend the vocabulary."""
         if self._learning or (not force and (not self.cfg["learn_vocabulary"] or time.time() < self._learn_retry_at)):
             return
+        if not self.claude.connected:
+            if force:
+                self._notify("Slovník se učí přes Clauda, a ten není připojený. Připojíš ho v nastavení (Claude).")
+            return
         self._learning = True
         since = self.cfg["learned_until"]
-        words, fixes = learning.parse_words(self.cfg["vocabulary"]), list(self.cfg["replacements"])
+        words, fixes = vocab.parse_words(self.cfg["vocabulary"]), list(self.cfg["replacements"])
+        name, about = self.cfg["name"], self.cfg["about"]
 
         def run():
             try:
@@ -570,7 +1328,7 @@ class Dictation:
                 if len(new) < (1 if force else learning.LEARN_EVERY):
                     self.bridge.learned.emit({"force": force, "count": len(new)})
                     return
-                suggestion = learning.suggest([t for _, t in new], words, fixes)
+                suggestion = learning.suggest([t for _, t in new], words, fixes, name, about)
                 self.bridge.learned.emit({"force": force, "count": len(new), "until": new[-1][0],
                                           "suggestion": suggestion})
             except Exception as e:
@@ -610,18 +1368,25 @@ class Dictation:
 
     def refresh(self):
         key = hotkey.binding_name(self.cfg["ptt"])
-        if self.recorder.live:
+        for_agent = self.take is not None and self.take.agent
+        if self.recorder.live and not for_agent:
             state, tip = "recording", "Nahrávám… pusť klávesu a text se vloží"
         elif self.pending:
             state, tip = "busy", "Přepisuji…"
+        elif self.server_state == "nomodel" and self.downloads.running(self.cfg["model"]):
+            state = "loading"
+            tip = f"Stahuji model pro rozpoznávání řeči… {self.downloads.percent(self.cfg['model'])} %"
+        elif self.server_state == "nomodel":
+            state, tip = "error", "Chybí model pro rozpoznávání řeči. Stáhneš ho v nastavení."
         elif self.server_state == "loading":
             state, tip = "loading", "Načítám model pro rozpoznávání řeči…"
         elif self.server_state == "error":
-            state, tip = "error", "Rozpoznávání řeči neběží"
+            state, tip = "error", "Rozpoznávání řeči neběží. Podrž klávesu a zkusím ho spustit znovu."
         else:
             state, tip = "idle", f"Drž {key} (nebo toto tlačítko) a mluv"
         self.button.set_state(state)
         self.button.set_button_tip(tip)
+        self.button.set_agent_state("listening" if self.recorder.live and for_agent else self._agent_state)
         self.tray.setIcon(self.icons[state])
         tray_tip = f"Orbit – {tip}"
         if self.cfg["show_usage"] and self.usage and self.usage.limits:
@@ -629,10 +1394,10 @@ class Dictation:
         self.tray.setToolTip(tray_tip[:127])
         self.hint_action.setText(f"Mluvení: drž {key}")
 
-    def _notify(self, msg, error=False, title="Orbit", kind=None, note="", session_id=None, url=""):
+    def _notify(self, msg, error=False, title="Orbit", kind=None, note="", session_id=None, url="", on_click=None):
         """Orbit's bubble at the mic button, with Orbit's sound. kind: 'done', 'waiting', 'error' or 'info'
         (default from `error`); note: small text right of the title; session_id: a click switches to it;
-        url: a click opens it."""
+        url: a click opens it; on_click: called on a click."""
         kind = kind or ("error" if error else "info")
         if not winutil.accepts_notifications():  # full-screen game or presentation: Windows holds it for later
             icon = QSystemTrayIcon.Warning if kind == "error" else QSystemTrayIcon.Information
@@ -641,9 +1406,11 @@ class Dictation:
         if self.bubble:
             self.bubble.dismiss()
         bubble = self.bubble = Bubble(kind, title, msg, note)
-        if session_id:
+        if on_click:
+            bubble.clicked.connect(on_click)
+        elif session_id:
             bubble.clicked.connect(lambda: self._focus_session(session_id))
-        elif url:
+        elif url.startswith("https://claude.ai/"):  # an artifact (the URL comes from a hook file: nothing else)
             bubble.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(url)))
         bubble.closed.connect(lambda: self._bubble_closed(bubble))
         if self.button.isVisible():
@@ -652,7 +1419,8 @@ class Dictation:
             bubble.show_near(*self.button.bubble_anchor())
         else:
             bubble.show_near(None)
-        winutil.play(kind)
+        if not self.cfg["muted"]:
+            winutil.play(kind)
 
     def _bubble_closed(self, bubble):
         if self.bubble is bubble:
@@ -674,79 +1442,310 @@ class Dictation:
         self.button.setVisible(visible)
 
     def _place_button(self):
+        """At the saved place when both circles fit on a screen there, pulled onto the screen when they stick out
+        (another resolution, scaling or monitor layout), bottom right of the main screen the first time."""
         pos = self.cfg.get("button_pos")
-        if pos and any(s.availableGeometry().contains(QPoint(*pos)) for s in QGuiApplication.screens()):
-            self.button.place_button(QPoint(*pos))
+        if pos:
+            self.button.place_button(self._on_screen(QPoint(*pos)))
         else:
             geo = QGuiApplication.primaryScreen().availableGeometry()
             side = FloatingButton.DIAMETER + 2 * FloatingButton.MARGIN
             self.button.place_button(QPoint(geo.right() - side - 24, geo.bottom() - side - 24))
 
+    def _on_screen(self, pos: QPoint) -> QPoint:
+        """pos (the mic square's top left), moved so that both circles are on one screen."""
+        rect = self.button.button_rect(pos)
+        if any(s.availableGeometry().contains(rect) for s in QGuiApplication.screens()):
+            return pos
+        geo = (QGuiApplication.screenAt(rect.center()) or QGuiApplication.primaryScreen()).availableGeometry()
+        left = min(max(rect.left(), geo.left()), geo.right() + 1 - rect.width())
+        top = min(max(rect.top(), geo.top()), geo.bottom() + 1 - rect.height())
+        return QPoint(left + pos.x() - rect.left(), top)
+
+    def _watch_screens(self):
+        """A monitor unplugged or the taskbar moved while Orbit runs: keep the button reachable (not saved, so it
+        goes back to its place when the monitor is back)."""
+        app = QGuiApplication.instance()
+        check = lambda *_: QTimer.singleShot(500, self._keep_button_on_screen)
+        app.screenAdded.connect(lambda s: (s.availableGeometryChanged.connect(check), check()))
+        app.screenRemoved.connect(check)
+        for s in QGuiApplication.screens():
+            s.availableGeometryChanged.connect(check)
+
+    def _keep_button_on_screen(self):
+        pos = self.button.button_pos()
+        fitted = self._on_screen(pos)
+        if fitted != pos:
+            log.info("Tlačítko bylo mimo obrazovku, přesouvám ho")
+            self.button.place_button(fitted)
+
     def _button_moved(self, pos: QPoint):
         self.cfg["button_pos"] = [pos.x(), pos.y()]
         config.save(self.cfg)
+
+    def _export_vocabulary(self):
+        if self.dialog is not None:  # the settings hold the newest words, maybe not saved yet
+            self.dialog.raise_()
+            self.dialog.export_vocabulary()
+            return
+        path = export_vocabulary(None, self.cfg["vocabulary"], self.cfg["replacements"])
+        if path:
+            self._notify(f"Slovník je uložený v {path}. Na jiném počítači ho načteš v menu Orbitu: Importovat "
+                         "slovník.", title="Slovník")
+
+    def _import_vocabulary(self):
+        if self.dialog is not None:  # it would overwrite the import on save: import into its fields instead
+            self.dialog.raise_()
+            self.dialog.import_vocabulary()
+            return
+        result = import_vocabulary(None, self.cfg["vocabulary"], self.cfg["replacements"])
+        if result is None:
+            return
+        merged, message = result
+        self.cfg.update(vocabulary=merged.vocabulary, replacements=merged.replacements)
+        config.save(self.cfg)
+        log.info("Import slovníku: + %d slov, + %d oprav, nevešlo se %d", len(merged.added_words),
+                 len(merged.added_fixes), len(merged.left_out))
+        if merged.left_out:  # the whole list, a bubble would cut it
+            message_box(None, "Slovník je načtený, ale celý se nevešel.", message, warning=True)
+        else:
+            self._notify(message, title="Slovník", kind="done")
+
+    def _mic_list(self) -> tuple[list[str], set]:
+        """The microphones now (PortAudio re-initialized to see newly plugged ones, when no stream is open) and
+        which of them are Bluetooth hands-free."""
+        refresh = not self.recorder.active
+        if refresh:
+            self._stop_speech()
+            refresh = self._release_sound_card(wait=3)
+        if refresh:
+            self.recorder.shutdown()  # PortAudio re-init needs the stream closed
+        mics = input_devices(refresh=refresh)
+        return mics, {m for m in (None, *mics) if is_bluetooth_handsfree(m)}
+
+    def _release_sound_card(self, wait: float = 1) -> bool:
+        """Before PortAudio is re-initialized (Recorder.may_refresh): Pa_Terminate frees every stream, Piper's playing
+        one too, under its thread (a native crash). Piper stops and lets go first; False when it doesn't in time."""
+        if self.piper is None:
+            return True
+        self.piper.stop()
+        return self.piper.release(wait)
 
     def open_settings(self):
         if self.dialog is not None:
             self.dialog.raise_()
             self.dialog.activateWindow()
             return
-        refresh = not self.recorder.active
-        if refresh:
-            self.recorder.shutdown()  # PortAudio re-init (to see newly plugged mics) needs the stream closed
-        mics = input_devices(refresh=refresh)
-        handsfree = {m for m in (None, *mics) if is_bluetooth_handsfree(m)}
+        if self.wizard is not None:  # one window with the mic and the key capture at a time
+            self.wizard.raise_()
+            self.wizard.activateWindow()
+            return
+        mics, handsfree = self._mic_list()
         self.recorder.set_monitor(True)  # the live meter in settings – only while the window is open
         dlg = SettingsDialog(self.cfg, mics, config.available_models(), winutil.autostart_enabled(),
-                             self.first_run, lambda: self.recorder.level, handsfree)
+                             lambda: self.recorder.level, handsfree, self.claude, self.downloads)
         self.dialog = dlg
         dlg.mic_changed.connect(self.recorder.configure)
-        dlg.capture_requested.connect(lambda: self.ptt.capture(self.bridge.captured.emit))
+        dlg.voice_preview.connect(self._preview_voice)
+        voice_before = self.cfg["voice"]
+        dlg.capture_requested.connect(self._capture_key)
+        dlg.binding_refused.connect(self.ptt.set_binding)
+        dlg.agent_capture_requested.connect(self._capture_agent_key)
         self.bridge.captured.connect(dlg.on_captured)
+        self.bridge.agent_captured.connect(dlg.on_agent_captured)
+        self.claude.refresh()  # installed or logged in from a terminal since the last check
         dlg.show()
         dlg.raise_()
         dlg.activateWindow()
         accepted = dlg.exec() == SettingsDialog.Accepted
         self.bridge.captured.disconnect(dlg.on_captured)
+        self.bridge.agent_captured.disconnect(dlg.on_agent_captured)
         self.ptt.cancel_capture()
+        self._end_agent_capture()
         self.recorder.set_monitor(False)
         self.dialog = None
-        self.first_run = False
+        self._apply_agent_setting()  # its hook may have been paused for a capture
         if not accepted:
+            self.cfg["voice"] = voice_before  # a voice only listened to
             self.ptt.set_binding(self.cfg["ptt"])  # capture already switched it – revert
             self.recorder.configure(self.cfg["mic"])
             return
+        self._apply_values(dlg.values())
 
-        values = dlg.values()
-        if values.pop("autostart") != winutil.autostart_enabled():
-            winutil.set_autostart(not winutil.autostart_enabled())
-        model_changed = values["model"] != self.cfg["model"]
+    def open_wizard(self, start: str = "welcome"):
+        """The first-run wizard (also from the menu, and from "Připojit Clauda" in the panel: start="claude")."""
+        if self.wizard is not None:
+            self.wizard.raise_()
+            self.wizard.activateWindow()
+            return
+        if self.dialog is not None:
+            self.dialog.raise_()
+            self.dialog.activateWindow()
+            return
+        mics, handsfree = self._mic_list()
+        wizard = self.wizard = Wizard(self.cfg, mics, handsfree, lambda: self.recorder.level, self.claude,
+                                      self.downloads, winutil.autostart_enabled(), self.cfg["wizard_pending"], start)
+        wizard.mic_changed.connect(self.recorder.configure)
+        wizard.monitor.connect(self.recorder.set_monitor)  # the mic is open only while its page is on screen
+        wizard.model_chosen.connect(self._wizard_model)
+        wizard.capture_requested.connect(self._capture_key)
+        wizard.binding_refused.connect(self.ptt.set_binding)
+        self.bridge.captured.connect(wizard.on_captured)
+        wizard.finished.connect(self._wizard_closed)
+        self.claude.refresh()
+        log.info("Průvodce nastavením otevřen (%s)", start)
+        wizard.show()
+        wizard.raise_()
+        wizard.activateWindow()
+
+    # -- capturing a new key (settings, wizard) ---------------------------------------------
+
+    def _capture_key(self):
+        """The dictation's next key or button press becomes its new binding. The agent's hook is off meanwhile: as
+        the newer hook it would see the press first and start listening instead."""
+        self._pause_agent_key()
+        self.ptt.capture(self.bridge.captured.emit)
+
+    def _pause_agent_key(self):
+        if self.agent_ptt is not None:
+            self.agent_ptt.stop()
+            self.agent_ptt = None  # _key_captured puts it back (_apply_agent_setting)
+
+    def _key_captured(self, _binding=None):
+        if self.dialog is None and self.wizard is None:
+            return
+        QTimer.singleShot(1500, self._resume_agent_key)  # after the captured key's release (swallowed by its hook)
+
+    def _resume_agent_key(self):
+        if self._agent_capture is not None:
+            return  # _end_agent_capture puts it back
+        if not self.ptt.released():  # another capture started meanwhile
+            QTimer.singleShot(500, self._resume_agent_key)
+            return
+        self._apply_agent_setting()
+
+    def _capture_agent_key(self):
+        """Settings: the agent's new button. A hook of its own just for this (the dictation's would take the key as
+        its own); stopped once the captured key is let go."""
+        self._end_agent_capture()
+        self._pause_agent_key()
+        capture = self._agent_capture = hotkey.PushToTalk({"kind": "key", "code": -1}, lambda: None, lambda: None)
+        capture.start()
+        capture.capture(self.bridge.agent_captured.emit)
+
+    def _agent_key_captured(self, _binding=None):
+        self._agent_capture_wait = 0
+        self._agent_capture_timer.start()
+
+    def _poll_agent_capture(self):
+        """Stops the capture hook once it has swallowed the release too (or after 10 s)."""
+        capture = self._agent_capture
+        self._agent_capture_wait += 1
+        if capture is None or capture.released() or self._agent_capture_wait > 100:
+            self._end_agent_capture()
+
+    def _end_agent_capture(self):
+        self._agent_capture_timer.stop()
+        capture, self._agent_capture = self._agent_capture, None
+        if capture is not None:
+            capture.stop()
+            self._apply_agent_setting()
+
+    def _wizard_model(self, model: str):
+        """The wizard's model page was left: that model from now on, so the last page can try it out."""
+        if model != self.cfg["model"]:
+            self.cfg["model"] = model
+            config.save(self.cfg)
+            self._start_server()
+
+    def _wizard_closed(self, _result=None):
+        """Finished or closed early: what was set so far counts (consents only from the page that asks)."""
+        wizard, self.wizard = self.wizard, None
+        if wizard is None:
+            return
+        self.bridge.captured.disconnect(wizard.on_captured)
+        self.ptt.cancel_capture()
+        self.recorder.set_monitor(False)
+        values = wizard.values()
+        wizard.deleteLater()
+        log.info("Průvodce nastavením zavřen")
+        self.cfg["wizard_pending"] = False
+        self._apply_values(values)
+        if self.server_state == "nomodel" and not self.downloads.running(self.cfg["model"]):
+            self._notify(self._model_missing_text(), title="Rozpoznávání řeči")
+
+    def _apply_values(self, values: dict):
+        """New settings from the settings dialog or the wizard: save them and make them take effect."""
+        autostart = values.pop("autostart", None)
+        if autostart is not None and autostart != winutil.autostart_enabled():
+            try:
+                winutil.set_autostart(autostart)
+            except OSError as e:
+                log.exception("Spouštění s Windows nejde nastavit")
+                self._notify(f"Spouštění s Windows nejde nastavit: {e}", error=True)
+        restart_server = values.get("model", self.cfg["model"]) != self.cfg["model"] or \
+            self.server_state in ("nomodel", "error")
+        if self.cfg["read_artifacts"] and not values.get("read_artifacts", True):
+            self._stop_speech(artifacts_only=True)
         self.cfg.update(values)
         config.save(self.cfg)
+        self.agent.name = self.cfg["name"]  # its next conversation uses it
         self.ptt.set_binding(self.cfg["ptt"])
         self.recorder.configure(self.cfg["mic"])
         self.recorder.split = self.cfg["live_transcribe"]
         self._set_button_visible(self.cfg["show_button"])
         self._apply_usage_setting()
         self._apply_sessions_setting()
-        if model_changed:
+        self._apply_agent_setting()
+        self._prepare_voice()
+        if "model" in values and not config.model_present(self.cfg["model"]):
+            self.downloads.start(self.cfg["model"])  # a model chosen but not here yet
+        if restart_server:
             self._start_server()
         self.refresh()
 
     def shutdown(self):
+        self.downloads.cancel_all()  # the .part files stay: the next start resumes them
+        if self.take:
+            self.take.cancelled = True
+        # queued pieces would wait for a server that's gone and keep Orbit (and its single-instance mutex) alive
+        self.executor.shutdown(wait=False, cancel_futures=True)
         self.ptt.stop()
+        if self.agent_ptt:
+            self.agent_ptt.stop()
+        self.agent.stop()
         self.recorder.shutdown()
         self.server.stop()
         self.tray.hide()
 
 
+_crash_file = None  # kept open: faulthandler writes into it when the process dies in native code
+
+
 def _setup_logging():
+    """orbit.log in the data folder, at most ~3 MB (1 MB + 2 older ones). Vocabulary learning reads it back.
+    What people said, read or opened is logged only as lengths (ORBIT_DEBUG=1: the texts too, at debug level).
+    Every error ends up there: in Qt slots (Orbit keeps running), in threads, Qt's own warnings (debug level), and a
+    crash in native code (PortAudio, Qt, a driver) writes every thread's Python stack to crash.log."""
+    global _crash_file
+    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(config.LOG_PATH, maxBytes=1_000_000, backupCount=2, encoding="utf-8")
-    logging.basicConfig(level=logging.INFO, handlers=[handler],
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    level = logging.DEBUG if os.environ.get("ORBIT_DEBUG") else logging.INFO
+    logging.basicConfig(level=level, handlers=[handler], format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("urllib3").setLevel(logging.INFO)  # one line per request at debug
     sys.excepthook = lambda *exc: log.critical("Neošetřená výjimka", exc_info=exc)
-    threading.excepthook = lambda a: log.critical("Neošetřená výjimka ve vlákně %s", a.thread,
+    threading.excepthook = lambda a: log.critical("Neošetřená výjimka ve vlákně %s", a.thread.name if a.thread else "?",
                                                   exc_info=(a.exc_type, a.exc_value, a.exc_traceback))
+    sys.unraisablehook = lambda u: log.error("Výjimka, kterou nešlo předat dál (%s)", u.err_msg or u.object,
+                                             exc_info=(u.exc_type, u.exc_value, u.exc_traceback))
+    qt_log = logging.getLogger("qt")
+    qInstallMessageHandler(lambda mode, context, message: qt_log.log(
+        logging.CRITICAL if mode == QtMsgType.QtFatalMsg else logging.DEBUG, "%s", message))
+    try:
+        _crash_file = open(config.DATA_DIR / "crash.log", "a", encoding="utf-8")
+        faulthandler.enable(_crash_file, all_threads=True)
+    except OSError:
+        log.warning("crash.log nejde otevřít, pád v nativním kódu nebude zapsaný")
 
 
 def main():
@@ -760,8 +1759,13 @@ def main():
     if winutil.already_running():
         QMessageBox.information(None, "Orbit", "Orbit už běží – najdeš ho v oznamovací oblasti vedle hodin.")
         return
-    log.info("Start")
-    dictation = Dictation()
+    log.info("Start Orbit %s (data: %s)", VERSION, config.DATA_DIR)
+    try:
+        dictation = Dictation()
+    except Exception as e:
+        log.exception("Orbit se nespustil")
+        message_box(None, "Orbit se nespustil.", f"{e}\n\nPodrobnosti jsou v {config.LOG_PATH}", warning=True)
+        return
     app.aboutToQuit.connect(dictation.shutdown)
     app.exec()
     log.info("Konec")
