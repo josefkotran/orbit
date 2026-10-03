@@ -55,6 +55,7 @@ je čas posledního přepisu z logu, který už Claude viděl.
 | `recordings/` | posledních 30 nahrávek (`.wav` + `.txt` s přepisem), když je zapnuté ukládání – nejsou v gitu |
 | `orbit.log` | log aplikace včetně všech přepisů a časů – první místo, kam se dívat |
 | `web/` | stránka https://orbit.easya.cz se stažením instalátoru, `publish.py` ji sestaví a nahraje (viz `web/README.md`) |
+| `video/` | úvodní video webu v Remotionu, hotové soubory jdou do `web/site/assets/video` (viz `video/README.md`) |
 
 Závislosti: PySide6, sounddevice, numpy, pynput, requests (`requirements.txt`). Venv je `.venv` (vznikl ještě ve staré
 složce `diktovani`, řádek `command` v `pyvenv.cfg` je proto zastaralý, ale nevadí to).
@@ -338,6 +339,23 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   a zapíše `web/release.json`; stránka pak místo „Instalátor dokončujeme“ ukáže tlačítko, verzi, velikost a SHA-256.
   Bez `--installer` se nahrají jen změněné soubory stránky. Podrobnosti a FTP (FTPS přes `ftp.m-tex.cz`, heslo
   v `~/m-tex/private/ftp.netrc`, Windows curl useknul soubory) v `web/README.md`.
+
+## Úvodní video (od 3. 10. 2026)
+
+- Pepa chtěl „nejkrásnější Remotion video“ o Orbitu úplně nahoru na web: screeny, benefity, hudba, výzva ke stažení.
+  Projekt `video/` (podrobnosti v `video/README.md`), 1920×1080, 76 s, stříhané na takty hudby.
+- Vzhled sleduje web (barvy, písma Anybody + Mona Sans, „dýchající“ nadpisy z `site.js`). Když se změní web, změnit
+  `video/src/lib/theme.ts`, písma v `video/public/fonts` a vyrenderovat znovu. Aplikace ve videu je replika
+  `app/ui.py` v Reactu (`video/src/components/OrbitWidget.tsx`, `Bubble.tsx`); po změně vzhledu aplikace ji upravit.
+  Ověřené proti skutečnému renderu z Qt (`video/capture/grab.py`, ukázková data, 3× rozlišení).
+- Hudba: „Mountains“ (Andrew Ev, Mixkit, licence bez uvádění autora, nesmí se šířit samostatně, proto není v gitu).
+- Video má být srozumitelné i ztlumené (na webu hraje bez zvuku), proto je všechno řečené i v obraze.
+- Render: `npx remotion render Orbit out/orbit-master.mp4 --crf 14`, pak `node scripts/export-web.mjs` (2 průchody,
+  MP4 ~22 MB a WebM ~19 MB, limit webu ~25 MB). Na nahrání webu je `web/publish.py`.
+- **Pozor na barevný rozsah**: master z Remotionu je „full range“ (yuvj420p). Takové VP9 hardwarový dekodér Chromu na
+  Pepově Radeonu odmítne (`PIPELINE_ERROR_DECODE`) a Chrome pak nepřepne na MP4, video na webu stojí (3. 10. se to
+  stalo). Bez grafiky (headless) to hrálo, proto test jen s `--disable-gpu` nestačí. `export-web.mjs` proto převádí
+  na „limited range“ BT.709. Kontrola: Chrome s grafikou (Playwright `headless: false`), `video.error` musí být null.
 
 ## GitHub
 
