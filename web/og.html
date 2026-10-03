@@ -1,0 +1,38 @@
+<!doctype html>
+<!-- Source of site/assets/og.png (1200×630, the picture shown when the link is shared). Render: see web/README.md -->
+<html lang="cs"><head><meta charset="utf-8"><style>
+@font-face{font-family:"Anybody";font-weight:100 900;font-stretch:50% 150%;src:url("site/assets/fonts/anybody-normal-latin.woff2")}
+@font-face{font-family:"Anybody";font-weight:100 900;font-stretch:50% 150%;src:url("site/assets/fonts/anybody-normal-latin-ext.woff2");unicode-range:U+0100-02BA}
+@font-face{font-family:"Mona Sans";font-weight:200 900;font-stretch:75% 125%;src:url("site/assets/fonts/mona-sans-normal-latin.woff2")}
+@font-face{font-family:"Mona Sans";font-weight:200 900;font-stretch:75% 125%;src:url("site/assets/fonts/mona-sans-normal-latin-ext.woff2");unicode-range:U+0100-02BA}
+html,body{margin:0;width:1200px;height:630px;overflow:hidden;background:#04060C}
+body{position:relative;color:#EEF2FA;font-family:"Mona Sans",sans-serif;
+  background:radial-gradient(640px 460px at 86% 12%,rgba(91,157,255,.22),transparent 65%),radial-gradient(520px 420px at 0% 100%,rgba(167,139,250,.09),transparent 60%),#04060C}
+canvas{position:absolute;inset:0}
+.brand{position:absolute;left:66px;top:56px;display:flex;align-items:center;gap:12px;font-family:Anybody;font-variation-settings:"wdth" 125,"wght" 700;font-size:30px}
+.brand svg{width:40px;height:40px}
+h1{position:absolute;left:60px;top:132px;margin:0;font-family:Anybody;font-size:166px;line-height:.9;letter-spacing:-.02em;font-weight:400}
+h1 span{font-variation-settings:"wdth" 108,"wght" 640}
+p{position:absolute;left:700px;top:322px;margin:0;font-size:23px;line-height:1.45;color:#BCC5D6;width:440px}
+.url{position:absolute;left:702px;bottom:62px;font-size:21px;color:#5B9DFF;font-weight:600;font-stretch:110%}
+.mic{position:absolute;left:66px;bottom:46px;width:74px;height:74px;border-radius:50%;background:#FF4D5A;display:grid;place-items:center;box-shadow:0 0 0 14px rgba(255,77,90,.18),0 0 0 30px rgba(255,77,90,.07)}
+.mic svg{width:34px;height:34px;color:#fff}
+.wave{position:absolute;left:176px;bottom:62px;display:flex;gap:5px;align-items:center;height:44px}
+.wave i{width:5px;border-radius:3px;background:#FF4D5A}
+</style></head><body>
+<canvas id="c" width="1200" height="630"></canvas>
+<div class="brand"><svg viewBox="0 0 32 32"><g transform="rotate(-24 16 16)"><path d="M3 16a13 4.6 0 0 1 26 0" fill="none" stroke="#EEF2FA" stroke-width="1.4" opacity=".5"/><circle cx="16" cy="16" r="6.6" fill="#EEF2FA"/><path d="M3 16a13 4.6 0 0 0 26 0" fill="none" stroke="#04060C" stroke-width="2.8"/><path d="M3 16a13 4.6 0 0 0 26 0" fill="none" stroke="#EEF2FA" stroke-width="1.4" stroke-linecap="round"/><circle cx="25.9" cy="19" r="1.9" fill="#5B9DFF" stroke="#04060C" stroke-width="1"/></g></svg>Orbit</div>
+<h1 id="h"></h1>
+<p>České diktování do kteréhokoli okna ve Windows. Přepisuje se na tvé grafice, zvuk nikam neodchází.</p>
+<div class="url">orbit.easya.cz</div>
+<div class="mic"><svg viewBox="0 0 24 24"><rect x="8.6" y="2.6" width="6.8" height="12" rx="3.4" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M5.2 11.2a6.8 6.8 0 0 0 13.6 0M12 18v3.4M8.6 21.4h6.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></div>
+<div class="wave" id="w"></div>
+<script>
+var c=document.getElementById("c").getContext("2d"),s=7;function r(){s=(s*16807)%2147483647;return s/2147483647}
+for(var i=0;i<460;i++){var big=r()>.96,a=big?.6+r()*.4:.15+r()*.5;c.fillStyle=(r()>.84?"rgba(91,157,255,":"rgba(226,233,255,")+a+")";c.beginPath();c.arc(r()*1200,r()*630,big?1+r()*.8:.3+r()*.6,0,6.3);c.fill()}
+/* the headline caught mid-word, as if it were listening */
+var lines=["Drž, mluv,","pusť."],h=document.getElementById("h"),k=0;
+lines.forEach(function(l,li){l.split("").forEach(function(ch){var sp=document.createElement("span");sp.textContent=ch;var t=Math.sin(k*.62+1.2);sp.style.fontVariationSettings='"wdth" '+(108+t*26).toFixed(0)+', "wght" '+(640+t*170).toFixed(0);h.appendChild(sp);k++});if(li===0)h.appendChild(document.createElement("br"))});
+var w=document.getElementById("w");for(var j=0;j<34;j++){var b=document.createElement("i");b.style.height=(6+Math.abs(Math.sin(j*.55)*Math.sin(j*.21+1))*38)+"px";b.style.opacity=.35+j/34*.65;w.appendChild(b)}
+</script>
+</body></html>

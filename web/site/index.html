@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="cs" data-release="__STATE__" data-theme="blue" class="no-js">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orbit – české diktování pro Windows</title>
+<meta name="description" content="Drž klávesu, mluv česky a pusť. Orbit přepíše řeč do kteréhokoli okna ve Windows přímo na tvé grafice, zvuk nikam neodchází. A s Claude Code hlídá limity, relace i odpovědi.">
+<meta name="theme-color" content="#04060C">
+<meta name="color-scheme" content="dark">
+<link rel="canonical" href="https://orbit.easya.cz/">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:locale" content="cs_CZ">
+<meta property="og:url" content="https://orbit.easya.cz/">
+<meta property="og:title" content="Orbit – drž, mluv, pusť.">
+<meta property="og:description" content="České diktování do kteréhokoli okna ve Windows. Přepisuje se na tvé grafice, zvuk nikam neodchází. A s Claude Code hlídá limity, relace i odpovědi.">
+<meta property="og:image" content="https://orbit.easya.cz/assets/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preload" href="assets/fonts/anybody-normal-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/mona-sans-normal-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="assets/site.css">
+<script>
+  document.documentElement.classList.replace("no-js", "js");
+  try { var t = localStorage.getItem("orbit-theme"); if (t === "violet" || t === "teal") document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+</head>
+<body>
+<canvas id="space" aria-hidden="true"></canvas>
+<div class="cursor" id="cursor" aria-hidden="true"><span class="cursor-dot"></span><span class="cursor-ring"><span class="cursor-label"></span></span></div>
+<a class="skip" href="#obsah">Přeskočit na obsah</a>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="8.6" y="2.6" width="6.8" height="12" rx="3.4" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M5.2 11.2a6.8 6.8 0 0 0 13.6 0M12 18v3.4M8.6 21.4h6.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></symbol>
+    <symbol id="i-speaker" viewBox="0 0 24 24"><path d="M4 9.3h3.6L12.4 5v14l-4.8-4.3H4z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M15.6 9.2a4 4 0 0 1 0 5.6M18.2 6.6a7.6 7.6 0 0 1 0 10.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3.5v11.5M7 10.2l5 5 5-5M4.5 19.5h15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9.2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M10 8.3v7.4l6-3.7z" fill="currentColor"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M19.4 12.6A7.4 7.4 0 1 1 17 6.3M17.6 2.8v4.1h-4.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-sessions" viewBox="0 0 24 24"><circle cx="5" cy="7" r="2" fill="#5B9DFF"/><circle cx="5" cy="12" r="2" fill="#F5A524"/><circle cx="5" cy="17" r="2" fill="#3DD68C"/><path d="M10 7h10M10 12h7M10 17h9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-agent" viewBox="0 0 32 32">
+      <g transform="rotate(-24 16 16)">
+        <path d="M3.2 16a12.8 4.3 0 0 1 25.6 0" fill="none" stroke="currentColor" stroke-width="1.6" opacity=".7"/>
+        <circle cx="16" cy="16" r="6" fill="currentColor"/>
+        <path d="M5 18.6a12.8 4.3 0 0 0 22 0" fill="none" stroke="#1A2030" stroke-width="3"/>
+        <path d="M3.2 16a12.8 4.3 0 0 0 25.6 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        <circle cx="25.8" cy="18.8" r="2" fill="currentColor" stroke="#1A2030" stroke-width="1.4"/>
+      </g>
+    </symbol>
+    <symbol id="i-star" viewBox="0 0 40 40"><path d="M20 2c1.4 10.6 7.4 16.6 18 18-10.6 1.4-16.6 7.4-18 18-1.4-10.6-7.4-16.6-18-18C12.6 18.6 18.6 12.6 20 2z" fill="currentColor"/></symbol>
+  </defs>
+</svg>
+
+<nav class="nav" id="nav" aria-label="Hlavní">
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="Orbit, na začátek stránky">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><g transform="rotate(-24 16 16)">
+        <path d="M3 16a13 4.6 0 0 1 26 0" fill="none" stroke="currentColor" stroke-width="1.4" opacity=".5"/>
+        <circle class="moon" id="moonBack" r="1.9" cx="7" cy="12.6" opacity="0"/>
+        <circle cx="16" cy="16" r="6.6" fill="currentColor"/>
+        <path d="M3 16a13 4.6 0 0 0 26 0" fill="none" stroke="#04060C" stroke-width="2.8"/>
+        <path d="M3 16a13 4.6 0 0 0 26 0" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        <circle class="moon" id="moonFront" r="1.9" cx="25.9" cy="19" stroke="#04060C" stroke-width="1"/>
+      </g></svg>Orbit</a>
+    <div class="nav-links">
+      <a href="#diktovani">Diktování</a>
+      <a href="#soukromi">Soukromí</a>
+      <a href="#claude">Claude Code</a>
+      <a href="#instalace">Instalace</a>
+    </div>
+    <div class="themes" role="group" aria-label="Barva stránky, stejné jako v Orbitu">
+      <button type="button" data-theme="blue" style="--c:#5B9DFF" aria-label="Modrá"></button>
+      <button type="button" data-theme="violet" style="--c:#A78BFA" aria-label="Fialová"></button>
+      <button type="button" data-theme="teal" style="--c:#2DD4BF" aria-label="Tyrkysová"></button>
+    </div>
+    <a class="btn small when-ready" href="__HREF__" download data-magnetic data-warp><span class="lbl">Stáhnout</span></a>
+    <a class="btn small ghost when-pending" href="#diktovani" data-magnetic><span class="lbl">Jak to funguje</span></a>
+  </div>
+</nav>
+
+<main id="obsah">
+<header class="hero" id="top">
+  <div class="wrap">
+    <div class="hero-grid" id="heroGrid">
+      <h1 class="display kinetic" id="heroTitle" data-kinetic="hero" data-break="2" data-cursor="Podrž">Drž, mluv, pusť.</h1>
+      <div class="hero-side" id="heroSide">
+        <p class="lede rv">České diktování do kteréhokoli okna ve Windows. Přepisuje se přímo na tvé grafice, zvuk nikam neodchází. A když pracuješ s Claude Code, hlídá ti limity, relace i odpovědi.</p>
+        <div class="hero-cta rv">
+          <a class="btn when-ready" href="__HREF__" download data-magnetic data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-download"/></svg>Stáhnout pro Windows</span></a>
+          <p class="fine when-ready">Verze __VERSION__, __SIZE__.<br>Windows 10 a 11, 64bit.</p>
+          <a class="btn when-pending" href="#diktovani" data-magnetic data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-play"/></svg>Ukaž mi, jak to funguje</span></a>
+          <p class="fine when-pending"><span class="pulse"></span>Instalátor dokončujeme, stažení bude tady.</p>
+        </div>
+        <p class="hint rv" aria-hidden="true"><span class="rec"></span>Podrž nadpis<span class="kb"> nebo <span class="key">mezerník</span></span> a uvidíš, jak Orbit poslouchá.</p>
+      </div>
+    </div>
+
+    <div class="stage-wrap" id="stageWrap">
+      <svg class="halo" viewBox="0 0 1260 560" aria-hidden="true">
+        <g id="haloRings">
+          <ellipse cx="630" cy="280" rx="620" ry="122" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="1"/>
+          <ellipse cx="630" cy="280" rx="600" ry="116" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="7" stroke-dasharray="1 17"/>
+          <ellipse cx="630" cy="280" rx="560" ry="176" fill="none" stroke="var(--accent)" stroke-opacity=".28" stroke-width="1"/>
+          <circle id="haloSat" r="5" fill="var(--accent)"/>
+        </g>
+      </svg>
+      <div class="stage" id="stage">
+        <!--video-->
+        <video id="heroVideo" autoplay muted loop playsinline preload="auto" poster="assets/video/poster.jpg" aria-label="Video o Orbitu">
+          <source src="assets/video/orbit.webm" type="video/webm">
+          <source src="assets/video/orbit.mp4" type="video/mp4">
+        </video>
+        <button class="sound" id="soundBtn" type="button"><svg aria-hidden="true"><use href="#i-speaker"/></svg><span>Pustit od začátku se zvukem</span></button>
+        <div class="stage-cta" id="stageCta">
+          <span class="cta-shadow" aria-hidden="true"></span>
+          <div class="cta-float">
+            <span class="cta-ring" id="ctaRing" aria-hidden="true"></span>
+            <a class="btn cta-btn when-ready" href="__HREF__" download data-magnetic data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-download"/></svg>Stáhnout pro Windows</span></a>
+            <a class="btn cta-btn when-pending" href="#instalace" data-magnetic><span class="lbl"><span class="pulse"></span>Instalátor už brzy</span></a>
+          </div>
+        </div>
+        <!--/video-->
+        <!--novideo-->
+        <div class="orrery" id="orrery">
+          <div class="plane" id="plane">
+            <canvas id="trails" aria-hidden="true"></canvas>
+            <svg class="paths" viewBox="0 0 1600 900" aria-hidden="true">
+              <defs><radialGradient id="glow"><stop offset="0" stop-color="var(--accent)" stop-opacity=".3"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></radialGradient></defs>
+              <circle cx="800" cy="450" r="230" fill="url(#glow)"/>
+              <g transform="rotate(-9 800 450)">
+                <ellipse cx="800" cy="450" rx="265" ry="100" fill="none" stroke="rgba(255,255,255,.34)" stroke-width="1.2"/>
+                <ellipse cx="800" cy="450" rx="455" ry="170" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="1.2"/>
+                <ellipse cx="800" cy="450" rx="650" ry="242" fill="none" stroke="rgba(255,255,255,.14)" stroke-width="1.2"/>
+                <ellipse cx="800" cy="450" rx="672" ry="250" fill="none" stroke="rgba(255,255,255,.2)" stroke-width="6" stroke-dasharray="1 15"/>
+              </g>
+            </svg>
+            <button class="sat" type="button" data-orbit="0" data-period="40" data-phase="0.4" data-cursor="Předčítání"><span class="orb"><svg aria-hidden="true" style="color:#fff"><use href="#i-speaker"/></svg></span><span class="tag">Předčítání</span><span class="tip">Když relace dokončí delší práci, Orbit ti přečte první věty odpovědi.</span></button>
+            <button class="sat" type="button" data-orbit="1" data-period="64" data-phase="2.5" data-cursor="Agent"><span class="orb"><svg aria-hidden="true" style="color:var(--accent)"><use href="#i-agent"/></svg></span><span class="tag">Hlasový agent</span><span class="tip">Zeptáš se, co dělají relace, nebo mu nadiktuješ zadání. Pošle ho, až řekneš „jo“.</span></button>
+            <button class="sat" type="button" data-orbit="1" data-period="64" data-phase="5.64" data-cursor="Relace"><span class="orb"><svg aria-hidden="true" style="color:#E6E8EC"><use href="#i-sessions"/></svg></span><span class="tag">Relace</span><span class="tip">Kdo pracuje, kdo čeká na tebe a kdo je hotový. Klik přepne do okna relace.</span></button>
+            <button class="sat" type="button" data-orbit="2" data-period="96" data-phase="4.1" data-cursor="Limity"><span class="orb"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="rgba(255,255,255,.18)" stroke-width="2.6"/><circle cx="12" cy="12" r="8.5" fill="none" stroke="var(--accent)" stroke-width="2.6" stroke-dasharray="22.4 53.4" stroke-linecap="round" transform="rotate(-90 12 12)"/></svg></span><span class="tag">Limity Clauda</span><span class="tip">Pětihodinové okno a týdenní limit. Panel řekne, v kolik ti dojdou.</span></button>
+            <div class="core"><span class="tag">Diktování</span><span class="mic" aria-hidden="true"><svg><use href="#i-mic"/></svg></span></div>
+          </div>
+        </div>
+        <!--/novideo-->
+      </div>
+    </div>
+  </div>
+</header>
+
+<section class="commands" id="povely" aria-labelledby="h-cmd">
+  <h2 class="sr" id="h-cmd">Hlasové povely</h2>
+  <ul class="sr">
+    <li>„Odešli.“ Na konci diktátu stiskne Enter, takže zpráva odejde, aniž sáhneš na klávesnici.</li>
+    <li>„Stop.“ Samotné slovo stiskne Esc a přeruší, co Claude zrovna dělá.</li>
+    <li>„Nový řádek.“ Zalomí text. V chatu pošle Shift+Enter, aby se zpráva neodeslala předčasně.</li>
+    <li>„Nový odstavec.“ Vynechá řádek a začne nový odstavec.</li>
+  </ul>
+  <div class="marquee" id="marquee" aria-hidden="true">
+    <div class="marquee-track" id="marqueeTrack">
+      <span class="said cmd" data-say="Na konci diktátu stiskne Enter, takže zpráva odejde, aniž sáhneš na klávesnici.">„Odešli.“</span><svg class="sep"><use href="#i-star"/></svg>
+      <span class="said cmd" data-say="Samotné slovo stiskne Esc a přeruší, co Claude zrovna dělá.">„Stop.“</span><svg class="sep"><use href="#i-star"/></svg>
+      <span class="said cmd" data-say="Zalomí text. V chatu pošle Shift+Enter, aby se zpráva neodeslala předčasně.">„Nový řádek.“</span><svg class="sep"><use href="#i-star"/></svg>
+      <span class="said cmd" data-say="Vynechá řádek a začne nový odstavec.">„Nový odstavec.“</span><svg class="sep"><use href="#i-star"/></svg>
+    </div>
+  </div>
+  <div class="wrap">
+    <p class="cmd-caption" aria-hidden="true"><b id="cmdWord">Hlasové povely.</b> <span id="cmdText"><span class="hover-only">Najeď na povel a uvidíš, co udělá.</span><span class="touch-only">Ťukni na povel a uvidíš, co udělá.</span></span></p>
+  </div>
+</section>
+
+<section id="diktovani" aria-labelledby="h-dikt">
+  <div class="wrap">
+    <div class="sec-intro">
+      <h2 class="display kinetic" id="h-dikt" data-kinetic="h2">Píše tam, kde máš kurzor.</h2>
+      <p class="lede rv">E-mail, Word, prohlížeč nebo terminál. Podržíš klávesu, řekneš větu a pustíš. Text se objeví v okně, ve kterém zrovna jsi, i s diakritikou a interpunkcí.</p>
+    </div>
+  </div>
+  <div id="dictPin">
+    <div class="bigclock" aria-hidden="true"><span id="bigClock">0,0 s</span></div>
+    <div class="wrap dict-stage">
+      <div class="demo rv">
+        <div class="clock"><span class="t" id="clock">0,0 s</span><span class="lbl" id="clockLbl">od stisku klávesy</span></div>
+        <div class="win" aria-hidden="true">
+          <div class="win-bar"><span>Nová zpráva</span><span class="ctl"><svg viewBox="0 0 12 12"><path d="M1 6h10" stroke="currentColor"/></svg><svg viewBox="0 0 12 12"><rect x="1.5" y="1.5" width="9" height="9" fill="none" stroke="currentColor"/></svg><svg viewBox="0 0 12 12"><path d="M1.5 1.5l9 9m0-9l-9 9" stroke="currentColor"/></svg></span></div>
+          <div class="win-body"><span id="typed"></span><span class="caret"></span><span class="ph" id="ph">Sem se vloží, co řekneš.</span></div>
+        </div>
+        <div class="demo-ctl">
+          <button class="mic" id="demoMic" type="button" data-state="idle" data-cursor="Drž" aria-describedby="demoStatus"><span class="level" id="demoLevel"></span><svg aria-hidden="true"><use href="#i-mic"/></svg><span class="sr">Podrž a mluv, ukázka</span></button>
+          <canvas class="wave" id="wave" aria-hidden="true"></canvas>
+        </div>
+        <div class="chunks" aria-hidden="true"><span class="chunk" id="chunk1">Ahoj Petře, posílám ti nabídku…</span><span class="chunk" id="chunk2">Kdyby ti něco nesedělo…</span></div>
+        <p class="demo-status" id="demoStatus" aria-live="polite">Podrž mikrofon a pak ho pusť.</p>
+        <p class="fine" style="margin-top:8px">Jen ukázka, stránka k tvému mikrofonu nepřistupuje.</p>
+      </div>
+      <div>
+        <div class="tl-wrap">
+          <ol class="tl" id="tl">
+            <li><span class="t">0 s</span><b>Stiskneš klávesu</b><span class="d">Vybereš si ji sám: boční tlačítko myši, pravý Ctrl, cokoli. Ostatní programy ji pak nedostanou.</span></li>
+            <li><span class="t">0,1 s</span><b>Pípne</b><span class="d">Až ve chvíli, kdy mikrofon opravdu posílá zvuk. První slabika se tak neusekne.</span></li>
+            <li><span class="t">mluvíš</span><b>Přepisuje se průběžně</b><span class="d">U delšího diktátu posílá Orbit hotové věty na grafiku už v pauzách mezi nimi.</span></li>
+            <li><span class="t">+0,25 s</span><b>Pustíš</b><span class="d">Nahrává ještě čtvrt vteřiny, protože klávesu většinou pouštíš během posledního slova.</span></li>
+            <li><span class="t">+1,6 s</span><b>Text je v okně</b><span class="d">Vloží se celý najednou, psaním znaků nebo přes schránku, kterou ti potom vrátí.</span></li>
+          </ol>
+          <span class="tl-fill" id="tlFill"></span>
+        </div>
+        <p class="fine tl-note">Průměrné čekání po puštění klávesy, změřené na 30 skutečných diktátech s grafikou Radeon RX 9070 XT.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="soukromi" aria-labelledby="h-priv">
+  <div class="wrap">
+    <h2 class="sr" id="h-priv">Soukromí</h2>
+    <p class="scrub" id="scrub">Mikrofon poslouchá, jen když držíš klávesu. Řeč rozpoznává Whisper přímo na tvé grafice. Na internet nejde ani slabika.</p>
+    <div class="flow-wrap rv">
+      <svg class="flow flow-d" id="flow" viewBox="0 0 1200 330" role="img" aria-label="Cesta zvuku: mikrofon, grafika s Whisperem a okno s kurzorem, všechno uvnitř tvého počítače. Do internetu nic nevede.">
+        <rect x="1" y="1" width="860" height="328" rx="26" fill="rgba(255,255,255,.025)" stroke="rgba(255,255,255,.14)"/>
+        <text x="34" y="52" class="big">Tvůj počítač</text>
+        <path id="fp1" d="M196 196 C 270 196, 300 196, 372 196" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="1.5"/>
+        <path id="fp2" d="M488 196 C 560 196, 590 196, 662 196" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="1.5"/>
+        <path id="fp3" d="M784 196 C 860 196, 880 196, 930 196" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="1.5" stroke-dasharray="3 6"/>
+        <g id="packets"></g>
+        <g class="node" transform="translate(140 196)">
+          <circle class="halo-n" r="66" fill="rgba(var(--accent-rgb),.12)"/>
+          <circle r="52" fill="#2F3542" stroke="rgba(0,0,0,.4)"/>
+          <svg x="-22" y="-22" width="44" height="44" style="color:#fff"><use href="#i-mic"/></svg>
+          <text y="92" text-anchor="middle">Mikrofon, jen při držení</text>
+        </g>
+        <g class="node" id="gpuNode" transform="translate(430 196)">
+          <circle class="halo-n" r="76" fill="rgba(var(--accent-rgb),.12)"/>
+          <rect x="-56" y="-48" width="112" height="96" rx="12" fill="#121A2C" stroke="var(--accent)" stroke-opacity=".7"/>
+          <path d="M-34-22h68M-34 0h68M-34 22h68" stroke="var(--accent)" stroke-opacity=".6" stroke-width="1.4"/>
+          <path d="M-24-48v-12M0-48v-12M24-48v-12M-24 48v12M0 48v12M24 48v12" stroke="var(--accent)" stroke-opacity=".6" stroke-width="1.4"/>
+          <text y="92" text-anchor="middle">Grafika, Whisper</text>
+        </g>
+        <g class="node" id="winNode" transform="translate(722 196)">
+          <circle class="halo-n" r="76" fill="rgba(var(--accent-rgb),.12)"/>
+          <rect x="-60" y="-44" width="120" height="88" rx="10" fill="#0A0E1A" stroke="rgba(255,255,255,.2)"/>
+          <path d="M-60-22h120" stroke="rgba(255,255,255,.14)"/>
+          <path d="M-42-2h66" stroke="#EEF2FA" stroke-width="3" stroke-linecap="round" opacity=".8"/>
+          <path d="M-42 16h40" stroke="#EEF2FA" stroke-width="3" stroke-linecap="round" opacity=".8"/>
+          <path d="M6 8v16" stroke="var(--accent)" stroke-width="2.4"/>
+          <text y="92" text-anchor="middle">Okno s kurzorem</text>
+        </g>
+        <g transform="translate(930 196)">
+          <circle id="barrierFlash" r="26" fill="#FF4D5A" opacity="0"/>
+          <path d="M-9-9l18 18m0-18l-18 18" stroke="#FF4D5A" stroke-width="2.4" stroke-linecap="round"/>
+        </g>
+        <g class="node" transform="translate(1085 196)">
+          <circle r="80" fill="none" stroke="rgba(138,148,171,.35)" stroke-dasharray="3 7"/>
+          <ellipse rx="32" ry="80" fill="none" stroke="rgba(138,148,171,.22)"/>
+          <path d="M-80 0h160M-72-36h144M-72 36h144" stroke="rgba(138,148,171,.22)"/>
+          <text y="112" text-anchor="middle">Internet</text>
+        </g>
+      </svg>
+      <svg class="flow flow-m" viewBox="0 0 360 640" role="img" aria-label="Cesta zvuku: mikrofon, grafika s Whisperem a okno s kurzorem, všechno uvnitř tvého počítače. Do internetu nic nevede.">
+        <rect x="1" y="1" width="358" height="470" rx="22" fill="rgba(255,255,255,.025)" stroke="rgba(255,255,255,.14)"/>
+        <text x="22" y="40" class="big">Tvůj počítač</text>
+        <path d="M180 148 V 380" stroke="rgba(255,255,255,.16)" stroke-width="1.5"/>
+        <path d="M180 424 V 520" stroke="rgba(255,255,255,.1)" stroke-width="1.5" stroke-dasharray="3 6"/>
+        <circle class="pk" r="4.5" fill="var(--accent)"><animateMotion dur="1.8s" repeatCount="indefinite" path="M180 150 V 372"/></circle>
+        <circle class="pk" r="4.5" fill="var(--accent)"><animateMotion dur="1.8s" begin="0.9s" repeatCount="indefinite" path="M180 150 V 372"/></circle>
+        <circle class="pk" r="5" fill="#FF4D5A"><animateMotion dur="2.6s" repeatCount="indefinite" keyPoints="0;1;0.2" keyTimes="0;0.55;1" calcMode="linear" path="M180 430 V 506"/><animate attributeName="opacity" dur="2.6s" repeatCount="indefinite" values="1;1;0" keyTimes="0;0.55;1"/></circle>
+        <g transform="translate(180 106)"><circle r="40" fill="#2F3542"/><svg x="-17" y="-17" width="34" height="34" style="color:#fff"><use href="#i-mic"/></svg><text x="56" y="6">Mikrofon</text></g>
+        <g transform="translate(180 250)"><rect x="-44" y="-38" width="88" height="76" rx="10" fill="#121A2C" stroke="var(--accent)" stroke-opacity=".7"/><path d="M-26-16h52M-26 0h52M-26 16h52" stroke="var(--accent)" stroke-opacity=".6" stroke-width="1.3"/><text x="58" y="6">Grafika, Whisper</text></g>
+        <g transform="translate(180 392)"><rect x="-48" y="-32" width="96" height="64" rx="9" fill="#0A0E1A" stroke="rgba(255,255,255,.2)"/><path d="M-32 0h50M-32 14h30" stroke="#EEF2FA" stroke-width="2.6" stroke-linecap="round" opacity=".8"/><text x="62" y="6">Okno</text></g>
+        <g transform="translate(180 520)"><path d="M-9-9l18 18m0-18l-18 18" stroke="#FF4D5A" stroke-width="2.4" stroke-linecap="round"/></g>
+        <g transform="translate(180 594)"><circle r="40" fill="none" stroke="rgba(138,148,171,.35)" stroke-dasharray="3 6"/><ellipse rx="16" ry="40" fill="none" stroke="rgba(138,148,171,.22)"/><text x="56" y="6">Internet</text></g>
+      </svg>
+    </div>
+    <div class="notes">
+      <div class="note rv"><h3>Žádné poslouchání na pozadí</h3><p>Mikrofon se otevře stiskem klávesy a po puštění se zavře. Mezi tím je zavřený.</p></div>
+      <div class="note rv"><h3>Přepis běží na tvé grafice</h3><p>Funguje s kartami NVIDIA, AMD i Intel přes Vulkan. Model Whisper <span class="nw">large-v3</span> se stáhne jednou a pak běží jen u tebe.</p></div>
+      <div class="note rv"><h3>Claude dostane jen to, co pustíš</h3><p>Učení slovníku mu posílá text diktátů, ne zvuk, a jen když ho zapneš. Hlasový agent pošle zprávu do relace, až když řekneš <span class="said">„jo“</span>.</p></div>
+    </div>
+    <p class="privacy-note rv">Ani tahle stránka nic neměří: nemá analytiku, reklamní skripty ani písma z cizích serverů.</p>
+  </div>
+</section>
+
+<section id="claude" aria-labelledby="h-claude">
+  <div class="wrap">
+    <div class="sec-intro">
+      <h2 class="display kinetic" id="h-claude" data-kinetic="h2">Pro ty, kdo pracují s Claude Code.</h2>
+      <p class="lede rv">Nad mikrofonem je panel s limity a relacemi. <span class="hover-only">Najeď na funkci a panel ti ji předvede.</span><span class="touch-only">Ťukni na funkci a panel ti ji předvede.</span></p>
+    </div>
+    <div class="claude">
+      <figure class="widget rv" id="widget">
+        <div class="w-strip" aria-hidden="true">
+          <span class="w-agent" id="wAgent"><svg><use href="#i-agent"/></svg></span>
+          <span class="w-pill"><i class="on" style="background:#5B9DFF"></i><i style="background:#A78BFA"></i><i style="background:#2DD4BF"></i></span>
+        </div>
+        <div class="w-panel" id="wPanel" role="img" aria-label="Panel Orbitu s limity Clauda, relacemi Claude Code a hlasovým agentem.">
+          <div class="w-zone" data-zone="limits">
+            <div class="w-row w-head"><b>Claude</b><span id="wNote"><svg><use href="#i-refresh"/></svg><span id="wNoteText">2 h 14 min</span></span></div>
+            <div class="w-row w-lim"><b>5 h</b><span class="w-bar"><i id="wBar1"></i></span><span class="w-pct" id="wPct1">42 %</span></div>
+            <div class="w-row w-lim"><b>Týden</b><span class="w-bar"><i id="wBar2"></i></span><span class="w-pct" id="wPct2">18 %</span></div>
+          </div>
+          <div class="w-sep"></div>
+          <div class="w-zone" data-zone="sessions">
+            <div class="w-row w-ses" id="s1"><i class="dot"></i><b>Úprava ceníku na webu</b><span class="fold">eshop</span><span class="st"></span><span class="ctx">34 %</span></div>
+            <div class="w-row w-ses" id="s2"><i class="dot"></i><b>Oprava přihlášení</b><span class="fold">portal</span><span class="st"></span><span class="ctx">61 %</span></div>
+            <div class="w-row w-ses" id="s3"><i class="dot"></i><b>Překlad katalogu</b><span class="fold">katalogy</span><span class="st"></span><span class="ctx">22 %</span></div>
+          </div>
+          <div class="w-sep"></div>
+          <div class="w-zone w-feed" data-zone="agent">
+            <div class="w-row"><b style="color:var(--accent)">Agent Orbit</b><span id="fStatus" style="margin-left:auto;color:#9AA1AD"></span></div>
+            <div class="you" id="fYou"></div>
+            <div class="reply" id="fReply"></div>
+            <div class="w-row" id="fTarget" hidden><b id="fTName"></b><span id="fTFolder" style="color:#9AA1AD"></span><span id="fTStatus" style="margin-left:auto"></span></div>
+            <div class="msg" id="fMsg" hidden></div>
+            <div class="url" id="fUrl" hidden></div>
+          </div>
+        </div>
+        <div class="w-foot">
+          <div class="w-buttons" aria-hidden="true">
+            <span class="w-speaker" id="wSpeaker"><svg><use href="#i-speaker"/></svg><span class="bars"><i></i><i></i><i></i></span></span>
+            <span class="mic"><svg><use href="#i-mic"/></svg></span>
+          </div>
+          <div class="w-slot">
+            <figcaption class="fine" id="wCaption">Panel nad plovoucím mikrofonem. Reproduktor vlevo ztlumí všechny zvuky Orbitu.</figcaption>
+            <div class="bubble" id="bubble" aria-hidden="true">
+              <div class="bt"><span class="bi" id="bIcon">✓</span><span id="bTitle"></span><span class="bn" id="bNote"></span></div>
+              <p id="bText"></p>
+            </div>
+          </div>
+        </div>
+      </figure>
+
+      <div class="features" id="features">
+        <button class="feat rv" type="button" data-scene="limity"><h3>Limity</h3><p>Pětihodinové okno a týdenní limit. Když tempem vyčerpáš okno dřív, než se obnoví, panel ukáže, v kolik dojde.</p></button>
+        <button class="feat rv" type="button" data-scene="relace"><h3>Relace</h3><p>Každá relace s tématem, složkou a stavem: pracuje, čeká na tebe, hotovo. Klik na řádek tě přepne do jejího okna.</p></button>
+        <button class="feat rv" type="button" data-scene="bubliny"><h3>Bubliny a předčítání</h3><p>Když relace dokončí delší práci a ty se díváš jinam, ukáže bublinu a přečte ti první věty odpovědi.</p></button>
+        <button class="feat rv" type="button" data-scene="artefakty"><h3>Artefakty</h3><p>Stránku, kterou relace zveřejní, shrne do sedmi vět a přečte ti je nahlas.</p></button>
+        <button class="feat rv" type="button" data-scene="agent"><h3>Hlasový agent</h3><p>Podržíš druhé tlačítko a zeptáš se: <span class="said">„Co dělá relace s ceníkem?“</span> Nebo mu nadiktuješ zadání. Do relace ho pošle, až když řekneš <span class="said">„jo“</span>.</p></button>
+        <button class="feat rv" type="button" data-scene="chrome"><h3>Stránky z prohlížeče</h3><p><span class="said">„Otevři mi objednávku 82.“</span> Agent ji najde v historii Google Chrome a otevře v nové kartě.</p></button>
+        <p class="needs rv">Potřebuješ nainstalovaný Claude Code a vlastní předplatné Claude. Přihlašuješ se na stránce Anthropicu, Orbit tvoje heslo nikdy nevidí.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="pozadavky" aria-labelledby="h-req">
+  <div class="wrap specs">
+    <div class="specs-side">
+      <h2 class="display kinetic" id="h-req" data-kinetic="h2">Co potřebuje tvůj počítač.</h2>
+      <p class="lede rv">Diktování chce hlavně grafickou kartu. Všechno kolem Clauda je volitelné.</p>
+      <div class="acc spot rv" id="acc">
+        <h3>Jak přesně píše</h3>
+        <p class="fine">Změřeno na 150 nahrávkách z české části testu FLEURS.</p>
+        <div class="acc-bars">
+          <div class="bar-group">
+            <p class="gl">Chybná slova, méně je lépe</p>
+            <div class="bar-row"><div class="top"><span class="name">large-v3</span><span class="val" data-count="8.9" data-unit=" %">8,9 %</span></div><div class="track"><i style="--w:74%"></i></div></div>
+            <div class="bar-row"><div class="top"><span class="name">large-v3-turbo</span><span class="val" data-count="10.2" data-unit=" %">10,2 %</span></div><div class="track"><i style="--w:85%;background:rgba(255,255,255,.35)"></i></div></div>
+          </div>
+          <div class="bar-group">
+            <p class="gl">Přepis jedné nahrávky, Radeon RX 9070 XT</p>
+            <div class="bar-row"><div class="top"><span class="name">large-v3</span><span class="val" data-count="1.9" data-unit=" s">1,9 s</span></div><div class="track"><i style="--w:95%"></i></div></div>
+            <div class="bar-row"><div class="top"><span class="name">large-v3-turbo</span><span class="val" data-count="0.9" data-unit=" s">0,9 s</span></div><div class="track"><i style="--w:45%;background:rgba(255,255,255,.35)"></i></div></div>
+          </div>
+        </div>
+        <p class="fine">Jména a značky, které model neslyší správně, mu napíšeš do slovníku.</p>
+      </div>
+    </div>
+    <dl class="spec">
+      <div class="rv"><dt>Systém</dt><dd>Windows 10 nebo 11, 64bit.</dd></div>
+      <div class="rv"><dt>Grafika</dt><dd>S podporou Vulkanu, tedy skoro každá novější karta NVIDIA, AMD nebo Intel. Na nejpřesnější model <b>aspoň 6 GB paměti grafiky</b>, na slabší kartě Orbit použije rychlejší model turbo. Bez grafiky přepisuje procesor, jen pomalu.</dd></div>
+      <div class="rv"><dt>Disk</dt><dd>Model se stáhne při prvním spuštění: <b>3,1 GB</b>, turbo 1,6 GB.</dd></div>
+      <div class="rv"><dt>Mikrofon</dt><dd>Jakýkoli. Bluetooth sluchátka se při nahrávání přepnou do režimu hovoru a přesnost klesne, Orbit tě na to upozorní.</dd></div>
+      <div class="rv"><dt>Claude Code</dt><dd>Volitelně, pro limity, relace, předčítání a hlasového agenta. S vlastním předplatným Claude.</dd></div>
+      <div class="rv"><dt>Google Chrome</dt><dd>Volitelně, pro otevírání stránek hlasem.</dd></div>
+    </dl>
+  </div>
+</section>
+
+<section id="instalace" aria-labelledby="h-inst">
+  <div class="wrap">
+    <h2 class="display kinetic" id="h-inst" data-kinetic="h2">Instalace za&nbsp;pár minut.</h2>
+    <div class="ruler" id="install">
+      <svg class="orbit-path" viewBox="0 0 1200 100" preserveAspectRatio="none" aria-hidden="true">
+        <path d="M0 50 H1200" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="1" vector-effect="non-scaling-stroke"/>
+        <path id="instPath" d="M0 50 H1200" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+      </svg>
+      <span class="ruler-sat" id="instSat" aria-hidden="true"></span>
+      <ol class="steps" id="steps">
+        <li><span class="tick"></span><span class="num">1</span><h3>Stáhni instalátor</h3><p class="when-ready">Verze __VERSION__, __SIZE__, vydaná __DATE__.</p><p class="when-pending">Bude tady, jakmile ho dokončíme.</p></li>
+        <li><span class="tick"></span><span class="num">2</span><h3>Spusť ho</h3><p>Nainstaluje se jen pro tebe, bez práv správce.</p></li>
+        <li><span class="tick"></span><span class="num">3</span><h3>Projdi průvodce</h3><p>Jméno, mikrofon, klávesa. Model se stáhne sám.</p></li>
+        <li><span class="tick"></span><span class="num">4</span><h3>Připoj Claude Code</h3><p>Volitelně, přihlášením na stránce Anthropicu.</p></li>
+      </ol>
+    </div>
+    <div class="install-foot">
+      <div class="smart rv">
+        <div class="smart-card" aria-hidden="true">
+          <b>Systém Windows ochránil váš počítač</b>
+          <span class="link">Další informace</span>
+          <span class="smart-btn">Přesto spustit</span>
+        </div>
+        <p>Instalátor zatím nemá digitální podpis, takže Windows ho může zastavit. Klikni na <b>Další informace</b> a potom na <b>Přesto spustit</b>.</p>
+      </div>
+      <div class="install-cta rv">
+        <a class="btn when-ready" href="__HREF__" download data-magnetic data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-download"/></svg>Stáhnout instalátor</span></a>
+        <p class="sha when-ready">SHA-256: <code>__SHA256__</code></p>
+        <p class="fine when-pending"><span class="pulse"></span>Instalátor dokončujeme. Tlačítko ke stažení se objeví tady i nahoře.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="otazky" aria-labelledby="h-faq">
+  <div class="wrap faq-grid">
+    <div class="sticky"><h2 class="display kinetic" id="h-faq" data-kinetic="h2">Otázky.</h2></div>
+    <div class="faq" id="faq">
+      <details class="rv"><summary>Funguje Orbit i bez Claude Code?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Ano. Diktování, slovník a hlasové povely fungují samy. Claude Code přidává limity, přehled relací, předčítání a hlasového agenta.</p></div></details>
+      <details class="rv"><summary>Posílá Orbit můj hlas na internet?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Ne. Nahrávku přepíše Whisper na tvé grafice. Ven může odejít jen text: když zapneš učení slovníku, nebo když hlasovému agentovi potvrdíš zprávu do Claude Code.</p></div></details>
+      <details class="rv"><summary>Proč mě Windows před instalátorem varuje?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Instalátor zatím nemá placený podpis vydavatele, a takové programy Windows ze začátku hlídá. Když chceš mít jistotu, že je soubor celý a nezměněný, porovnej jeho kontrolní součet SHA-256 s tím, který je uvedený u instalace.</p></div></details>
+      <details class="rv"><summary>Do kterých oken umí psát?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Do všech, kam se dá psát klávesnicí: e-mail, Word, prohlížeč, chat, terminál. Výjimkou jsou okna spuštěná jako správce, tam Windows vkládání z běžných programů nedovolí.</p></div></details>
+      <details class="rv"><summary>Co když mám slabší grafiku, nebo žádnou?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Na slabší kartě Orbit použije model turbo, který je dvakrát rychlejší a dělá o něco víc chyb. Bez grafiky přepisuje procesor, to už je na rychlosti znát.</p></div></details>
+      <details class="rv"><summary>Umí i jiné jazyky než češtinu?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Orbit je postavený pro češtinu: rozpoznávání, povely i celé prostředí aplikace.</p></div></details>
+      <details class="rv"><summary>Jak Orbit odinstaluju?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>V Nastavení Windows, v části Aplikace. Odinstalace se zeptá, jestli smazat i stažené modely a tvoje nastavení.</p></div></details>
+    </div>
+  </div>
+</section>
+
+<section class="closing" aria-labelledby="h-close">
+  <div class="wrap">
+    <h2 class="sr" id="h-close">Stáhni Orbit</h2>
+    <p class="display kinetic wordmark" data-kinetic="mark">Orbit</p>
+    <p class="lede rv">Podrž klávesu a řekni, co chceš napsat. Zbytek udělá tvoje grafika.</p>
+    <div class="rv closing-cta">
+      <a class="btn when-ready" href="__HREF__" download data-magnetic data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-download"/></svg>Stáhnout pro Windows</span></a>
+      <p class="fine when-ready">Verze __VERSION__, __SIZE__. Windows 10 a 11, 64bit.</p>
+      <a class="btn when-pending" href="#diktovani" data-magnetic data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-play"/></svg>Zkusit ukázku diktování</span></a>
+      <p class="fine when-pending"><span class="pulse"></span>Instalátor dokončujeme, stažení bude tady.</p>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="Orbit, na začátek stránky" style="font-size:19px"><svg viewBox="0 0 32 32" aria-hidden="true"><g transform="rotate(-24 16 16)"><path d="M3 16a13 4.6 0 0 1 26 0" fill="none" stroke="currentColor" stroke-width="1.4" opacity=".5"/><circle cx="16" cy="16" r="6.6" fill="currentColor"/><path d="M3 16a13 4.6 0 0 0 26 0" fill="none" stroke="#04060C" stroke-width="2.8"/><path d="M3 16a13 4.6 0 0 0 26 0" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle class="moon" r="1.9" cx="25.9" cy="19" stroke="#04060C" stroke-width="1"/></g></svg>Orbit</a>
+    <div>
+      <p>Orbit není produktem společnosti Anthropic. Claude a Claude Code jsou ochranné známky společnosti Anthropic, PBC.</p>
+      <p style="margin-top:8px">Rozpoznávání řeči: whisper.cpp a modely Whisper od OpenAI, obojí pod licencí MIT. Animace: GSAP a Lenis. Hudba ve videu: Mountains, Andrew Ev (Mixkit).</p>
+    </div>
+  </div>
+</footer>
+
+<script src="assets/vendor/gsap.min.js"></script>
+<script src="assets/vendor/ScrollTrigger.min.js"></script>
+<script src="assets/vendor/lenis.min.js"></script>
+<script src="assets/site.js"></script>
+</body>
+</html>

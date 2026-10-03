@@ -54,6 +54,7 @@ je čas posledního přepisu z logu, který už Claude viděl.
 | `models/` | `ggml-large-v3.bin` (3,1 GB) a `ggml-large-v3-turbo.bin` (1,6 GB) – nejsou v gitu |
 | `recordings/` | posledních 30 nahrávek (`.wav` + `.txt` s přepisem), když je zapnuté ukládání – nejsou v gitu |
 | `orbit.log` | log aplikace včetně všech přepisů a časů – první místo, kam se dívat |
+| `web/` | stránka https://orbit.easya.cz se stažením instalátoru, `publish.py` ji sestaví a nahraje (viz `web/README.md`) |
 
 Závislosti: PySide6, sounddevice, numpy, pynput, requests (`requirements.txt`). Venv je `.venv` (vznikl ještě ve staré
 složce `diktovani`, řádek `command` v `pyvenv.cfg` je proto zastaralý, ale nevadí to).
@@ -298,6 +299,45 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 - Na PowerShell here-string `git commit -F -` nefunguje, zprávu dát do souboru.
 - `config.json` obsahuje osobní slovník, `orbit.log` a `recordings/` obsahují přepisy a hlas. Nikdy je necommitovat
   (hlídá `.gitignore`).
+
+## Web orbit.easya.cz (od 3. 10. 2026)
+
+- Pepa chtěl „luxusní“ stránku s vesmírným tématem a stažením instalátoru. Statická stránka v `web/site/`
+  (`index.html`, `assets/site.css`, `assets/site.js`, GSAP + ScrollTrigger + Lenis v `assets/vendor/`), běží na
+  Blueboardu ve složce `easya_cz/orbit` stejného FTP účtu jako m-tex.cz (hosting dělá ze složky v `easya_cz/` subdoménu,
+  ověřeno: `easya_cz/easya/` = easya.easya.cz), před tím Cloudflare s wildcard DNS. Na účtu jsou i m-tex a další weby,
+  proto stránka nesmí spouštět žádný kód (`.htaccess` PHP zakazuje).
+- **První verzi (Bodoni Moda + Barlow, zlatá na tmavě modré) Pepa odmítl jako „AI slob“**: chtěl designérskou práci,
+  jiné písmo, hodně pohybu, hover efektů a JavaScriptu. Teď: nadpisy **Anybody** (variabilní šířka 50–150, tloušťka
+  100–900, jen od 48 px), text **Mona Sans**; barvy aplikace (akcent `#5B9DFF`, přepínatelný na fialovou/tyrkysovou
+  tečkami v menu jako v Orbitu) na `#04060C`, žádná zlatá. Efekty: hvězdné pole na canvasu (letí podle rychlosti
+  scrollu, nad hlavním tlačítkem hyperprostor, při podržení nadpisu se seřadí do hlasové vlny), písmena nadpisu
+  reagují na kurzor a „hlas“, vlastní kurzor se štítky, magnetická tlačítka, pás povelů tlačený scrollem, diktát
+  odvíjený scrollem (připnutý, obří obrysové hodiny), věta o soukromí rozsvěcovaná po slovech, tok paketů ve schématu,
+  panel Clauda hrající scénu ke každé funkci, pravítko instalace. Vše respektuje `prefers-reduced-motion`.
+- Posudek nezávislého agenta „art director“ pomohl: odhalení písmen přes vlasový řez vypadalo rozbitě (teď jen
+  průhlednost + rozmazání), všechny sekce měly stejnou šablonu a tři mřížky stejných karet (teď každá jinak), Anybody
+  v malých velikostech působilo jako e-sportovní písmo. Kontrola: Playwright v `scratchpad`, snímky desktop + 390 px.
+- Písma jsou přímo na webu (žádné Google Fonts) a stránka nic neměří, protože slibuje „Ani tahle stránka nic neměří“.
+  CSP + `Permissions-Policy: microphone=()`.
+- **Úvodní video** (Remotion, viz níže) je ve `web/site/assets/video/` (`orbit.mp4`, `orbit.webm`, `poster.jpg`),
+  hraje ztlumeně ve smyčce, tlačítko pustí od začátku se zvukem. Bez `orbit.mp4` (nebo s `--no-video`) je místo něj
+  animovaný orrery. Hudba „Mountains“ (Andrew Ev, Mixkit) je uvedená v patičce.
+- Tlačítko „Stáhnout pro Windows“ na konci videa nejde kliknout (Pepa: „je na hovno“), proto na něj v čase
+  64,15–74,8 s přiletí shora skutečné tlačítko a levituje přesně nad ním (`#stageCta`; ve videu je 490×76 px se
+  středem na 818, 855 v 1920×1080, velikost přes `cqw`, o kousek větší, aby to nakreslené při levitaci nevykouklo).
+  Časy jsou z `video/src/scenes/Outro.tsx` (takt 33): když se konec videa přestříhá, musí se změnit
+  `CTA_IN`/`CTA_OUT` v `site.js`. Se zvukem video nehraje ve smyčce: po konci skočí na záběr v 70 s, tlačítko
+  zůstane a objeví se „Přehrát znovu“. Dokud není instalátor, tlačítko říká „Instalátor už brzy“ a vede na instalaci.
+- **Hosting gzipuje všechno**, i video: pak nefungují rozsahy bajtů (iPhone video nepřehraje, stahování bez velikosti).
+  `.htaccess` proto pro mp4/webm/exe/obrázky/písma kompresi vypíná (`no-gzip`). Cloudflare si soubory drží rok:
+  zlou kopii vyřeší jen změna `?v=`, tedy `ASSET_SALT` v `publish.py`.
+- Ukázka diktování na stránce je jen simulace (k mikrofonu nesahá), věrná aplikaci: červená při držení, oranžová při
+  přepisu, kratší než 0,3 s se nepřepisuje. Čísla na stránce jsou změřená (FLEURS, průměr 1,6 s po puštění).
+- **Instalátor**: `python web\publish.py --installer <cesta k exe>` ho nahraje jako `download/Orbit-Setup-<verze>.exe`
+  a zapíše `web/release.json`; stránka pak místo „Instalátor dokončujeme“ ukáže tlačítko, verzi, velikost a SHA-256.
+  Bez `--installer` se nahrají jen změněné soubory stránky. Podrobnosti a FTP (FTPS přes `ftp.m-tex.cz`, heslo
+  v `~/m-tex/private/ftp.netrc`, Windows curl useknul soubory) v `web/README.md`.
 
 ## GitHub
 

@@ -1,0 +1,40 @@
+# orbit.easya.cz – static page only. The Blueboard FTP account is shared with m-tex.cz, so nothing here may run code.
+DirectoryIndex index.html
+AddDefaultCharset utf-8
+
+<FilesMatch "\.(php\d?|phtml|phar|cgi|pl|py|sh)$">
+    Require all denied
+</FilesMatch>
+
+<IfModule mod_mime.c>
+    AddType image/svg+xml .svg
+    AddType font/woff2 .woff2
+    AddType video/mp4 .mp4
+    AddType video/webm .webm
+    AddType application/json .json
+    AddType application/vnd.microsoft.portable-executable .exe
+</IfModule>
+
+# The hosting gzips everything; for video and downloads that breaks byte ranges (iPhone Safari won't play the video,
+# the browser shows no download size or progress) and gains nothing, so these go out uncompressed.
+<IfModule mod_setenvif.c>
+    SetEnvIfNoCase Request_URI "\.(mp4|webm|exe|jpg|png|woff2)$" no-gzip dont-vary
+</IfModule>
+
+<IfModule mod_headers.c>
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+    Header always set Permissions-Policy "microphone=(), camera=(), geolocation=(), payment=()"
+    Header always set Strict-Transport-Security "max-age=31536000"
+    Header always set Content-Security-Policy "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    <FilesMatch "\.html$">
+        Header set Cache-Control "no-cache"
+    </FilesMatch>
+    # assets are referenced with ?v=<hash> and installers carry the version in the name, so they never change in place
+    <FilesMatch "\.(woff2|png|jpg|svg|mp4|webm|exe)$">
+        Header set Cache-Control "public, max-age=31536000, immutable"
+    </FilesMatch>
+    <FilesMatch "\.exe$">
+        Header set Content-Disposition "attachment"
+    </FilesMatch>
+</IfModule>
