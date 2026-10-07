@@ -258,6 +258,7 @@ def copy_app(dist: Path, whisper_dir: Path) -> None:
     shutil.copytree(ROOT / "assets", dist / "assets", ignore=shutil.ignore_patterns(*GENERATED_ASSETS))
     shutil.copytree(whisper_dir, dist / "whisper", ignore=shutil.ignore_patterns("*.log"))
     shutil.copy2(ROOT / "THIRD_PARTY_NOTICES.md", dist)
+    shutil.copy2(ROOT / "LICENSE", dist / "LICENSE.txt")  # Orbit's own licence (GPL-3.0-or-later)
     shutil.copytree(ROOT / "installer" / "licenses", dist / "licenses")  # (L)GPL texts the Qt/pynput wheels lack
 
 

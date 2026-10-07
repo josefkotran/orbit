@@ -792,6 +792,25 @@
     else ScrollTrigger.create({ trigger: "#install", start: "top 80%", end: "bottom 45%", scrub: 0.5, onUpdate: function (self) { setRuler(self.progress); } });
   }
 
+  /* ---------- copy buttons (the prompt for Claude Code, the PowerShell one-liner) ---------- */
+  $$("[data-copy]").forEach(function (btn) {
+    var label = btn.querySelector("span"), t = null;
+    btn.addEventListener("click", function () {
+      var src = $(btn.dataset.copy), text = src.textContent.replace(/\u00a0/g, " ").trim();
+      var ok = function () {
+        btn.classList.add("done"); label.textContent = "Zkopírováno ✓"; clearTimeout(t);
+        t = setTimeout(function () { btn.classList.remove("done"); label.textContent = "Zkopírovat"; }, 2200);
+      };
+      var fallback = function () {  // no clipboard API: select the text so Ctrl+C works
+        var r = document.createRange(); r.selectNodeContents(src);
+        var sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+        try { if (document.execCommand("copy")) ok(); } catch (e) {}
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, fallback);
+      else fallback();
+    });
+  });
+
   /* ---------- FAQ: answers slide open ---------- */
   $$("#faq details").forEach(function (d) {
     var sum = d.querySelector("summary"), ans = d.querySelector(".ans");

@@ -49,6 +49,8 @@
         <circle cx="25.8" cy="18.8" r="2" fill="currentColor" stroke="#1A2030" stroke-width="1.4"/>
       </g>
     </symbol>
+    <symbol id="i-github" viewBox="0 0 16 16"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M15.5 8.5V6.5a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
     <symbol id="i-star" viewBox="0 0 40 40"><path d="M20 2c1.4 10.6 7.4 16.6 18 18-10.6 1.4-16.6 7.4-18 18-1.4-10.6-7.4-16.6-18-18C12.6 18.6 18.6 12.6 20 2z" fill="currentColor"/></symbol>
   </defs>
 </svg>
@@ -70,6 +72,7 @@
       <a href="#claude">Claude Code</a>
       <a href="#instalace">Instalace</a>
     </div>
+    <a class="gh" href="https://github.com/josefkotran/orbit" aria-label="Zdrojový kód Orbitu na GitHubu" data-cursor="GitHub"><svg aria-hidden="true"><use href="#i-github"/></svg></a>
     <div class="themes" role="group" aria-label="Barva stránky, stejné jako v Orbitu">
       <button type="button" data-theme="blue" style="--c:#5B9DFF" aria-label="Modrá"></button>
       <button type="button" data-theme="violet" style="--c:#A78BFA" aria-label="Fialová"></button>
@@ -89,7 +92,7 @@
         <p class="lede rv">České diktování do kteréhokoli okna ve Windows. Přepisuje se přímo na tvé grafice, zvuk nikam neodchází. A když pracuješ s Claude Code, hlídá ti limity, relace i odpovědi.</p>
         <div class="hero-cta rv">
           <a class="btn when-ready" href="__HREF__" download data-magnetic data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-download"/></svg>Stáhnout pro Windows</span></a>
-          <p class="fine when-ready">Verze __VERSION__, __SIZE__.<br>Windows 10 a 11, 64bit.</p>
+          <p class="fine when-ready">Verze __VERSION__, __SIZE__. Windows 10 a 11, 64bit.<br>Zdarma a open source.</p>
           <a class="btn when-pending" href="#diktovani" data-magnetic data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-play"/></svg>Ukaž mi, jak to funguje</span></a>
           <p class="fine when-pending"><span class="pulse"></span>Instalátor dokončujeme, stažení bude tady.</p>
         </div>
@@ -392,6 +395,23 @@
         <li><span class="tick"></span><span class="num">4</span><h3>Připoj Claude Code</h3><p>Volitelně, přihlášením na stránce Anthropicu.</p></li>
       </ol>
     </div>
+    <div class="claude-install when-ready">
+      <div class="ci-text rv">
+        <h3>Nebo to nech na Claudovi</h3>
+        <p>Zkopíruj zadání do Claude Code. Claude si nejdřív přečte instalační skript, řekne ti, co udělá, a po tvém souhlasu Orbit nainstaluje: stáhne instalátor, ověří jeho kontrolní součet, nainstaluje ho a spustí.</p>
+        <p class="fine">Bez Clauda stačí vložit příkaz dole do PowerShellu. Skript si můžeš předem <a href="install.ps1">přečíst</a>.</p>
+      </div>
+      <div class="ci-boxes rv">
+        <div class="copybox">
+          <div class="cb-head"><span>Zadání pro Claude Code</span><button type="button" class="cb-copy" data-copy="#ciPrompt"><svg aria-hidden="true"><use href="#i-copy"/></svg><span>Zkopírovat</span></button></div>
+          <p class="cb-body" id="ciPrompt">Nainstaluj mi Orbit, české diktování pro Windows (https://orbit.easya.cz, zdrojový kód je na https://github.com/josefkotran/orbit). Nejdřív si stáhni a přečti instalační skript https://orbit.easya.cz/install.ps1 a v pár větách mi řekni, co udělá. Když bude v pořádku, spusť ho příkazem: powershell -NoProfile -Command "irm https://orbit.easya.cz/install.ps1 | iex". Až Orbit naběhne, provede mě průvodce nastavením. Nakonec mi krátce řekni, jak se s Orbitem diktuje.</p>
+        </div>
+        <div class="copybox">
+          <div class="cb-head"><span>PowerShell</span><button type="button" class="cb-copy" data-copy="#ciCmd"><svg aria-hidden="true"><use href="#i-copy"/></svg><span>Zkopírovat</span></button></div>
+          <code class="cb-body cb-code" id="ciCmd">irm https://orbit.easya.cz/install.ps1 | iex</code>
+        </div>
+      </div>
+    </div>
     <div class="install-foot">
       <div class="smart rv">
         <div class="smart-card" aria-hidden="true">
@@ -399,11 +419,12 @@
           <span class="link">Další informace</span>
           <span class="smart-btn">Přesto spustit</span>
         </div>
-        <p>Instalátor zatím nemá digitální podpis, takže Windows ho může zastavit. Klikni na <b>Další informace</b> a potom na <b>Přesto spustit</b>.</p>
+        <p>Stažený instalátor zatím nemá digitální podpis, takže Windows ho může zastavit. Klikni na <b>Další informace</b> a potom na <b>Přesto spustit</b>. Při instalaci přes Clauda nebo PowerShell se tohle okno obvykle neukáže, skript místo něj sám ověří kontrolní součet.</p>
       </div>
       <div class="install-cta rv">
         <a class="btn when-ready" href="__HREF__" download data-magnetic data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-download"/></svg>Stáhnout instalátor</span></a>
         <p class="sha when-ready">SHA-256: <code>__SHA256__</code></p>
+        <a class="btn ghost small" href="https://github.com/josefkotran/orbit"><span class="lbl"><svg aria-hidden="true"><use href="#i-github"/></svg>Zdrojový kód na GitHubu</span></a>
         <p class="fine when-pending"><span class="pulse"></span>Instalátor dokončujeme. Tlačítko ke stažení se objeví tady i nahoře.</p>
       </div>
     </div>
@@ -414,6 +435,7 @@
   <div class="wrap faq-grid">
     <div class="sticky"><h2 class="display kinetic" id="h-faq" data-kinetic="h2">Otázky.</h2></div>
     <div class="faq" id="faq">
+      <details class="rv"><summary>Kolik Orbit stojí?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Nic. Orbit je zdarma a open source pod licencí GNU GPL 3.0. Celý zdrojový kód, i se skripty, které staví instalátor, je <a href="https://github.com/josefkotran/orbit">na GitHubu</a>. Najdeš tam i licence všech přibalených součástí.</p></div></details>
       <details class="rv"><summary>Funguje Orbit i bez Claude Code?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Ano. Diktování, slovník a hlasové povely fungují samy. Claude Code přidává limity, přehled relací, předčítání a hlasového agenta.</p></div></details>
       <details class="rv"><summary>Posílá Orbit můj hlas na internet?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Ne. Nahrávku přepíše Whisper na tvé grafice. Ven může odejít jen text: když zapneš učení slovníku, nebo když hlasovému agentovi potvrdíš zprávu do Claude Code.</p></div></details>
       <details class="rv"><summary>Proč mě Windows před instalátorem varuje?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Instalátor zatím nemá placený podpis vydavatele, a takové programy Windows ze začátku hlídá. Když chceš mít jistotu, že je soubor celý a nezměněný, porovnej jeho kontrolní součet SHA-256 s tím, který je uvedený u instalace.</p></div></details>
@@ -432,7 +454,7 @@
     <p class="lede rv">Podrž klávesu a řekni, co chceš napsat. Zbytek udělá tvoje grafika.</p>
     <div class="rv closing-cta">
       <a class="btn when-ready" href="__HREF__" download data-magnetic data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-download"/></svg>Stáhnout pro Windows</span></a>
-      <p class="fine when-ready">Verze __VERSION__, __SIZE__. Windows 10 a 11, 64bit.</p>
+      <p class="fine when-ready">Verze __VERSION__, __SIZE__. Windows 10 a 11, 64bit. Zdarma a open source.</p>
       <a class="btn when-pending" href="#diktovani" data-magnetic data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-play"/></svg>Zkusit ukázku diktování</span></a>
       <p class="fine when-pending"><span class="pulse"></span>Instalátor dokončujeme, stažení bude tady.</p>
     </div>
@@ -444,7 +466,8 @@
   <div class="wrap">
     <a class="brand" href="#top" aria-label="Orbit, na začátek stránky" style="font-size:19px"><svg viewBox="0 0 32 32" aria-hidden="true"><g transform="rotate(-24 16 16)"><path d="M3 16a13 4.6 0 0 1 26 0" fill="none" stroke="currentColor" stroke-width="1.4" opacity=".5"/><circle cx="16" cy="16" r="6.6" fill="currentColor"/><path d="M3 16a13 4.6 0 0 0 26 0" fill="none" stroke="#04060C" stroke-width="2.8"/><path d="M3 16a13 4.6 0 0 0 26 0" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle class="moon" r="1.9" cx="25.9" cy="19" stroke="#04060C" stroke-width="1"/></g></svg>Orbit</a>
     <div>
-      <p>Orbit není produktem společnosti Anthropic. Claude a Claude Code jsou ochranné známky společnosti Anthropic, PBC.</p>
+      <p>Orbit je svobodný software pod licencí GNU GPL 3.0, zdrojový kód je <a href="https://github.com/josefkotran/orbit">na GitHubu</a>.</p>
+      <p style="margin-top:8px">Orbit není produktem společnosti Anthropic. Claude a Claude Code jsou ochranné známky společnosti Anthropic, PBC.</p>
       <p style="margin-top:8px">Rozpoznávání řeči: whisper.cpp a modely Whisper od OpenAI, obojí pod licencí MIT. Animace: GSAP a Lenis. Hudba ve videu: Mountains, Andrew Ev (Mixkit).</p>
     </div>
   </div>

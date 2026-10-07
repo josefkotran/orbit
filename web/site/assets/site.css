@@ -112,7 +112,10 @@ h3{font-family:var(--text-font);font-weight:600;font-stretch:112%;font-size:clam
 .themes button{width:14px;height:14px;padding:0;border-radius:50%;border:0;background:var(--c);position:relative;transition:transform .3s var(--ease)}
 .themes button:hover{transform:scale(1.3)}
 .themes button[aria-pressed="true"]{box-shadow:0 0 0 2px var(--space),0 0 0 3.5px var(--text)}
-@media (max-width:980px){.nav-links{display:none}.themes{margin-left:auto}}
+.gh{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;border:1px solid var(--line-2);color:var(--soft);transition:color .25s,border-color .25s,background-color .25s}
+.gh svg{width:18px;height:18px}
+.gh:hover{color:var(--text);border-color:rgba(var(--accent-rgb),.7);background:rgba(var(--accent-rgb),.12)}
+@media (max-width:980px){.nav-links{display:none}.gh{margin-left:auto}}
 @media (max-width:520px){.nav .btn{display:none}}
 
 /* ---------- buttons ---------- */
@@ -467,6 +470,24 @@ section{position:relative}
 .steps h3{margin-bottom:6px}
 .steps p{color:var(--soft);font-size:15.5px;max-width:28ch}
 @media (max-width:900px){.steps{grid-template-columns:repeat(2,minmax(0,1fr));gap:20px 24px}.orbit-path,.ruler-sat{display:none}.steps li{padding-top:8px;border-top:1px solid var(--line-2)}.steps .tick{display:none}}
+/* install through Claude Code: a prompt and a one-liner to copy */
+.claude-install{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);gap:28px clamp(40px,6vw,96px);margin-top:clamp(64px,8vw,110px);padding-top:clamp(40px,5vw,64px);border-top:1px solid var(--line);align-items:start}
+@media (max-width:900px){.claude-install{grid-template-columns:1fr}}
+.ci-text h3{font-size:clamp(22px,2vw,27px);margin-bottom:12px}
+.ci-text p{color:var(--soft);font-size:16.5px;max-width:46ch}
+.ci-text .fine{margin-top:12px}
+.ci-text a,.faq a,footer a:not(.brand){color:var(--text);text-decoration:underline;text-decoration-color:rgba(var(--accent-rgb),.7);text-underline-offset:4px;transition:color .25s}
+.ci-text a:hover,.faq a:hover,footer a:not(.brand):hover{color:var(--accent)}
+.ci-boxes{display:grid;gap:16px}
+.copybox{border-radius:16px;border:1px solid var(--line-2);background:rgba(10,14,26,.72);overflow:hidden;transition:border-color .3s}
+.copybox:hover{border-color:rgba(var(--accent-rgb),.55)}
+.cb-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 12px 10px 16px;border-bottom:1px solid var(--line);font-size:13.5px;color:var(--dim)}
+.cb-copy{display:inline-flex;align-items:center;gap:7px;font:600 13.5px/1 var(--text-font);font-stretch:108%;color:var(--text);background:rgba(255,255,255,.05);border:1px solid var(--line-2);border-radius:999px;padding:8px 13px;cursor:pointer;transition:background-color .25s,border-color .25s,color .25s}
+.cb-copy svg{width:15px;height:15px}
+.cb-copy:hover{border-color:rgba(var(--accent-rgb),.8);background:rgba(var(--accent-rgb),.14)}
+.cb-copy.done{color:var(--done);border-color:rgba(61,214,140,.6)}
+.cb-body{display:block;margin:0;padding:16px;font-size:15px;line-height:1.6;color:var(--soft);user-select:all}
+.cb-code{font-family:Consolas,"Cascadia Mono",monospace;font-size:15px;color:var(--text);white-space:nowrap;overflow-x:auto}
 .install-foot{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:32px clamp(40px,6vw,96px);margin-top:clamp(56px,7vw,90px);align-items:center}
 @media (max-width:900px){.install-foot{grid-template-columns:1fr}}
 .smart{display:flex;gap:24px;align-items:center}

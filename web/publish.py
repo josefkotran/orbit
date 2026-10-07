@@ -119,6 +119,9 @@ def render(with_video: bool = True) -> dict:
         sys.exit(f"Nevyplněné značky v index.html: {sorted(set(leftover))}")
     html = version_assets(czech_typography(html))
     (DIST / "index.html").write_text(html, encoding="utf-8", newline="\n")
+    if release:  # what install.ps1 reads: which file to download and the SHA-256 it must have
+        (DIST / "download").mkdir(exist_ok=True)
+        (DIST / "download" / "latest.json").write_text(json.dumps(release, indent=2) + "\n", encoding="utf-8")
     return release
 
 

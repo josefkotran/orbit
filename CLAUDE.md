@@ -701,6 +701,10 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 - **Podpis**: instalátor je nepodepsaný, SmartScreen ukáže „neznámý vydavatel“. Pro rozdávání ve velkém je potřeba
   certifikát; build ho umí přes `ORBIT_SIGN_PFX` (+ `ORBIT_SIGN_PASSWORD`), `ORBIT_SIGN_THUMBPRINT` nebo
   `ORBIT_SIGN_COMMAND` (Azure Trusted Signing), podepíše whisper-server a jeho DLL, instalátor i odinstalátor.
+- **Rozhodnuto 7. 10. 2026** (Pepa: „udělej to jako opensource; slib potvrzuji, nechci na tom nic vydělávat“):
+  Orbit je **GPL-3.0-or-later** (`LICENSE`, v instalaci `LICENSE.txt`, úvod `THIRD_PARTY_NOTICES.md`), repozitář
+  https://github.com/josefkotran/orbit je **veřejný**, Piper zůstává v instalátoru. Písemnou nabídku zdrojáků na 3 roky
+  Pepa potvrdil, žádosti přes GitHub Issues. Instalátor je na webu (viz Web). Body níž jsou původní rozbor.
 - **Licence – rozhodnout před rozdáváním** (podrobně `THIRD_PARTY_NOTICES.md`):
   - **Orbit sám nemá licenci** (žádný `LICENSE`), to je potřeba vyřešit i pro kamarády.
   - **Piper (piper-tts) a espeak-ng jsou GPL-3.0**: Orbit Piper načítá do svého procesu, takže build s Piperem smí
@@ -812,7 +816,15 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 - Ukázka diktování na stránce je jen simulace (k mikrofonu nesahá), věrná aplikaci: červená při držení, oranžová při
   přepisu, kratší než 0,3 s se nepřepisuje. Čísla na stránce jsou změřená (FLEURS, průměr 1,6 s po puštění).
 - **Instalátor**: `python web\publish.py --installer <cesta k exe>` ho nahraje jako `download/Orbit-Setup-<verze>.exe`
-  a zapíše `web/release.json`; stránka pak místo „Instalátor dokončujeme“ ukáže tlačítko, verzi, velikost a SHA-256.
+  a zapíše `web/release.json` (na webu i jako `download/latest.json`); stránka pak místo „Instalátor dokončujeme“
+  ukáže tlačítko, verzi, velikost a SHA-256. Novou verzi = zvednout `VERSION`, sestavit, `publish.py --installer`.
+- **Instalace přes Clauda / jedním příkazem** (Pepa chtěl, „aby si to mohl každý nainstalovat v Claude sám“):
+  `irm https://orbit.easya.cz/install.ps1 | iex` (`web/site/install.ps1`): přečte `download/latest.json`, stáhne
+  instalátor, ověří SHA-256, nainstaluje `/SILENT /CURRENTUSER` a Orbit spustí (při tiché instalaci by ho Inno
+  nespustil). `ORBIT_INSTALL_DRYRUN=1` skončí po kontrole součtu. Na stránce je zadání pro Claude Code ke zkopírování:
+  nejdřív si skript přečíst a říct, co udělá, pak ho spustit přes `powershell -NoProfile -Command "…"`. Soubor
+  stažený skriptem nemá značku z internetu, SmartScreen se tak neozve; ochranou je kontrolní součet.
+- Stránka odkazuje na GitHub (menu, instalace, otázka „Kolik Orbit stojí?“, patička).
   Bez `--installer` se nahrají jen změněné soubory stránky. Podrobnosti a FTP (FTPS přes `ftp.m-tex.cz`, heslo
   v `~/m-tex/private/ftp.netrc`, Windows curl useknul soubory) v `web/README.md`.
 
@@ -835,7 +847,8 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 
 ## GitHub
 
-Soukromý repozitář **https://github.com/josefkotran/orbit**, větev `main`. Vytvořen přes GitHub API s tokenem
+Repozitář **https://github.com/josefkotran/orbit**, větev `main`, **od 7. 10. 2026 veřejný** (GPL-3.0). Nic osobního
+do něj nepatří: `config.json`, `orbit.log`, `recordings/`, `sessions/` a hudba videa hlídá `.gitignore`. Vytvořen přes GitHub API s tokenem
 z Git Credential Manageru (`git credential fill`, `GCM_INTERACTIVE=never`), protože `gh` chybí. Push funguje normálně.
 Autor commitů: `Josef Kotran <josef.kotran@seznam.cz>`. `whisper-server.exe` má 59 MB, GitHub jen varuje (limit 100 MB);
 ve `whisper-next/` je největší `ggml-vulkan.dll` (56 MB). Výstupy buildu (`build/cache`, `tools`, `dist`, `output`)

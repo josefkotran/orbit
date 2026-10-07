@@ -1,74 +1,71 @@
 # Orbit
 
-Malý pomocník, který obíhá nad všemi okny ve Windows:
+**České diktování do kteréhokoli okna ve Windows.** Podržíš klávesu, řekneš větu a pustíš: text se objeví tam, kde
+máš kurzor, i s diakritikou a interpunkcí. Řeč rozpoznává Whisper large-v3 přímo na tvé grafice (whisper.cpp
+s Vulkanem), takže zvuk nikam neodchází.
 
-- **Diktování česky push-to-talk** do libovolného okna. Běží lokálně na grafice (Whisper large-v3 přes whisper.cpp + Vulkan),
-  zvuk nikam neodchází.
-- **Přehled limitů Clauda** nad mikrofonem: 5hodinové okno, týdenní limit a Fable.
+Když pracuješ s **Claude Code**, Orbit nad plovoucím mikrofonem ukazuje limity a stav relací, přečte ti hotové
+odpovědi a hlasový agent ti pošle zadání do relace, až mu řekneš „jo“.
 
-## Použití
+Web: **https://orbit.easya.cz**
 
-- Spusť zástupce **Orbit** (plocha / nabídka Start).
-- **Drž zvolenou klávesu**, po pípnutí mluv, pusť – text se vloží tam, kde máš kurzor.
-- Totéž jde myší: drž levé tlačítko na plovoucím mikrofonu. Tažením ho přesuneš, pravým tlačítkem otevřeš menu.
-- Nastavení: klik na ikonu v oznamovací oblasti vedle hodin.
+## Instalace
 
-Barvy mikrofonu: tmavá = připraveno, červená = nahrávám (kruh ukazuje hlasitost), oranžová = přepisuji, šedá = načítám model.
+- **Instalátor** z https://orbit.easya.cz. Nainstaluje se jen pro tebe, bez práv správce. Při prvním spuštění
+  tě provede průvodce: jméno, mikrofon, klávesa, model (stáhne se sám) a připojení Clauda.
+- **Jedním příkazem v PowerShellu** (stáhne instalátor, ověří SHA-256 a nainstaluje ho; skript je
+  [`web/site/install.ps1`](web/site/install.ps1)):
+  ```powershell
+  irm https://orbit.easya.cz/install.ps1 | iex
+  ```
+- **Přes Claude Code:** napiš Claudovi „Nainstaluj mi Orbit z https://orbit.easya.cz. Nejdřív si přečti
+  https://orbit.easya.cz/install.ps1, řekni mi, co udělá, a pak ho spusť.“
 
-- **Slovník** (v nastavení): jména, značky a výrazy, které má psát přesně takhle – Whisper je dostane jako nápovědu.
-- **Hlasové povely**: „nový řádek“ a „nový odstavec“ (v režimu psaní se posílá Shift+Enter, aby chat zprávu neodeslal).
-- **Mikrofon je zapnutý jen při držení klávesy** (a v okně nastavení kvůli ukazateli hlasitosti). Headset po zapnutí
-  chvíli posílá ticho, proto pípnutí a červené tlačítko přijdou až ve chvíli, kdy zvuk opravdu teče.
-- **Využití Clauda**: stejná čísla jako `/usage` v Claude Code, obnovuje se každé 2 minuty, po najetí myší ukáže časy
-  obnovení. Čte přihlášení Claude Code z `~/.claude/.credentials.json` (jen čte, token neobnovuje – to dělá Claude Code
-  sám). Endpoint `/api/oauth/usage` je interní, může se časem změnit.
+## Co potřebuje počítač
 
-## Instalace na jiném počítači
+- Windows 10 (1809+) nebo 11, 64bit.
+- Grafiku s Vulkanem (NVIDIA, AMD, Intel). Na large-v3 aspoň 6 GB paměti grafiky, jinak Orbit vezme rychlejší
+  turbo. Bez grafiky přepisuje procesor, jen pomalu.
+- Místo na model: 3,1 GB (turbo 1,6 GB), stáhne se při prvním spuštění.
+- Volitelně Claude Code s vlastním předplatným Claude (limity, relace, předčítání, hlasový agent) a Google Chrome
+  (otevírání stránek hlasem).
 
-Potřeba: Windows 10/11, Python 3.13, grafika s Vulkanem (bez ní poběží whisper pomalu na procesoru).
+## Soukromí
+
+- Mikrofon je otevřený jen po dobu, kdy držíš klávesu (a v okně nastavení kvůli ukazateli hlasitosti).
+- Přepis běží lokálně. Claude dostane jen text, a jen když to zapneš: učení slovníku z diktátů, nebo zpráva,
+  kterou hlasovému agentovi potvrdíš.
+- Orbit nikdy nechce heslo ani token od Clauda: přihlašuješ se v Claude Code na stránce Anthropicu.
+
+## Přesnost
+
+Měřeno na 150 nahrávkách z české části datasetu FLEURS (Radeon RX 9070 XT):
+
+| Model | chybná slova | chybné znaky | přepis |
+|---|---|---|---|
+| large-v3 | 8,9 % | 2,5 % | 1,9 s |
+| large-v3-turbo | 10,2 % | 2,9 % | 0,9 s |
+
+## Vývoj
+
+Potřeba Python 3.13.
 
 ```powershell
 git clone https://github.com/josefkotran/orbit.git
 cd orbit
 python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
-mkdir models
-curl.exe -L -o models\ggml-large-v3.bin https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin
 .venv\Scripts\pythonw.exe Orbit.pyw
 ```
 
-Volitelně i rychlejší `ggml-large-v3-turbo.bin` (stejná adresa). Model se vybírá v nastavení.
+Model si Orbit stáhne sám. V `whisper/` je `whisper-server.exe` (whisper.cpp 1.9.4 s Vulkanem a variantami pro
+procesor). Jak ho přeložit a jak sestavit instalátor, popisuje [`build/README.md`](build/README.md). Rozhodnutí
+a jejich důvody (proč co funguje tak, jak funguje) jsou v [`CLAUDE.md`](CLAUDE.md). Web je ve [`web/`](web/README.md),
+úvodní video v [`video/`](video/README.md).
 
-## Soubory
+## Licence
 
-| Cesta | Co to je |
-|---|---|
-| `Orbit.pyw` | spouštěcí skript (pythonw = bez konzole) |
-| `app/` | aplikace (PySide6, sounddevice, pynput) |
-| `whisper/` | `whisper-server.exe` zkompilovaný s Vulkanem (+ licence whisper.cpp) |
-| `models/` | modely Whisper – nejsou v gitu, stáhnou se zvlášť |
-| `config.json` | nastavení (vytvoří se při prvním spuštění, není v gitu) |
-| `orbit.log` | log aplikace – sem koukni, když něco nefunguje |
-| `recordings/` | posledních 30 nahrávek, když je zapnuté ukládání (není v gitu) |
+Orbit je svobodný software pod licencí **GNU GPL 3.0 nebo novější** ([`LICENSE`](LICENSE)). Přibalené a stahované
+součásti mají vlastní licence, přehled je v [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
-## Přesnost modelů
-
-Měřeno na 150 nahrávkách z české části datasetu FLEURS (RX 9070 XT):
-
-| Model | chybná slova | chybné znaky | přepis |
-|---|---|---|---|
-| large-v3 | 8,9 % | 2,5 % | 1,9 s |
-| large-v3-turbo | 10,2 % | 2,9 % | 0,9 s |
-| mikr/whisper-large-v3-czech-cv13 (q5_0) | 11,3 % | 4,8 % | 1,9 s |
-
-## Poznámky
-
-- Do oken spuštěných **jako správce** Windows vkládat nedovolí (ochrana UIPI).
-- whisper.cpp v1.9.4 nemá pro Windows oficiální build s Vulkanem, `whisper/` je zkompilovaný přes MSYS2 (UCRT64):
-  ```
-  pacman -S mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,vulkan-devel,shaderc}
-  cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON -DBUILD_SHARED_LIBS=OFF \
-        -DCMAKE_EXE_LINKER_FLAGS='-static-libgcc -static-libstdc++'
-  cmake --build build --target whisper-server
-  ```
-  a vedle exe je potřeba `libwinpthread-1.dll` z `ucrt64/bin`.
+Orbit není produktem společnosti Anthropic. Claude a Claude Code jsou ochranné známky společnosti Anthropic, PBC.

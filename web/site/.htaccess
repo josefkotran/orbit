@@ -11,7 +11,8 @@ AddDefaultCharset utf-8
     AddType font/woff2 .woff2
     AddType video/mp4 .mp4
     AddType video/webm .webm
-    AddType application/json .json
+    AddType "application/json; charset=utf-8" .json
+    AddType "text/plain; charset=utf-8" .ps1
     AddType application/vnd.microsoft.portable-executable .exe
 </IfModule>
 
@@ -27,7 +28,7 @@ AddDefaultCharset utf-8
     Header always set Permissions-Policy "microphone=(), camera=(), geolocation=(), payment=()"
     Header always set Strict-Transport-Security "max-age=31536000"
     Header always set Content-Security-Policy "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
-    <FilesMatch "\.html$">
+    <FilesMatch "\.(html|ps1|json)$">
         Header set Cache-Control "no-cache"
     </FilesMatch>
     # assets are referenced with ?v=<hash> and installers carry the version in the name, so they never change in place

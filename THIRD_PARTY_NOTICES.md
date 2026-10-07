@@ -1,9 +1,14 @@
 # Third-party notices
 
-Orbit is made by Josef Kotran. The installer ships the components below with Orbit, and Orbit downloads a few more
-on first use. Each component keeps its own licence. In an installed Orbit
-(`%LOCALAPPDATA%\Programs\Orbit`) you'll find the licence texts here:
+Orbit is made by Josef Kotran and is free software: you can redistribute it and/or modify it under the terms of the
+GNU General Public License, version 3 or (at your option) any later version. Orbit comes with no warranty. The
+licence text is `LICENSE` in the source and `LICENSE.txt` in an installed Orbit. The complete source code, including
+the build scripts that make the installer, is at https://github.com/josefkotran/orbit.
 
+The installer ships the components below with Orbit, and Orbit downloads a few more on first use. Each component
+keeps its own licence. In an installed Orbit (`%LOCALAPPDATA%\Programs\Orbit`) you'll find the licence texts here:
+
+- `LICENSE.txt` is Orbit's own licence (GNU GPL 3.0).
 - `licenses\` has the GNU GPL 3.0 and LGPL 3.0 texts and `python-packages.txt`, which lists every bundled Python
   package with its version and licence. The build script writes that list.
 - `runtime\LICENSE.txt` is Python's licence, including the components Python bundles.
@@ -43,12 +48,12 @@ on first use. Each component keeps its own licence. In an installed Orbit
   source in `runtime\Lib\site-packages\pynput`, and you can edit or replace it.
 - Source code: Qt 6.11.2 and PySide6 6.11.2 are at download.qt.io (links above). pynput 1.8.2 is on PyPI and GitHub.
   On request, Josef Kotran will send the exact source of every LGPL/GPL component in this installer for 3 years
-  after the release.
+  after the release. Ask through https://github.com/josefkotran/orbit/issues.
 
 ### Piper and espeak-ng (GPL-3.0-or-later)
 
-Orbit loads Piper into its own process. The GPL therefore covers Orbit as distributed together with Piper. A build
-that includes Piper may only be distributed under GPL-3.0-compatible terms, with Orbit's source available.
+Orbit loads Piper into its own process. The GPL therefore covers Orbit as distributed together with Piper, which is
+one reason Orbit itself is licensed under the GPL 3.0 and its source is public (see the top of this file).
 `build_installer.py --without-piper` makes a build without Piper and onnxruntime. In that build, Orbit reads aloud
 with the Windows voice only.
 
