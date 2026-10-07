@@ -964,6 +964,27 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 - Stránka odkazuje na GitHub (menu, instalace, otázka „Kolik Orbit stojí?“, patička).
   Bez `--installer` se nahrají jen změněné soubory stránky. Podrobnosti a FTP (FTPS přes `ftp.m-tex.cz`, heslo
   v `~/m-tex/private/ftp.netrc`, Windows curl useknul soubory) v `web/README.md`.
+- **Kolo oprav 7. 10. večer** (Pepa: „neplynulé scrollování a náhodné létající hvězdy“; 12 auditorů, 9 balíčků oprav
+  s nezávislou kontrolou, commit 24f6b87). Příčiny, ať se nevrátí:
+  - *Scroll*: Lenis během dojezdu kolečka přepisoval nativní scroll (klávesy, posuvník, prostřední tlačítko) a táhl
+    stránku zpět; teď mu tyhle vstupy dají přednost. Kotvy jedou plynule (ne expo-out se skokem 500 px). Smyčka
+    `frame()` nesmí číst layout (`getBoundingClientRect`) ani kreslit sekce mimo obrazovku; nekonečné CSS animace
+    se pod obrazovkou zastaví, eq pruhy jdou přes `transform`.
+  - *Hvězdy*: rychlost se násobila časem snímku dvakrát (Lenis `velocity` už je za snímek), jeden práh přepínal
+    všechny hvězdy naráz na čáry, hyperprostor se spouštěl i bez pohybu myši (tlačítko přijelo pod kurzor), na mobilu
+    každá změna výšky (adresní řádek) hvězdy vygenerovala znovu. Teď rychlost podle času, stopa po hvězdách zvlášť,
+    warp jen po skutečném pohybu myši nad tlačítkem, při změně jen výšky se pole nepřegeneruje.
+  - Video má `preload="none"` a hraje, až je vidět (bez JS jen plakát), má tlačítko pauzy. CSS/JS mají v `.htaccess`
+    cache na rok (mají `?v=`). `install.ps1` odmítne běžet, když Orbit běží (mutex), a kontroluje `latest.json`
+    (jméno, formát SHA-256, velikost). Přibyl `robots.txt`.
+  - Měřeno v headless Chromu (1440×900, 9000 px kolečkem): snímky nad 25 ms 23 → 6–9, p95 33 → 17 ms.
+  - **Nehotové, příště**: animované nadpisy pořád zapisují `font-variation-settings` každému písmenu v každém snímku
+    (největší zbývající cena, 3–20 ms na snímek); první pokus (zaokrouhlit osy, psát jen při změně) rozkmital vlnu
+    nadpisu v úvodu, proto nevyšel. Na rozhodnutí Pepy: nový nadpis sekce Claude Code, tlačítko „Zastavit pohyb“,
+    přestavba sekce instalace, menší verze videa pro mobil (nový export ve `video/`), přesměrování HTTP→HTTPS
+    v Cloudflare. Dál CSP s hashem místo `'unsafe-inline'`, podmnožina písem, 404/sitemap/JSON-LD.
+  - Testy webu: Playwright jen headless (Orbit píše diktát do okna v popředí). WebKit v Playwrightu na Windows nepřehraje
+    ani MP4, ani WebM a `load` pak může viset: čekat na `domcontentloaded`, video v testu vypnout.
 
 ## Úvodní video (od 3. 10. 2026)
 
