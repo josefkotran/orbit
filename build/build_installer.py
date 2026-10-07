@@ -6,11 +6,13 @@ The bundle (build/dist/Orbit) is exactly what the installer puts into %LOCALAPPD
 It's started as runtime\\pythonw.exe Orbit.pyw. Models aren't in it, Orbit downloads them on first run.
 
     .venv\\Scripts\\python.exe build\\build_installer.py [--whisper-dir whisper-next] [--without-piper] [--no-installer]
+    .venv\\Scripts\\python.exe build\\build_installer.py --update-lock    (after a change in requirements.txt)
 
 Downloads (cached in build/cache, Inno Setup in build/tools) need internet the first time. See build/README.md.
 """
 import argparse
 import ctypes
+import json
 import os
 import re
 import shutil
@@ -42,6 +44,35 @@ INNO_SHA256 = "9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732"
 INNO_DIR = BUILD / "tools" / "InnoSetup"
 
 PIPER_PACKAGES = {"piper-tts", "onnxruntime"}  # GPL-3.0 Piper and its ONNX runtime: left out by --without-piper
+PIP_TARGET = ["--only-binary=:all:", "--platform", "win_amd64", "--python-version", "3.13", "--implementation", "cp"]
+# Every wheel in runtime\Lib\site-packages with the SHA-256 PyPI served for it (win_amd64, CPython 3.13). pip installs
+# exactly these (--require-hashes --no-deps): requirements.txt pins only Orbit's direct dependencies, so a new release
+# of urllib3, idna, certifi… would otherwise go into the next installer unnoticed. "piper" = only Piper needs it
+# (--without-piper leaves it out). After changing requirements.txt refresh it on purpose with --update-lock (it
+# rewrites this block) and check the git diff.
+BUNDLE_LOCK = """
+certifi==2026.7.22 sha256:62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775
+cffi==2.1.1 sha256:1aa5645c30469b09530c4ebca77ebf8f17618293c58f8549cb1a543a50236e7d
+charset-normalizer==3.5.2 sha256:78456a747de8dc58360ffa581f30a002baf5aa28cb262536545e91f113ed7639
+flatbuffers==25.12.19 sha256:7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4 piper
+idna==3.20 sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
+numpy==2.5.3 sha256:71cad2b2a7451ab79d8f5e71b453485b6775963d5cf794179144a7463fe6e8ec
+onnxruntime==1.30.0 sha256:4b63041bd623a9a9ac5e353948436c6fa7f43edd12d6b4a4ebc340bca959ba93 piper
+packaging==26.3 sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c piper
+pathvalidate==3.3.1 sha256:5263baab691f8e1af96092fa5137ee17df5bdfbd6cff1fcac4d6ef4bc2e1735f piper
+piper-tts==1.8.0 sha256:5da9bfdb05dfe15da3536859d422e605483ffa6d2b3ec2c5b9593bae6b5aa6a4 piper
+protobuf==7.36.2 sha256:a300819d441e078a5608c0d3c709796bb548136058fda017ae51d425b44fd353 piper
+pycparser==3.0 sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992
+pynput==1.8.2 sha256:8cc38cf13a6ab2749cb375678be8a0fd705d7ce49c8001ff5db4007a723bbef1
+PySide6==6.11.2 sha256:3201d67e3c10be2eaedd3910ff0f02351eca7e88c95a291cde5e7f2f55ef207f
+PySide6_Addons==6.11.2 sha256:f449ea4431da20e7b86752cca8d166f93434516fe417f981c27e5f8e1b554407
+PySide6_Essentials==6.11.2 sha256:c8a29def77032773a30879f7f24415b5395ad08592d147c170824ef4c735dfc1
+requests==2.34.2 sha256:2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0
+shiboken6==6.11.2 sha256:6ab0eba1c904455df621f9a6df3ca2bb896bab8670572d2bc4e37804ae91f19a
+six==1.17.0 sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274
+sounddevice==0.5.6 sha256:7f4162f514f007b0bf25a3ccfed3f1705bc2ec311888a90232729eec4f57a4f4
+urllib3==2.8.0 sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3
+"""
 GENERATED_ASSETS = ("*.wav", "chevron.png")  # made by Orbit at runtime (see .gitignore)
 
 # PySide6 is ~640 MB; Orbit needs a small part. Qt modules come from what app/ imports, plus these plugins.
@@ -148,22 +179,89 @@ def make_runtime(runtime: Path) -> None:
         "python313.zip\n.\nLib\\site-packages\n..\n", encoding="utf-8")
 
 
-def install_packages(site: Path, without_piper: bool) -> None:
+def canon(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def requirements(without_piper: bool) -> list[str]:
+    """The lines of requirements.txt (Orbit's direct dependencies)."""
     reqs = []
     for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines():
-        name = re.split(r"[<>=!~;\[\s]", line.strip(), maxsplit=1)[0].lower().replace("_", "-")
+        name = canon(re.split(r"[<>=!~;\[\s]", line.strip(), maxsplit=1)[0])
         if name and not name.startswith("#") and not (without_piper and name in PIPER_PACKAGES):
             reqs.append(line.strip())
+    return reqs
+
+
+def read_lock(text: str | None = None) -> list[tuple[str, str, str, bool]]:
+    """(name, version, sha256, only for Piper) for each line of BUNDLE_LOCK."""
+    pins = []
+    for line in (BUNDLE_LOCK if text is None else text).strip().splitlines():
+        m = re.fullmatch(r"([\w.-]+)==(\S+) sha256:([0-9a-f]{64})( piper)?", line.strip())
+        if not m:
+            sys.exit(f"Vadný řádek zámku balíčků v build_installer.py: {line}")
+        pins.append((m[1], m[2], m[3], bool(m[4])))
+    return pins
+
+
+def locked_requirements(without_piper: bool) -> list[str]:
+    """pip requirement lines with hashes from BUNDLE_LOCK. Stops when requirements.txt wants something the lock
+    doesn't have (a new package or another version)."""
+    pins = read_lock()
+    versions = {canon(name): version for name, version, _, _ in pins}
+    for line in requirements(without_piper):
+        m = re.match(r"([\w.-]+)\s*(==\s*([^\s;]+))?", line)
+        name = canon(m[1])
+        if name not in versions or (m[3] and m[3] != versions[name]):
+            sys.exit(f"requirements.txt chce {line}, zámek balíčků v build_installer.py má "
+                     f"{versions.get(name, 'nic')}. Spusť build_installer.py --update-lock a zkontroluj git diff.")
+    return [f"{name}=={version} --hash=sha256:{sha}" for name, version, sha, piper in pins
+            if not (without_piper and piper)]
+
+
+def install_packages(site: Path, without_piper: bool) -> None:
+    reqs = locked_requirements(without_piper)
     req_file = CACHE / "requirements-bundle.txt"
     req_file.write_text("\n".join(reqs) + "\n", encoding="utf-8")
     cmd = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location",
-           "--target", str(site), "--only-binary=:all:", "--platform", "win_amd64", "--python-version", "3.13",
-           "--implementation", "cp", "-r", str(req_file)]
+           "--require-hashes", "--no-deps", "--target", str(site), *PIP_TARGET, "-r", str(req_file)]
     if sys.version_info[:2] != (3, 13):
         cmd.append("--no-compile")  # .pyc made by another Python version would just be ignored
-    print("pip install " + " ".join(reqs))
+    print("pip install " + " ".join(r.split(" --hash")[0] for r in reqs))
     subprocess.run(cmd, check=True)
     shutil.rmtree(site / "bin", ignore_errors=True)  # console scripts (pyside6-designer, …)
+
+
+def resolve(reqs: list[str]) -> dict[str, tuple[str, str]]:
+    """What pip picks for these requirements on the target, from PyPI: name -> (version, sha256). Installs nothing."""
+    with tempfile.TemporaryDirectory(prefix="orbit-lock-") as tmp:
+        req_file, report = Path(tmp, "requirements.txt"), Path(tmp, "report.json")
+        req_file.write_text("\n".join(reqs) + "\n", encoding="utf-8")
+        subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--quiet", "--dry-run",
+                        "--ignore-installed", "--report", str(report), "--target", str(Path(tmp, "site")),
+                        *PIP_TARGET, "-r", str(req_file)], check=True)
+        installs = json.loads(report.read_text(encoding="utf-8"))["install"]
+    return {i["metadata"]["name"]: (i["metadata"]["version"], i["download_info"]["archive_info"]["hashes"]["sha256"])
+            for i in installs}
+
+
+def update_lock(script: Path = Path(__file__)) -> None:
+    """Resolves requirements.txt again and rewrites BUNDLE_LOCK in this script."""
+    full, core = resolve(requirements(False)), {canon(name) for name in resolve(requirements(True))}
+    lines = [f"{name}=={version} sha256:{sha}" + ("" if canon(name) in core else " piper")
+             for name, (version, sha) in sorted(full.items(), key=lambda item: canon(item[0]))]
+    with open(script, encoding="utf-8", newline="") as f:
+        text = f.read()
+    block = re.search(r'(?ms)^BUNDLE_LOCK = """(.*?)^"""', text)
+    if not block:
+        sys.exit(f"V {script} chybí BUNDLE_LOCK.")
+    nl = "\r\n" if "\r\n" in text else "\n"
+    with open(script, "w", encoding="utf-8", newline="") as f:
+        f.write(text[:block.start()] + f'BUNDLE_LOCK = """{nl}' + nl.join(lines) + f'{nl}"""' + text[block.end():])
+    old, new = {canon(n): v for n, v, _, _ in read_lock(block[1])}, {canon(n): v for n, (v, _) in full.items()}
+    changes = [f"{n} {old.get(n, '–')} -> {new.get(n, 'pryč')}" for n in sorted(old.keys() | new.keys())
+               if old.get(n) != new.get(n)]
+    print(f"Zámek balíčků ({len(lines)}) zapsán do {script}: " + (", ".join(changes) or "beze změny"))
 
 
 def used_qt_modules() -> set[str]:
@@ -290,10 +388,14 @@ def verify(dist: Path) -> None:
     env.update(PATH=f"{system}\\System32;{system};{system}\\System32\\Wbem", QT_QPA_PLATFORM="offscreen",
                QT_QPA_FONTDIR=f"{system}\\Fonts",  # the offscreen platform has no fonts of its own
                ORBIT_DATA_DIR=str(temp / "data"), ORBIT_CLAUDE_DIR=str(temp / "claude"))
+    # a downloaded Piper voice (only read: the check copies it) for reading aloud from a folder with diacritics
+    voices = next((d for d in (ROOT / "models" / "piper",
+                               Path(os.environ.get("LOCALAPPDATA", ROOT)) / "Orbit" / "models" / "piper")
+                   if any(d.glob("*.onnx.json"))), "")
     before = {p for p in dist.rglob("*")}
     # without -s, the way Orbit starts this Python itself (the check fails if sys.path leaves the bundle)
     r = subprocess.run([str(dist / "runtime" / "python.exe"), str(BUILD / "verify_bundle.py"), str(dist),
-                        str(temp)], env=env, cwd=temp)
+                        str(temp), str(voices)], env=env, cwd=temp)
     # whatever the check generated inside the bundle (bytecode, sounds, logs) must not end up in the installer
     for p in sorted({p for p in dist.rglob("*")} - before, key=lambda p: len(p.parts), reverse=True):
         if p.is_dir():
@@ -321,10 +423,17 @@ def ensure_inno() -> Path:
 
 
 def sign_command() -> str | None:
-    """Inno Setup style sign command ($f = the quoted file, $q = a quote), or None when signing isn't set up."""
+    """Inno Setup style sign command ($f = the quoted file, $q = a quote), or None when signing isn't set up.
+    Never with a password: the command goes into the ISCC and signtool command lines, which any process of the user
+    can read (Win32_Process.CommandLine)."""
     if os.environ.get("ORBIT_SIGN_COMMAND"):
         return os.environ["ORBIT_SIGN_COMMAND"]
     pfx, thumb = os.environ.get("ORBIT_SIGN_PFX"), os.environ.get("ORBIT_SIGN_THUMBPRINT")
+    if pfx and os.environ.get("ORBIT_SIGN_PASSWORD"):
+        sys.exit("Podepisování: heslo k PFX by bylo vidět v příkazové řádce signtoolu a ISCC. Naimportuj certifikát "
+                 "do úložiště Windows (Import-PfxCertificate -FilePath <soubor.pfx> -CertStoreLocation "
+                 "Cert:\\CurrentUser\\My, bez -Exportable) a místo ORBIT_SIGN_PFX a ORBIT_SIGN_PASSWORD nastav "
+                 "ORBIT_SIGN_THUMBPRINT, nebo použij ORBIT_SIGN_COMMAND.")
     if not pfx and not thumb:
         return None
     signtool = os.environ.get("ORBIT_SIGNTOOL") or next(iter(sorted(
@@ -335,8 +444,7 @@ def sign_command() -> str | None:
     stamp = os.environ.get("ORBIT_SIGN_TIMESTAMP", "http://timestamp.digicert.com")
     cmd = f"$q{signtool}$q sign /fd sha256 /tr {stamp} /td sha256 /d Orbit "
     if pfx:
-        cmd += f"/f $q{pfx}$q " + (f"/p $q{os.environ['ORBIT_SIGN_PASSWORD']}$q "
-                                    if os.environ.get("ORBIT_SIGN_PASSWORD") else "")
+        cmd += f"/f $q{pfx}$q "  # a PFX without a password
     else:
         cmd += f"/sha1 {thumb} "
     return cmd + "$f"
@@ -352,7 +460,12 @@ def main() -> None:
     ap.add_argument("--whisper-dir", default="whisper", help="whisper-server and its DLLs (default whisper/)")
     ap.add_argument("--without-piper", action="store_true", help="leave out piper-tts (GPL-3.0) and onnxruntime")
     ap.add_argument("--no-installer", action="store_true", help="only build and check build/dist/Orbit")
+    ap.add_argument("--update-lock", action="store_true",
+                    help="resolve requirements.txt again and rewrite BUNDLE_LOCK in this script (needs internet)")
     args = ap.parse_args()
+    if args.update_lock:
+        update_lock()
+        return
     whisper_dir = (ROOT / args.whisper_dir).resolve()
     if not (whisper_dir / "whisper-server.exe").exists():
         sys.exit(f"V {whisper_dir} není whisper-server.exe.")

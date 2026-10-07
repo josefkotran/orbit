@@ -2,10 +2,11 @@
 
 open_session starts a new Claude Code session in a folder, in its own console window. It runs the way the user's own
 sessions run: with --dangerously-skip-permissions only when they use it (sessions.bypass_in_use), otherwise plain.
-Orbit lets the call through only after the user's "jo" (a PreToolUse hook, see agent.py); this server just does it.
+Orbit lets the call through only after the user's "jo" (a PreToolUse hook, see agent.py); this server does it, but
+again only in one of the user's folders and with a task that was read out whole (no hidden part, see _task).
 find_pages and open_page find a page in the user's Chrome history and open it (app/browser.py), without asking: they
-only show a page. That's why open_page opens only what find_pages found here (the same page with another number is
-fine), never an address the model made up or read somewhere.
+only show a page. That's why open_page opens only what find_pages found here (the same page with another number in
+its path or query is fine), never an address the model made up or read somewhere.
 
 Its own process (Claude Code starts it): standard library and app modules without Qt only.
 """
@@ -14,12 +15,18 @@ import os
 import re
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
+from urllib.parse import urlsplit
 
+# a program by its bare name (claude, cmd) never from the current folder, whatever folder this was started in
+os.environ.setdefault("NoDefaultCurrentDirectoryInExePath", "1")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app import browser, sessions  # noqa: E402
-from app.agent import prefix  # noqa: E402
+from app.agent import known_folder, prefix  # noqa: E402
 from app.claude_setup import environment, find_exe  # noqa: E402
+
+CMD = os.path.join(os.environ.get("SystemRoot") or r"C:\Windows", "System32", "cmd.exe")
 
 TOOLS = [{
     "name": "open_session",
@@ -65,8 +72,11 @@ _found: dict[str, str] = {}  # pages find_pages returned in this process: URL ->
 
 
 def _shape(url: str) -> str:
-    """The page without its numbers: .../order-detail.php?id=82 and ?id=83 are the same page."""
-    return re.sub(r"\d+", "#", url.split("#")[0].rstrip("/"))
+    """The page without the numbers in its path and query: .../order-detail.php?id=82 and ?id=83 are the same page.
+    The server and port stay as they are: 10.0.0.5 or localhost:3001 is another computer or program."""
+    parts = urlsplit(url)
+    rest = parts.path.rstrip("/") + (f"?{parts.query}" if parts.query else "")
+    return f"{parts.scheme.lower()}://{parts.netloc.lower()}{re.sub(r'\d+', '#', rest)}"
 
 
 def find_pages(query: str) -> str:
@@ -87,19 +97,44 @@ def open_page(url: str, title: str = "") -> str:
     return browser.open_page(url, title, profile)
 
 
+def _task(prompt: str) -> str:
+    """The new session's first message on one line, "<name> (hlasem přes Orbit): <the user's words>" ("" = none).
+    Before the user's "jo" Orbit reads the words out without a "… (hlasem přes Orbit):" start and a Markdown link
+    as its text only (main._ask_confirm), so what could hide there is refused: what was heard must be all that runs."""
+    name = os.environ.get("ORBIT_USER_NAME", "")
+    task = " ".join(prompt.split())
+    for start in (prefix(name), prefix()):
+        if task.startswith(start):
+            task = task[len(start):].lstrip()
+            break
+    if "(hlasem přes orbit)" in task.lower():
+        raise ValueError("Zadání má „(hlasem přes Orbit)“ uprostřed a text před tím uživatel neslyšel, relaci jsem "
+                         "neotevřel. Napiš zadání jen slovy uživatele, bez toho označení (doplní se samo).")
+    if re.search(r"\[[^\]]*\]\([^)]*\)", task):
+        raise ValueError("Zadání obsahuje odkaz v Markdownu a jeho adresu uživatel neslyšel, relaci jsem neotevřel. "
+                         "Napiš zadání prostým textem.")
+    if any(unicodedata.category(c).startswith("C") for c in task):  # control, zero-width, bidi, tag characters…
+        raise ValueError("Zadání obsahuje neviditelné znaky, které se nepřečtou nahlas, relaci jsem neotevřel. "
+                         "Napiš ho znovu prostým textem.")
+    # without " (it would end the quoted argument below) and a trailing \ (it would escape the quote)
+    task = task.replace('"', "”").rstrip("\\")
+    return f"{prefix(name)} {task}" if task else ""  # whose words; and never a "-switch"
+
+
 def open_session(folder: str, prompt: str = "") -> str:
-    if folder.startswith(("\\\\", "//")):
+    # only one of the user's folders (agent.known_folder), the same check Orbit made before asking
+    known = known_folder(folder)
+    if not known:
+        raise ValueError(f"Složka {folder} není v seznamu složek pro nové relace. Vezmi celou cestu ze seznamu.")
+    if known.startswith(("\\\\", "//")):
         raise ValueError("Složka na síťovém disku (\\\\server\\…) nejde, relaci otevřu jen v místní složce.")
-    path = Path(folder).expanduser()
+    path = Path(known)
     if not path.is_dir():
         raise ValueError(f"Složka {folder} neexistuje.")
+    task = _task(prompt)
     exe = find_exe()
     if not exe:
         raise ValueError("Claude Code tu není nainstalovaný.")
-    # one line, without " (it would end the quoted argument below) and a trailing \ (it would escape the quote)
-    task = " ".join(prompt.split()).replace('"', "”").rstrip("\\")
-    if task and not task.startswith(prefix(os.environ.get("ORBIT_USER_NAME", ""))):
-        task = f"{prefix(os.environ.get('ORBIT_USER_NAME', ''))} {task}"  # whose words; and never a "-switch"
     if task[:1] in ("-", "/"):
         task = f"Úkol: {task}"
     bypass = sessions.bypass_in_use()
@@ -115,7 +150,7 @@ def open_session(folder: str, prompt: str = "") -> str:
     # running without permission prompts is all right: that question must be seen.
     background = bool(task) and (not bypass or sessions.bypass_prompt_skipped())
     info = subprocess.STARTUPINFO(dwFlags=subprocess.STARTF_USESHOWWINDOW, wShowWindow=7) if background else None
-    subprocess.Popen(f'cmd.exe /s /v:on /k "{command}"', cwd=path,
+    subprocess.Popen(f'cmd.exe /s /v:on /k "{command}"', executable=CMD, cwd=path,
                      env=dict(environment(), ORBIT_CLAUDE=exe, ORBIT_TASK=task),
                      close_fds=True, startupinfo=info,
                      creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP)

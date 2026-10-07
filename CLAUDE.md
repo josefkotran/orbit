@@ -72,13 +72,14 @@ nové verze dá `claude_hooks` = true, protože jeho hooky v `~/.claude/settings
 | `app/config.py` | výchozí nastavení, cesty v datové složce, kontrola hodnot při načtení, atomické ukládání, popisky modelů |
 | `app/winutil.py` | jedna instance (mutex), AppUserModelID, spouštění s Windows (registry), pípání a zvuky bublin |
 | `whisper/` | `whisper-server.exe` a co potřebuje: starý build je jeden exe s Vulkanem (59 MB) + `libwinpthread-1.dll`, nový (`whisper-next/`, `GGML_BACKEND_DL`) má vedle exe `ggml-*.dll` (Vulkan a varianty CPU); Orbit umí obojí. Licence whisper.cpp |
-| `app/voice.py` | lokální české hlasy Piper (Jirka, Kasandra) pro předčítání místo Jakuba |
+| `app/voice.py` | lokální české hlasy Piper (Jirka, Kasandra) pro předčítání místo Jakuba; Piper běží ve vlastním procesu (`_worker`) |
 | `models/` | `ggml-large-v3.bin` (3,1 GB), `ggml-large-v3-turbo.bin` (1,6 GB), `piper/` (hlasy Piperu) – nejsou v gitu ani v instalátoru, stahují se (`downloads.py`); rozestažené jako `*.part` |
 | `recordings/` | posledních 30 nahrávek (`.wav` + `.txt` s přepisem), když je zapnuté ukládání – nejsou v gitu |
 | `orbit.log` | log aplikace včetně přepisů (jen se zapnutým učením slovníku) a časů – první místo, kam se dívat; řeč agenta, předčítání a adresy jen jako délky (`ORBIT_DEBUG=1` i s texty); vedle něj `whisper-server.log` a `crash.log` (pád v nativním kódu) |
 | `whisper-next/` | whisper-server pro jakékoli PC (`GGML_BACKEND_DL`, 76 MB), z něj se dělá `whisper\` v instalátoru; Pepův běžící Orbit pořád používá starý `whisper\` |
 | `build/` | `build_whisper.py` (whisper-server přes portable MSYS2), `build_installer.py` (balíček + Inno Setup), `verify_bundle.py` (kontrola balíčku jeho vlastním Pythonem), `README.md`; `cache/`, `tools/`, `dist/`, `output/` nejsou v gitu |
 | `installer/` | `orbit.iss` (Inno Setup) a texty licencí GPL/LGPL, které jdou do instalace |
+| `tests/` | testy (stdlib `unittest`, od 7. 10.): `test_core_*` (přepis, Piper, klávesa, vkládání, config), `test_claude_*` (nástroje agenta, hledání programů), `test_dist_*` (build, instalátor); viz Spuštění |
 | `THIRD_PARTY_NOTICES.md` | licence všeho, co instalátor nese nebo Orbit stahuje |
 | `web/` | stránka https://orbit.easya.cz se stažením instalátoru, `publish.py` ji sestaví a nahraje (viz `web/README.md`) |
 | `video/` | úvodní video webu v Remotionu, hotové soubory jdou do `web/site/assets/video` (viz `video/README.md`) |
@@ -108,6 +109,18 @@ složce `diktovani`, řádek `command` v `pyvenv.cfg` je proto zastaralý, ale n
 - **Tajná předpona cest** (`--request-path /<náhodný token>`): bez ní `/health`, `/load` i `/inference` vrací 404.
   Server posílá `Access-Control-Allow-Origin: *` a `POST /load` s nesmyslným souborem ho shodí, takže jinak by ho
   libovolná webová stránka uměla vypnout nebo mu podstrčit jiný model. Funguje se starým i novým buildem (ověřeno).
+- **Port jen vlastnímu serveru** (od 7. 10.): zvuk, ani `/health` s tajnou předponou, jde jen na port, kde poslouchá
+  PID Orbitova whisper-serveru (`whisper_server._listeners`, `GetExtendedTcpTable` pro IPv4 i IPv6, ~0,1 ms). Proč:
+  port je volný jen do načtení modelu a Windows porty přiděluje popořadě, jiný program (i jiného uživatele PC) by ho
+  mohl obsadit, dostat diktát a vrátit text i s „Odešli.“ (ověřeno podvrženým serverem). Při cizím posluchači start
+  zkusí jiný port, `transcribe` server zabije a hlídač ho spustí jinde. `clean_text` maže řídicí znaky (Esc…).
+  Když Windows tabulku nedá, rozhoduje jako dřív `/health`.
+- Připravenost serveru se kontroluje po 50 ms (prvních 5 s, pak po 0,2 s) a HTTP jde až na port, který už poslouchá:
+  připojení na port bez posluchače trvá ve Windows 0,5–1 s. Hotový server Orbit dřív poznal průměrně 354 ms po
+  spuštění, teď za 41 ms (náhradní server, n = 15).
+- **Cesta k modelu** (`_model_arg`): whisper-server dostává argumenty v ANSI kódové stránce, složka s azbukou (nebo
+  „Jiří“ na západních Windows) se změní na „?“ a model se neotevře (ověřeno). Pak dostane cestu relativní ke
+  `whisper\`, jinak 8.3. `cwd` zůstává `whisper\` schválně: ggml tam hledá i `ggml-*.dll`.
 - **Grafika, nebo procesor** (`WhisperServer.backend`/`device`): podle výpisu serveru při startu
   (`whisper_backend_init_gpu: using Vulkan0 backend` + `ggml_vulkan: 0 = <karta>`, nebo `no GPU found`,
   `whisper_server.parse_backend`). Bez grafiky s Vulkanem (`downloads.gpus`/`vulkan`) dostane server `-t <fyzická
@@ -115,6 +128,10 @@ složce `diktovani`, řádek `command` v `pyvenv.cfg` je proto zastaralý, ale n
   neušetří, proto zůstává 5). Když start s grafikou spadne, zkusí se znovu s `-ng`; když server hlásí procesor,
   ačkoli grafika je, startuje znovu se všemi jádry. Na procesoru UI jednou za běh řekne „Přepis běží na procesoru…
   doporučuju model turbo“ (ne když je to čekané: turbo a žádná použitelná grafika, `Dictation._tell_cpu`).
+- **`-t 1` na grafice** (od 7. 10.): whisper.cpp při každém tokenu (beam 5) zakládá a ukončuje vlákna, při vytíženém
+  procesoru (build, render, agenti) to přepis brzdilo. Párové A/B na large-v3 s PC na 100 %: 1 vlákno = 0,68× času
+  4 vláken (25,5 s řeči 17,9 → 10,2 s), text stejný (0/277 slov rozdílných); na klidném PC je asi o 4 % pomalejší.
+  Na procesoru dál všechna fyzická jádra.
 - Server se spouští s `SetErrorMode` (bez systémových oken, dítě ho dědí): chybějící DLL nebo pád ho ukončí potichu
   místo okna Windows, které by ho drželo naživu. Kód ukončení se přeloží do češtiny (`exit_text`: 0xC0000135
   chybí DLL, 0xC000001D procesor nezná instrukce…), do logu jde i konec `whisper-server.log`.
@@ -125,6 +142,10 @@ složce `diktovani`, řádek `command` v `pyvenv.cfg` je proto zastaralý, ale n
   server spustit znovu (dřív radil restartovat aplikaci). Timeout požadavku roste s délkou zvuku (min. 120 s, na
   grafice 30 + 4×s, na procesoru 60 + 20×s); po timeoutu se server zabije (pracoval by dál a zdržel další přepisy)
   a hlídač ho spustí znovu. Ověřeno zabitím procesu mezi požadavky i uprostřed požadavku: text přišel.
+  Pokusy po 1, 5 a 20 s jsou jen s grafikou (server, který naběhne na procesoru, se zastaví), na procesor smí až
+  poslední po 60 s: po resetu nebo aktualizaci ovladače by jinak large-v3 zůstal do restartu Orbitu na procesoru.
+  Když grafika opravdu zmizí, přepne se na procesor až po ~86 s, diktát mezitím počká. Každá chyba obnovy (i OSError
+  1455, málo paměti) skončí `failed`: dřív umřelo hlídací vlákno a diktát čekal 300 s.
 - Když přepis přesto selže, nahrávka se neztratí: bublina „Přepis selhal… Klikni sem a zkusím ho znovu“ a v menu
   „Přepsat znovu poslední diktát“ (zvuk jen v paměti, přepíše se jako jeden kus; z menu jde text do schránky).
 - Parametry `/inference`: `language=cs`, `beam_size=5`, `temperature=0`, `no_timestamps=false`, `prompt` = česká věta
@@ -211,9 +232,10 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   selže, obnoví a zkusí znovu. „Výchozí mikrofon Windows“ (`mic: null`) otevírá **Sound Mapper** (první vstup MME,
   pojmenovaný jazykem Windows, proto podle pozice, ne jména): ten nahrává z toho, co je výchozí teď, ne při startu
   Orbitu. Bez mikrofonu „Windows teď nevidí žádný mikrofon“.
-- Obnovit seznam (`Pa_Terminate`) jde jen bez jiného streamu PortAudio: uvolnil by i stream, který právě hraje
-  Piper, pod jeho vláknem (pád v nativním kódu). `Recorder.may_refresh` = `Dictation._release_sound_card`: Piper
-  přestane a počká se, až pustí zvukovou kartu (`PiperSpeaker.release`); když nepustí včas, seznam se neobnoví.
+- Obnovit seznam (`Pa_Terminate`) jde jen bez jiného streamu PortAudio v procesu Orbitu. Dokud Piper hrál v něm,
+  uvolnil by i jeho stream pod jeho vláknem (pád v nativním kódu). Od 7. 10. hraje Piper ve vlastním procesu, takže
+  `PiperSpeaker.release` vrací vždy True; `Recorder.may_refresh` = `Dictation._release_sound_card` předčítání dál
+  zastaví (main.py se neměnil).
 - **Prahy podle šumu**: konstanty výš jsou naladěné na tiché mikrofony. Analogový mikrofon s +20 dB zesílením nebo
   hlučný větrák šumí nad 150, pak by se nenašla pauza a agent by poslouchal celých 30 s. `Recorder.noise` = nejtišší
   30ms blok posledních ~3 s, odhad začíná na 50 a roste nejvýš o 2 % za blok (klesá hned), takže řeč bez jediné
@@ -238,6 +260,9 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   (`MAX_RECORDING_S`) se ukončí a přepíše s bublinou; u klávesy `PushToTalk.check_stuck`: držená klávesa opakuje
   key-down každých ~30–50 ms, takže 1,5 s bez opakování (když už nějaké přišlo a mezitím nebyla stisknutá jiná
   klávesa) = puštěná. Tlačítka myši se neopakují, u nich platí jen limit 5 min (Pepa má myš).
+  Po ukončení limitem nebo zabezpečenou plochou (`PushToTalk.reset()`) se u pořád držené klávesy její opakování
+  spolknou, dokud ji Pepa nepustí (nebo dokud 1,5 s nepřijde žádné, `STUCK_S`): dřív další opakování za 30 ms
+  otevřelo mikrofon znovu.
 
 ### Plovoucí tlačítko a vkládání
 - Okno má `WS_EX_NOACTIVATE` (a `Qt.WindowDoesNotAcceptFocus`), takže klik nebere fokus cílovému oknu. Ověřeno testem.
@@ -250,6 +275,9 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   než 20 MB, a po 0,5 s skončí (Excel vyrábí formáty až na požádání). Když schránka nejde nastavit (drží ji jiný
   program), Ctrl+V se nepošle (vložilo by starý obsah, třeba heslo) a text se napíše po znacích. U vzdálené plochy
   a virtuálek (`TscShellContainerClass`, `RAIL_WINDOW`, VMware, Citrix) se schránka nevrací, ty si ji berou později.
+  Vrácený obsah dostane značky „ne do historie a cloudu“ (ve schránce už byl, Windows ho jednou viděl) a záloha drží
+  i prázdné značky správce hesel (`ExcludeClipboardContentFromMonitorProcessing`, `Clipboard Viewer Ignore`): heslo se
+  jinak po diktátu objevilo ve Win+V.
 - **Text jde jen do okna, které bylo v popředí při puštění klávesy** (`Take.target`, porovnání podle vlastníka okna):
   když se mezitím přepnulo jinam, text skončí ve schránce s bublinou a Enter z „Odešli“ se nepošle (dřív šel do
   jiného chatu nebo terminálu). Do oken spuštěných jako správce Windows vkládat nedovolí (UIPI) a ani neřekne, že
@@ -351,10 +379,27 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   „přirozený“ hlas (jen en/zh/es/ja/fr/pt/de/ko), cloudové Antonín/Vlasta (edge-tts, Azure) by posílaly text
   odpovědí ven, proto **Piper** (`piper-tts`, ONNX na CPU, úplně lokálně): `cs_CZ-jirka-medium` (mužský) a
   `cs_CZ-kasandra-medium` (ženský) v `models/piper/` (63 MB každý, z huggingface.co/rhasspy/piper-voices).
-  `voice.PiperSpeaker`: model se načte na pozadí hned při volbě (~1,8 s), pak ~0,1 s na větu, hraje se po větách přes
-  `sounddevice.OutputStream` po 0,1 s, takže `stop()` utne do ~0,1 s. Stejná fronta jako Jakub (`finished` místo
-  Ready). V nastavení „Hlas pro předčítání“ + „Poslechnout“ (ukázková věta; bez uložení se volba vrátí). Výchozí
-  je Jakub, Pepa si vybral Jirku.
+  `voice.PiperSpeaker`: model se načte hned při volbě (~1,8 s), pak ~0,1 s na větu, hraje se po větách přes
+  `sounddevice.OutputStream` po 0,1 s, takže `stop()` utne do ~0,1 s (větu, která se zrovna syntetizuje, nejdřív
+  dodělá). Stejná fronta jako Jakub (`finished` místo Ready, jednou za každé `say()`, i za zastavený text). V nastavení
+  „Hlas pro předčítání“ + „Poslechnout“ (ukázková věta; bez uložení se volba vrátí). Výchozí je Jakub, Pepa si
+  vybral Jirku.
+- **Piper běží ve vlastním procesu** (od 7. 10.): `PiperSpeaker` spustí `pythonw -I -c …` → `voice._worker` (stejný
+  Python jako Orbit, v Job objectu, skončí i se zavřeným stdin). Proč: načtení hlasu drží GIL 1,6–6 s a v procesu
+  Orbitu stálo UI i háčky klávesnice a myši celého systému (celý `Dictation` s Jirkou: smyčka stála 6,8 s, teď nejvýš
+  31 ms; start dřív čekal s kontrolou Clauda i whisperem na „Piper načten“). Pád espeaku nebo onnxruntime shodí jen
+  ten proces, další `say()` ho spustí znovu (max. 3× za běh). Protokol: na stdin `say <JSON>` / `stop`, na stdout
+  `loaded <s>` / `done` / `error <JSON>`. Naráz běží jen jeden (nový hlas zavře starý proces).
+- Worker čte stdin jen přes `PeekNamedPipe`: blokující čtení stdin a současný import numpy v jiném vlákně = zamrznutí
+  navždy (DLL s vlastním CRT volá `GetFileType` na stdin; ověřeno výpisem zásobníku).
+- onnxruntime v něm běží bez memory areny, bez spinningu vláken a s max. 4 vlákny: proces má ~125 MB místo +626 MB
+  v Orbitu po delším textu a syntéza stojí ~10,6 s CPU místo ~19 s (měřeno na PC na 100 %). Je asi 1,5× pomalejší,
+  pořád ~9× rychlejší než realtime.
+- espeak-ng neotevře svá data v cestě s jediným znakem mimo ASCII (`C:\Users\Tomáš\…`) a ukončí celý proces
+  (exit 1, bez výjimky; 1.0.0 tak u takového uživatele zmizel při prvním předčítání). Proto dostává cestu 8.3
+  (`voice._ascii_path`); když 8.3 jméno není, `piper_installed()` je False a Piper se nenabízí.
+- Pro stažený hlas Piperu se `voice.effective` Windows na Jakuba neptá: `QTextToSpeech("winrt")` by při startu
+  načetl FFmpeg a Media Foundation (~25 MB, 84 ms).
 
 ### Předčítání artefaktů (`read_artifacts`)
 - Pepa chtěl: když kterákoli relace Claude Code zveřejní artefakt (nástroj Artifact), udělá se souhrn toho
@@ -448,7 +493,9 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   `.pdf`…, a parametry `?do=`, `?action=`, `?status=`…) a odkazy s tajnými údaji (`token`, `sid`, `password`,
   `code`+`state`…) ve výsledcích vůbec neukážou a `open_page` je odmítne (`browser.ACTION`, `browser._secret`).
   `open_page` otevře jen adresu, kterou v tomhle procesu vrátil `find_pages`, nebo stejnou stránku s jiným číslem
-  (`agent_tools._shape`) – adresu vymyšlenou nebo vyčtenou z odpovědi relace odmítne. Prompt: brát detail, ne
+  (`agent_tools._shape`) – adresu vymyšlenou nebo vyčtenou z odpovědi relace odmítne. Čísla se mění jen v cestě
+  a dotazu, server a port musí sedět (od 7. 10.; dřív platilo 192.168.1.1 = 10.0.0.5 a localhost:3000 = :3001,
+  shop2.cz = shop3.cz). Prompt: brát detail, ne
   úpravu/PDF; když číslo v historii chybí, zaměnit číslo u stejné stránky. Chrome se spouští jako
   `chrome.exe --profile-directory=<profil, kde se stránka našla> <url>` (nová karta), Orbit ho pak přenese do
   popředí (`sessions.focus_window`, z pozadí to Windows samo nedovolí). Bez Chromu agent řekne, že tu Chrome není.
@@ -459,13 +506,24 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   `claude.exe` i zadání jdou do `cmd.exe /s /v:on /k` jen jako proměnné (`!ORBIT_CLAUDE!`, `!ORBIT_TASK!`),
   složka jako pracovní adresář: nic z nich nejde spustit jako příkaz (ověřeno s `& | > ^ % !VAR! "`). Zadání vždy
   začíná prefixem se jménem (MCP server ho dostane v `ORBIT_USER_NAME`), takže nikdy nezačne „-“ jako přepínač.
-  Síťové složky (`\\server\…`) odmítne (cmd by začal v `C:\Windows`).
+  Síťové složky (`\\server\…`) odmítne (cmd by začal v `C:\Windows`). `cmd.exe` se spouští plnou cestou ze System32.
+- **Pojistka v `agent_tools.open_session`** (od 7. 10.): MCP server už jen neprovede, co pustí hook, sám kontroluje:
+  relaci otevře jen ve složce ze seznamu (`agent.known_folder`, ta je i pracovní složkou) a ze zadání ubere jen přesný
+  prefix „<jméno> (hlasem přes Orbit):“ nebo „Uživatel (…)“ a vrátí ho jednou. Odmítne zadání s dalším
+  „(hlasem přes Orbit)“ kdekoli (`without_prefix` by text před ním při čtení vynechal: útok = příkaz před značkou),
+  odkaz v Markdownu `[text](adresa)` (adresa se nečte) a neviditelné znaky (kategorie Unicode C: řídicí, nulové
+  šířky, bidi, tag znaky U+E00xx). Odmítnutí přijde agentovi až po „jo“ jako chyba nástroje, hlavní kontrola patří
+  do `main._ask_confirm` ještě před otázkou (zatím chybí, stejně jako u SendMessage, vestavěného nástroje, který
+  `agent_tools` nechrání).
 
 ### Hlasové povely pro terminál
 - Věta „Odešli.“ (nebo „Odeslat.“) na konci diktátu = Enter; diktát jen „Stop.“ / „Zastav.“ = Esc (přeruší Clauda).
   Jen jako samostatná věta, „…tak mu to odešli.“ zůstane textem. Patří pod přepínač „Hlasové povely“.
 - Enter jde po textu se zpožděním 300 ms + 1 ms na znak (max 1,5 s): terminál vkládá asynchronně a Claude Code bere
   klávesu ve stejné dávce jako psaný text za součást vložení.
+- Enter i Esc jdou jen do okna, které bylo v popředí při vložení (od 7. 10., `Inserter.press(…, on_skipped)`): když
+  se během zpoždění přepne jinam, klávesa se nepošle (jen řádek v logu). Main zatím `on_skipped` nepředává, bublina
+  „povel jsem neprovedl“ chybí.
 
 ### Limity Clauda
 - **Dva zdroje** (`usage_source` v `config.json`, v nastavení není): `"statusline"` (výchozí pro nové uživatele) a
@@ -557,10 +615,22 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   `config.json.bad-<čas>` (kopie, ne přejmenování: `config.json` ve složce aplikace určuje datovou složku) a bublina
   to řekne. Hodnoty špatného typu (ruční úprava, jiná verze) se zahodí a platí výchozí, opravy se čistí
   (`vocab.clean_replacements`): jedna vadná dřív potichu shodila každý diktát.
+- Zamčený `config.json` (antivir, zálohovací program) Orbit čte až 3 s (`READ_TRIES`). Když nejde přečíst ani
+  zkopírovat do `.bad-*`, zapne `config.readonly`: do restartu nic neukládá a bublina řekne, ať Orbit restartuje.
+  Proč: dřív výchozí hodnoty při prvním uložení přepsaly slovník (ověřeno zámkem bez sdílení). Hooky a stavový řádek
+  main v tom stavu zatím odebere (do restartu chybí; oprava patří do main.py).
 - Výchozí hodnoty pro nové uživatele: agent, učení slovníku a předčítání artefaktů **vypnuté** (agent by jinak hned
   zabral tlačítko myši zpět, ostatní posílají text Claudovi). Pepa je má v `config.json` výslovně, nic se mu nemění.
 - `Orbit.pyw`: když start spadne (chybějící DLL, nezapisovatelná složka), zapíše `crash.log` do datové složky
   (jinak do `%TEMP%`) a ukáže okno s chybou, pythonw by jinak nic neukázal.
+- `Orbit.pyw` importuje numpy s `OPENBLAS_NUM_THREADS=1` a proměnnou pak smaže (od 7. 10.). Proč: OpenBLAS jinak
+  založí vlákno na každý logický procesor a commitne ~490 MB, ačkoli Orbit matice nenásobí (měřeno 499 → 17 MB
+  soukromé paměti, o 15 vláken míň). Relace a programy spuštěné Orbitem mají nastavení uživatele, Piper ho dostane
+  zvlášť.
+- **Programy podle jména nikdy z aktuální složky**: `Orbit.pyw`, `cc_status.py` (běží ve složce relace, třeba
+  v cizím repu) a `agent_tools.py` nastaví `NoDefaultCurrentDirectoryInExePath=1` (jako Claude Code), jinak
+  `shutil.which('pwsh'/'git')` vrátil podstrčený `.\pwsh.CMD` (ověřeno). `claude_setup._candidates` bere jen
+  absolutní cesty: z `.\claude.cmd` dřív vznikl relativní `node_modules\…\claude.exe`.
 - `whisper-server` se volá přes `requests.Session` s `trust_env = False`: na 127.0.0.1 nikdy přes proxy
   z prostředí nebo nastavení Windows (zvuk nesmí odejít).
 
@@ -600,10 +670,13 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   existuje (Orbit ji nikdy nevytváří). Bez připojení se hooky nemění vůbec (ani neodebírají) a nic se nepolluje.
   Starý config bez `claude_hooks`: true, když tahle kopie hooky už má (Pepa), jinak false (`config.missing`).
 - **Co potřebuje Clauda** (limity, přehled relací, artefakty, učení slovníku, agent a jeho tlačítko myši) běží jen při
-  `ClaudeConnection.connected`. Ta se zjistí při startu na pozadí (`claude --version` + `claude auth status --json`,
-  ~0,7 s, bez `ANTHROPIC_API_KEY`), pak při otevření nastavení/průvodce a každých 5 minut, dokud připojený není. Chyba
-  kontroly (třeba při aktualizaci Claude Code) nechá poslední dobrý stav. Bez Clauda panel místo prázdných pruhů ukáže
-  „Limity uvidíš, až připojíš Claude Code. Připojit Clauda →“ (klik = průvodce na stránce Claude).
+  `ClaudeConnection.connected`. Ta se zjistí při startu na pozadí (`claude --version` souběžně s `claude auth status
+  --json`, medián 805 → 622 ms, bez `ANTHROPIC_API_KEY`), pak při otevření nastavení/průvodce a každých 5 minut,
+  dokud připojený není. Když první kontrola za běhu skončí chybou nebo `claude.exe` chybí (pomalý start Windows,
+  Claude Code se zrovna aktualizuje), zkusí se znovu za 15, 30 a 60 s (`QUICK_RECHECK_MS`), pak po 5 min;
+  „nepřihlášený“ čeká rovnou 5 min. Chyba kontroly (třeba při aktualizaci Claude Code) nechá poslední dobrý stav.
+  Bez Clauda panel místo prázdných pruhů ukáže „Limity uvidíš, až připojíš Claude Code. Připojit Clauda →“
+  (klik = průvodce na stránce Claude).
 - **Připojení = jen oficiální cesta Anthropicu** (podmínky zakazují aplikacím sbírat nebo předávat přihlášení
   Claude.ai): Orbit nikdy nechce heslo, e-mail ani token. `claude_setup.install()` pustí v **viditelném** okně
   PowerShellu oficiální `irm https://claude.ai/install.ps1 | iex` (nativní instalace do `~/.local/bin`, bez práv
@@ -648,9 +721,8 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 - Tlačítko se umisťuje podle obou kruhů (`FloatingButton.button_rect`), ne podle jednoho bodu: když by trčelo z
   obrazovky (jiné rozlišení, měřítko, monitory), přitáhne se dovnitř. Totéž při odpojení monitoru nebo změně lišty
   za běhu (`_watch_screens`), tehdy se nová poloha neukládá.
-- Před obnovením seznamu mikrofonů (`Pa_Terminate`) Orbit zastaví předčítání a počká, až Piper pustí zvukovou kartu
-  (při otevírání nastavení max 3 s, při otevírání mikrofonu 1 s; viz Mikrofon), jinak by PortAudio uvolnil
-  přehrávaný stream pod jeho vláknem.
+- Před obnovením seznamu mikrofonů (`Pa_Terminate`) Orbit zastaví předčítání (dřív i čekal, až Piper pustí zvukovou
+  kartu; od 7. 10. hraje Piper ve vlastním procesu a `release()` vrací hned True, viz Mikrofon).
 - Ukončit: kusy přepisu ve frontě se zahodí (`executor.shutdown(cancel_futures=True)`) a `WhisperServer.stop` nastaví
   chybu, takže čekající `transcribe` hned skončí. Dřív Orbit po Ukončit žil neviditelně až 3 minuty a držel mutex.
 - Nastavení je „vždy navrchu“; když se z něj instaluje nebo přihlašuje, tuhle vlastnost ztratí (`SetWindowPos`
@@ -684,6 +756,15 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   Výstup `build\output\Orbit-Setup-<app/version.py>.exe`. Skript balíček zkontroluje (chybějící DLL proti čistým
   Windows, `verify_bundle.py` jeho vlastním Pythonem: importy, dialog nastavení offscreen, hlasy, hook) a teprve pak
   zavolá Inno Setup. Před vydáním zvednout `VERSION` v `app/version.py`.
+- **Balíčky Pythonu jsou zamčené** (od 7. 10.): `BUNDLE_LOCK` v `build/build_installer.py` má všech 21 wheelů
+  s SHA-256 (win_amd64, cp313), pip je instaluje s `--require-hashes --no-deps`. Proč: `requirements.txt` hlídá jen
+  přímé závislosti, urllib3, idna, certifi, protobuf… by šly do instalátoru v té verzi, kterou PyPI zrovna má. Po
+  změně `requirements.txt` build skončí s hláškou, pak `.venv\Scripts\python.exe build\build_installer.py
+  --update-lock` (přepíše blok ve skriptu) a zkontrolovat git diff. Zámek ze 7. 10. dává přesně balíčky verze 1.0.0
+  (stejný `licenses\python-packages.txt`), „piper“ u balíčku = jen pro Piper, `--without-piper` ho vynechá.
+- `verify_bundle.py` zkouší i předčítání Piperem s balíčkem ve složce `Jiří Nový` (junction na balíček, hlas
+  z `models\piper` zkopírovaný do tempu, text „.“: espeak naběhne, nic není slyšet). Verze 1.0.0 tam padala. Bez
+  staženého hlasu se kontrola přeskočí.
 - **whisper-server pro cizí PC** (`whisper-next/`): starý `whisper\` je přeložený pro Pepův procesor (`GGML_NATIVE`)
   a s Vulkanem jako povinnou DLL, jinde by nenaběhl. Nový: whisper.cpp 1.9.4, `GGML_BACKEND_DL` +
   `GGML_CPU_ALL_VARIANTS` (14 `ggml-cpu-*.dll`, vybere se podle procesoru), `ggml-vulkan.dll` se bez Vulkanu přeskočí
@@ -695,7 +776,15 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   (= `whisper-next`), `licenses\`, `THIRD_PARTY_NOTICES.md`; celkem ~294 MB (bez Piperu ~198 MB). Modely v něm
   nejsou, stahuje je průvodce do datové složky `%LOCALAPPDATA%\Orbit` (`paths.py`). Zástupce v nabídce Start,
   na ploše jen na přání, po instalaci „Spustit Orbit“ (ne při tiché instalaci). Aktualizace nejdřív smaže
-  `runtime\`, `app\`, `assets\`, `whisper\`, ať nezůstanou soubory, které nová verze nemá. Data zůstávají.
+  `runtime\Lib`, `app\`, `assets\`, `whisper\`, ať nezůstanou soubory, které nová verze nemá. Data zůstávají.
+- **Aktualizace nemaže celý `runtime\`** (od 7. 10.): každá relace Claude Code spouští `runtime\python.exe` pro hooky
+  a stavový řádek (stačí jim stdlib vedle něj), dřív během aktualizace selhávaly. Soubor, který běžící hook zrovna
+  drží, instalátor přejmenuje na `*.orbit-old` a vedle zapíše nový (`MoveAsideIfInUse`; běžící exe a DLL smazat
+  nejde, přejmenovat ano, ověřeno), jinak by tichá instalace z `install.ps1` (`/SUPPRESSMSGBOXES`) skončila na Abort.
+  `restartreplace` bez práv správce nic nedělá. Zbytky smaže další aktualizace nebo odinstalace; nová menší verze
+  Pythonu by tam nechala staré soubory (nepoužité). **Spuštěním instalátoru zatím neověřeno** (jen ISCC ho přeloží):
+  před další verzí vyzkoušet testovací variantou `.iss` (viz Spuštění) se smyčkou, která během tiché aktualizace
+  pouští `runtime\python.exe` po 100 ms; aktualizace musí skončit kódem 0 a `python.exe` tam musí být.
 - **Spouští se `runtime\pythonw.exe -s Orbit.pyw`.** `runtime\python313._pth` nastaví `sys.path` jen na balíček
   a schválně **nemá `import site`**: s ním by Python přidal uživatelovo `%APPDATA%\Python\Python313\site-packages`
   (u Pepy jiný numpy a PySide6) i u spuštění, která Orbit dělá sám bez `-s` (klíč Run, hooky, stavový řádek,
@@ -709,8 +798,11 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 - Tichá instalace: `Orbit-Setup-1.0.0.exe /VERYSILENT /SUPPRESSMSGBOXES /CURRENTUSER` (Orbit se po ní nespustí),
   odinstalace `unins000.exe /VERYSILENT /SUPPRESSMSGBOXES`.
 - **Podpis**: instalátor je nepodepsaný, SmartScreen ukáže „neznámý vydavatel“. Pro rozdávání ve velkém je potřeba
-  certifikát; build ho umí přes `ORBIT_SIGN_PFX` (+ `ORBIT_SIGN_PASSWORD`), `ORBIT_SIGN_THUMBPRINT` nebo
-  `ORBIT_SIGN_COMMAND` (Azure Trusted Signing), podepíše whisper-server a jeho DLL, instalátor i odinstalátor.
+  certifikát; build ho umí přes `ORBIT_SIGN_THUMBPRINT`, `ORBIT_SIGN_COMMAND` (Azure Trusted Signing) nebo
+  `ORBIT_SIGN_PFX` bez hesla, podepíše whisper-server a jeho DLL, instalátor i odinstalátor. `ORBIT_SIGN_PFX`
+  + `ORBIT_SIGN_PASSWORD` build odmítne (od 7. 10.): heslo by bylo v příkazové řádce signtoolu a ISCC, kterou čte
+  každý proces uživatele. PFX naimportovat do `Cert:\CurrentUser\My` (`Import-PfxCertificate`, bez `-Exportable`)
+  a podepisovat přes otisk.
 - **Rozhodnuto 7. 10. 2026** (Pepa: „udělej to jako opensource; slib potvrzuji, nechci na tom nic vydělávat“):
   Orbit je **GPL-3.0-or-later** (`LICENSE`, v instalaci `LICENSE.txt`, úvod `THIRD_PARTY_NOTICES.md`), repozitář
   https://github.com/josefkotran/orbit je **veřejný**, Piper zůstává v instalátoru. Písemnou nabídku zdrojáků na 3 roky
@@ -748,7 +840,13 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   Start-Process C:\Users\josef\orbit\.venv\Scripts\pythonw.exe -ArgumentList '"C:\Users\josef\orbit\Orbit.pyw"' -WorkingDirectory C:\Users\josef\orbit
   ```
   Whisper server při zabití aplikace skončí sám (Job object).
-- Kontrola kódu: `.venv\Scripts\python.exe -m pyflakes app Orbit.pyw`.
+- Kontrola kódu: `.venv\Scripts\python.exe -m pyflakes app Orbit.pyw tests`.
+- **Testy** (od 7. 10., stdlib `unittest`, 63 testů, ~45 s): `.venv\Scripts\python.exe -m unittest discover -s tests`
+  (jen část: `-p "test_core*.py"`, `test_claude*`, `test_dist*`). Samy si nastaví `ORBIT_DATA_DIR`/`ORBIT_CLAUDE_DIR`
+  na dočasné složky a uklidí po sobě. Nespouští `claude` ani whisper-server (místo něj malý server v Pythonu), klávesy
+  a schránka jsou nahrazené; model Jirky čtou na místě a Piper hraje do náhradního výstupu (nic není slyšet), ISCC
+  jen přeloží malý falešný balíček do tempu. `ORBIT_TEST_ROOT=<jiná kopie>` pustí testy `test_core_*` proti jiné
+  verzi (porovnání před a po).
 - Testy, které něco zapisují, pouštět s `ORBIT_DATA_DIR` a `ORBIT_CLAUDE_DIR` na dočasné složky (viz Datová složka),
   hook zkoušet rourou: `echo {…json…} | python app\cc_hook.py` se stejnými proměnnými, stavový řádek stejně
   (`app\cc_status.py --data <složka>`, vzorový JSON z dokumentace).

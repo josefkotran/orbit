@@ -23,6 +23,7 @@ import threading
 import time
 import wave
 from ctypes import wintypes
+from pathlib import Path
 
 import numpy as np
 import requests
@@ -39,6 +40,9 @@ TIMEOUT_MIN_S = 120  # per request; longer audio (and the processor) gets more, 
 RESTART_DELAYS = (1, 5, 20, 60)  # seconds before each try to bring back a server that died
 MAX_DEATHS = 4  # it died this often within DEATHS_WINDOW_S: something is wrong for good, stop trying
 DEATHS_WINDOW_S = 600
+# Readiness is polled this often (the first FAST_POLL_S, then POLL_S): a model loads in ~2 s, a slow poll adds half
+# of its period to the time until the first dictation.
+FAST_POLL_S, POLL_S, FAST_POLL_FOR_S = 0.05, 0.2, 5
 
 # Whisper was trained on subtitles, so on silence/noise it likes to "hear" these.
 _HALLUCINATION_RE = re.compile(r"\s*\(?titulky\s+(vytvořil|vytvořila|připravil|:).*$", re.IGNORECASE)
@@ -95,6 +99,12 @@ _kernel32.GetErrorMode.restype = wintypes.UINT
 _kernel32.SetErrorMode.argtypes = [wintypes.UINT]
 _kernel32.SetErrorMode.restype = wintypes.UINT
 _kernel32.GetLogicalProcessorInformation.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD)]
+_kernel32.GetShortPathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+_kernel32.GetShortPathNameW.restype = wintypes.DWORD
+_iphlpapi = ctypes.WinDLL("iphlpapi")
+_iphlpapi.GetExtendedTcpTable.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD), wintypes.BOOL,
+                                          wintypes.ULONG, ctypes.c_int, wintypes.ULONG]
+_iphlpapi.GetExtendedTcpTable.restype = wintypes.DWORD
 
 _job = None
 _error_mode_lock = threading.Lock()
@@ -220,6 +230,66 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+class _TcpRow(ctypes.Structure):  # MIB_TCPROW_OWNER_PID
+    _fields_ = [("state", wintypes.DWORD), ("local_addr", wintypes.DWORD), ("local_port", wintypes.DWORD),
+                ("remote_addr", wintypes.DWORD), ("remote_port", wintypes.DWORD), ("pid", wintypes.DWORD)]
+
+
+class _Tcp6Row(ctypes.Structure):  # MIB_TCP6ROW_OWNER_PID
+    _fields_ = [("local_addr", ctypes.c_ubyte * 16), ("local_scope", wintypes.DWORD), ("local_port", wintypes.DWORD),
+                ("remote_addr", ctypes.c_ubyte * 16), ("remote_scope", wintypes.DWORD),
+                ("remote_port", wintypes.DWORD), ("state", wintypes.DWORD), ("pid", wintypes.DWORD)]
+
+
+def _listeners(port: int) -> set[int] | None:
+    """The processes listening on this TCP port (~0.1 ms), None when Windows can't say. The port Orbit picks is
+    free only until the server binds it, a few seconds later, and Windows hands ports out in order: another user's
+    program on this PC could take it first, answer /health, get the dictated audio and send back text to be typed
+    (with "Odešli." an Enter). The audio goes only to a port its own server listens on."""
+    pids = set()
+    for family, row in ((2, _TcpRow), (23, _Tcp6Row)):  # AF_INET, AF_INET6 (a dual-stack socket takes IPv4 too)
+        size, buf = wintypes.DWORD(16384), None
+        for _ in range(4):
+            buf = ctypes.create_string_buffer(size.value)
+            # TCP_TABLE_OWNER_PID_LISTENER = 3
+            result = _iphlpapi.GetExtendedTcpTable(buf, ctypes.byref(size), False, family, 3, 0)
+            if result != 122:  # ERROR_INSUFFICIENT_BUFFER: the table grew, size is the new one
+                break
+        if result:
+            if family == 2:
+                return None
+            continue  # no IPv6 on this PC
+        count = wintypes.DWORD.from_buffer(buf).value
+        for item in (row * count).from_buffer(buf, ctypes.sizeof(wintypes.DWORD)):
+            if socket.ntohs(item.local_port & 0xFFFF) == port:
+                pids.add(item.pid)
+    return pids
+
+
+def _short_path(path: Path) -> str:
+    buf = ctypes.create_unicode_buffer(1024)
+    return buf.value if _kernel32.GetShortPathNameW(str(path), buf, len(buf)) else ""
+
+
+def _model_arg(model: Path, cwd: Path) -> str:
+    """The model's path for whisper-server's -m. It gets its arguments in the ANSI code page, where a folder with
+    Cyrillic letters (or Czech ones on Western Windows: C:\\Users\\Jiří) turns into '?' and the model can't be
+    opened. Then the path relative to its folder (the user's folder is the part both share), else the 8.3 one."""
+    candidates = [str(model)]
+    with contextlib.suppress(ValueError):  # on another drive
+        candidates.append(os.path.relpath(model, cwd))
+    candidates.append(_short_path(model))
+    for candidate in candidates:
+        try:
+            if candidate:
+                candidate.encode("mbcs")  # strict: no best-fit 'r' for 'ř'
+                return candidate
+        except UnicodeEncodeError:
+            continue
+    log.warning("Cesta k modelu nejde zapsat v kódové stránce Windows, whisper-server ji nejspíš neotevře")
+    return str(model)
+
+
 def to_wav(audio: np.ndarray) -> bytes:
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
@@ -236,8 +306,12 @@ def build_prompt(vocabulary: str) -> str:
     return f"{PROMPT} Často používám: {', '.join(words)}." if words else PROMPT
 
 
+_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")  # Unicode category Cc
+
+
 def clean_text(text: str) -> str:
-    text = " ".join(text.split())
+    # control characters never belong to dictated text (Esc and the like would act in a terminal)
+    text = " ".join(_CONTROL_RE.sub(" ", text).split())
     text = _HALLUCINATION_RE.sub("", text).strip()
     if text.lower().strip(" .!?,…-") in _HALLUCINATION_EXACT or text.strip(" .") == PROMPT.strip(" ."):
         return ""
@@ -320,8 +394,10 @@ class WhisperServer:
             self._deaths.clear()
         self._start(epoch)
 
-    def _start(self, epoch: int) -> None:
-        """On the graphics card if it works, else on the processor with all its cores."""
+    def _start(self, epoch: int, fallback: bool = True) -> None:
+        """On the graphics card if it works, else on the processor with all its cores. fallback=False (bringing
+        back a server that died, all but the last try): the card or nothing, so a driver reset or update that isn't
+        over yet doesn't leave Whisper on the processor for the rest of the run."""
         cpu = self._no_gpu or not _gpu_here()
         for attempt in range(4):
             try:
@@ -331,7 +407,7 @@ class WhisperServer:
                     return
                 if e.port_taken and attempt < 3:
                     continue  # the free port was taken in the meantime: another one
-                if self._no_gpu:
+                if self._no_gpu or not fallback:
                     raise
                 log.warning("whisper-server s grafikou nenaběhl, zkouším ho jen na procesoru")
                 self._no_gpu = cpu = True
@@ -340,6 +416,11 @@ class WhisperServer:
                 return
             proc, backend, device = started
             if backend == "cpu" and not cpu:  # the card didn't work out after all: the processor with all its cores
+                if not fallback:
+                    with self._lock:
+                        if self._proc is proc:
+                            self._stop_locked()
+                    raise RuntimeError("whisper-server zatím nevidí grafickou kartu")
                 log.info("whisper-server běží jen na procesoru, spouštím ho znovu se všemi jádry")
                 cpu = True
                 continue
@@ -372,10 +453,15 @@ class WhisperServer:
                 self.error = f"Chybí {exe} (nesmazal ho antivirus?). Přeinstaluj prosím Orbit."
                 raise RuntimeError(self.error)
             port, prefix = _free_port(), "/" + secrets.token_urlsafe(16)
-            args = [str(exe), "-m", str(model_path), "--host", "127.0.0.1", "--port", str(port), "-l", "cs",
-                    "--request-path", prefix]
+            args = [str(exe), "-m", _model_arg(model_path, WHISPER_DIR), "--host", "127.0.0.1", "--port", str(port),
+                    "-l", "cs", "--request-path", prefix]
             if cpu:
                 args += ["-t", str(_cores())]
+            else:
+                # On the graphics card one thread: whisper.cpp starts and joins its threads twice per decoded token,
+                # which under CPU load (a build, a render) made a dictation ~1.5× slower (25.5 s of speech: 17.9 s
+                # with 4 threads, 10.2 s with one); on an idle PC one thread costs ~4 %. Same text either way.
+                args += ["-t", "1"]
             if self._no_gpu:
                 args.append("-ng")
             SERVER_LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -387,7 +473,8 @@ class WhisperServer:
             log.info("whisper-server spuštěn (pid %s, port %s, model %s%s%s)", proc.pid, port, self._model,
                      f", {_cores()} vláken" if cpu else "", ", bez grafiky" if self._no_gpu else "")
 
-        deadline = time.time() + START_TIMEOUT_S
+        started = time.time()
+        deadline = started + START_TIMEOUT_S
         while time.time() < deadline:
             dead = proc.poll() is not None
             if self._proc is not proc:  # another start (a new model, a finished download) took over: not an error
@@ -399,12 +486,23 @@ class WhisperServer:
                 log.warning("whisper-server skončil během startu (%s). Konec jeho výpisu: %s", why, tail)
                 self.error = f"Whisper server se ukončil ({why}). Podrobnosti jsou v {SERVER_LOG}."
                 raise _EarlyExit(self.error, port_taken="couldn't bind" in tail)
-            try:
-                if self._http.get(f"http://127.0.0.1:{port}{prefix}/health", timeout=1).status_code == 200:
-                    return (proc, *parse_backend(_read_log(head=True)))
-            except requests.RequestException:
-                pass
-            time.sleep(0.2)
+            owners = _listeners(port)
+            if owners and owners != {proc.pid}:
+                # another program listens on the port picked for this server: not a word goes to it, not even /health
+                log.warning("Port %s pro whisper-server obsadil jiný proces (pid %s), zkouším jiný port", port,
+                            ", ".join(map(str, sorted(owners - {proc.pid}))))
+                with self._lock:
+                    if self._proc is proc:
+                        self._stop_locked()
+                self.error = "Port pro rozpoznávání řeči obsadil jiný program."
+                raise _EarlyExit(self.error, port_taken=True)
+            if owners is None or owners:  # None: Windows doesn't say who listens, /health decides as before
+                try:
+                    if self._http.get(f"http://127.0.0.1:{port}{prefix}/health", timeout=1).status_code == 200:
+                        return (proc, *parse_backend(_read_log(head=True)))
+                except requests.RequestException:
+                    pass
+            time.sleep(FAST_POLL_S if time.time() - started < FAST_POLL_FOR_S else POLL_S)
         with self._lock:
             if self._proc is proc:
                 self._stop_locked()
@@ -413,17 +511,23 @@ class WhisperServer:
 
     def _watch(self, proc: subprocess.Popen, epoch: int) -> None:
         """Waits for the ready server to end. Ending on its own (not stop() or a newer start) = it died: bring it
-        back."""
-        code = proc.wait()
-        with self._lock:
-            if self._proc is not proc:
-                return
-            self._proc = None
-            self._ready.clear()
-            self._recovering = True
-        log.warning("whisper-server (pid %s) nečekaně skončil (%s). Konec jeho výpisu: %s", proc.pid, exit_text(code),
-                    _log_tail())
-        self._recover(epoch)
+        back. Whatever goes wrong on the way ends with "failed": a dead thread would leave dictation waiting for a
+        server nobody starts."""
+        try:
+            code = proc.wait()
+            with self._lock:
+                if self._proc is not proc:
+                    return
+                self._proc = None
+                self._ready.clear()
+                self._recovering = True
+            log.warning("whisper-server (pid %s) nečekaně skončil (%s). Konec jeho výpisu: %s", proc.pid,
+                        exit_text(code), _log_tail())
+            self._recover(epoch)
+        except Exception:
+            log.exception("Obnova whisper-serveru selhala")
+            self._give_up(epoch, "Rozpoznávání řeči se nepodařilo znovu spustit. Až podržíš klávesu, zkusím to "
+                          "znovu.")
 
     def _recover(self, epoch: int) -> None:
         now = time.time()
@@ -433,14 +537,15 @@ class WhisperServer:
                           "Když to nepomůže, aktualizuj ovladač grafiky nebo restartuj počítač.")
             return
         self.on_event("restarting", "")
-        for delay in RESTART_DELAYS:
+        for i, delay in enumerate(RESTART_DELAYS):
             time.sleep(delay)
             if epoch != self._epoch:
                 return
             try:
-                self._start(epoch)
-            except RuntimeError as e:
-                log.warning("Nový start whisper-serveru selhal: %s", e)
+                # the processor only on the last try: a driver reset or update takes longer than the first ones
+                self._start(epoch, fallback=i == len(RESTART_DELAYS) - 1)
+            except Exception as e:  # also OSError: no memory to start it (after 0xC0000017), an antivirus
+                log.warning("Nový start whisper-serveru selhal: %s", e, exc_info=not isinstance(e, RuntimeError))
                 continue
             with self._lock:
                 if epoch != self._epoch or not self._ready.is_set():
@@ -495,6 +600,14 @@ class WhisperServer:
         for attempt in range(2):
             port, prefix, proc = self._wait_ready()
             timeout = self._timeout(seconds)
+            owners = _listeners(port)
+            if owners and proc is not None and owners != {proc.pid}:  # see _listeners
+                log.warning("Na portu whisper-serveru poslouchá jiný proces, zvuk tam neposílám")
+                if proc.poll() is None:
+                    proc.kill()  # the watchdog starts a new one, on another port
+                if attempt == 0 and self._lost(proc):
+                    continue
+                raise RuntimeError("Rozpoznávání řeči neodpovídá.")
             try:
                 r = self._http.post(
                     f"http://127.0.0.1:{port}{prefix}/inference",
@@ -542,4 +655,7 @@ class WhisperServer:
         proc, self._proc = self._proc, None  # first: a start still waiting for it sees it's superseded, not dead
         if proc and proc.poll() is None:
             proc.kill()
-            proc.wait(5)
+            try:
+                proc.wait(5)
+            except subprocess.TimeoutExpired:  # stuck in the graphics driver (a reset): the job object ends it later
+                log.warning("whisper-server (pid %s) se po zabití neukončil do 5 s", proc.pid)

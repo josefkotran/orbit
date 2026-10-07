@@ -1,8 +1,27 @@
 """Orbit: runtime\\pythonw.exe Orbit.pyw once installed, .venv\\Scripts\\pythonw.exe Orbit.pyw in a dev checkout."""
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# A program Orbit looks up on the PATH (claude.exe, git, pwsh) never comes from the current folder (Claude Code does
+# the same for its own lookups). A user's own setting wins.
+os.environ.setdefault("NoDefaultCurrentDirectoryInExePath", "1")
+
+
+def _import_numpy() -> None:
+    """numpy's OpenBLAS starts a thread per logical processor at import and commits ~32 MB of memory for each
+    (~490 MB with 16), and Orbit never multiplies a matrix: one thread. Only for this import, so the sessions and
+    programs Orbit starts keep the user's own setting."""
+    import importlib
+
+    mine = "OPENBLAS_NUM_THREADS" not in os.environ
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+    try:
+        importlib.import_module("numpy")
+    finally:
+        if mine:
+            del os.environ["OPENBLAS_NUM_THREADS"]
 
 
 def _crash() -> None:
@@ -47,6 +66,7 @@ if __name__ == "__main__":
             pass
         sys.exit(0)
     try:
+        _import_numpy()  # before anything else imports it
         from app.main import main
         main()
     except Exception:

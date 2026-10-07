@@ -19,6 +19,9 @@ import sys
 import time
 from pathlib import Path
 
+# git and pwsh never from the current folder (the session's project, maybe a cloned repo); Claude Code sets this for
+# its status lines too, this keeps it so with any other caller
+os.environ.setdefault("NoDefaultCurrentDirectoryInExePath", "1")
 CHAIN_TIMEOUT_S = 5  # the user's previous status line gets this long (Claude Code cancels a slow one anyway)
 CHAINED = "ORBIT_STATUSLINE_CHAINED"  # set for the previous command: another Orbit's status line there won't chain on
 WINDOWS = ("five_hour", "seven_day")

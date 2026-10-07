@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -44,7 +45,9 @@ def _candidates() -> list[Path]:
         found.append(Path(exe))
     if shim := shutil.which("claude"):  # npm's claude.cmd with another prefix (nvm, fnm, a custom one)
         found.append(Path(shim).parent / _NPM_EXE)
-    return [p for p in found if p]
+    # which() looks in the current folder first (unless NoDefaultCurrentDirectoryInExePath is set) and gives that
+    # as a relative path: never a claude.exe that only some folder Orbit was started in has
+    return [p for p in found if p and p.is_absolute()]
 
 
 def find_exe() -> str | None:
@@ -132,16 +135,20 @@ def parse_status(text: str) -> dict:
 
 
 def status(timeout: float = 30) -> Status:
-    """Blocking (about a second): is Claude Code here and logged in? Without ANTHROPIC_API_KEY (environment()), so it
+    """Blocking (under a second): is Claude Code here and logged in? Without ANTHROPIC_API_KEY (environment()), so it
     says whether the subscription login works, which is what Orbit uses."""
     exe = find_exe()
     if not exe:
         return Status()
-    s = Status(installed=True, exe=exe, version=version(exe, timeout))
-    try:
-        proc = _run([exe, "auth", "status", "--json"], timeout)
-    except (OSError, subprocess.SubprocessError) as e:
-        s.error = "Claude Code neodpovídá." if isinstance(e, subprocess.TimeoutExpired) else str(e)
+    with ThreadPoolExecutor(1) as pool:  # --version (about 0.2 s) runs alongside auth status (0.6 s), not before it
+        found = pool.submit(version, exe, timeout)
+        try:
+            proc, error = _run([exe, "auth", "status", "--json"], timeout), ""
+        except (OSError, subprocess.SubprocessError) as e:
+            proc, error = None, "Claude Code neodpovídá." if isinstance(e, subprocess.TimeoutExpired) else str(e)
+    s = Status(installed=True, exe=exe, version=found.result())
+    if proc is None:
+        s.error = error
         return s
     data = parse_status(proc.stdout)
     if not data:  # an old version without "auth status", or something broke

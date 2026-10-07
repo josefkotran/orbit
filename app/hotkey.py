@@ -16,6 +16,8 @@ VK_ESCAPE, VK_LCONTROL = 0x1B, 0xA2
 ALTGR_FAKE_CTRL_SCAN = 0x21D  # AltGr on Czech layout also sends a fake Left Ctrl with this scan code
 
 MOUSE_MIDDLE, MOUSE_X1, MOUSE_X2 = 4, 5, 6
+# A held key repeats its key-down every ~30–400 ms (Windows' repeat rate); a gap this long means it was let go
+STUCK_S = 1.5
 
 _KEY_NAMES = {
     0x08: "Backspace", 0x09: "Tab", 0x0D: "Enter", 0x13: "Pause", 0x14: "Caps Lock", 0x20: "Mezerník",
@@ -74,6 +76,7 @@ class PushToTalk:
         self._on_press = on_press
         self._on_release = on_release
         self._held = False
+        self._latched = False  # reset() while the key was down: its repeats don't start anything until it's let go
         self._last_down = 0.0  # when the held key last sent a key-down (Windows repeats them while it's held)
         self._repeats = 0  # repeated key-downs seen in this hold
         self._other_key = False  # another key went down during the hold: the repeating moved to that one
@@ -100,7 +103,7 @@ class PushToTalk:
     def set_binding(self, binding: dict) -> None:
         with self._lock:
             self._binding = dict(binding)
-            self._held = False
+            self._held = self._latched = False
         self._sync_mouse_hook()
 
     def capture(self, callback) -> None:
@@ -121,11 +124,15 @@ class PushToTalk:
 
     def reset(self) -> None:
         """Forget that the key is held (the recording ended another way): its release then does nothing, the next
-        press starts again."""
+        press starts again. A key still held down keeps repeating its key-down: those are swallowed until it's let
+        go (or goes quiet for STUCK_S, its release missed), else after the 5-minute cap of a key held by mistake
+        the next repeat would open the microphone again 30 ms later."""
         with self._lock:
+            if self._held and self._binding.get("kind") == "key":
+                self._latched, self._last_down = True, time.monotonic()
             self._held = False
 
-    def check_stuck(self, after: float = 1.5) -> bool:
+    def check_stuck(self, after: float = STUCK_S) -> bool:
         """Was the held key's release missed? The hook never sees it when it happens on Windows' secure desktop (a
         UAC prompt, a locked screen), in a window running as administrator, or when Windows drops a slow hook. A held
         key repeats its key-down every ~30–50 ms, so none for `after` seconds means it's up: on_release is called
@@ -196,7 +203,7 @@ class PushToTalk:
                 else:
                     new = {"kind": kind, "code": code}
                     self._binding = dict(new)
-                    self._held = False
+                    self._held = self._latched = False
                 self._swallow_up = (kind, code)
                 capture_done = (cb, new)
             else:
@@ -206,6 +213,15 @@ class PushToTalk:
                         self._other_key = True  # Windows repeats only the newest key: the held one goes quiet
                     return False
                 fire = None
+                if self._latched:  # see reset()
+                    now = time.monotonic()
+                    if not down:
+                        self._latched = False
+                        return True
+                    if now - self._last_down < STUCK_S:
+                        self._last_down = now
+                        return True
+                    self._latched = False  # its release was never seen (the lock screen): this is a new press
                 if down and not self._held:
                     self._held, fire = True, self._on_press
                     self._last_down, self._repeats, self._other_key = time.monotonic(), 0, False

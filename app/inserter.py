@@ -24,6 +24,8 @@ _NO_HISTORY = {
     'application/x-qt-windows-mime;value="CanIncludeInClipboardHistory"': b"\x00\x00\x00\x00",
     'application/x-qt-windows-mime;value="CanUploadToCloudClipboard"': b"\x00\x00\x00\x00",
 }
+# Markers a password manager may put next to a password, often without any data: kept in the backup even when empty
+_MARKERS = set(_NO_HISTORY) | {'application/x-qt-windows-mime;value="Clipboard Viewer Ignore"'}
 
 
 class _KEYBDINPUT(ctypes.Structure):
@@ -182,12 +184,24 @@ class Inserter:
             md.setData(fmt, data)
         QGuiApplication.clipboard().setMimeData(md)
 
-    def press(self, key: str, after_text: str = "") -> None:
+    def press(self, key: str, after_text: str = "", on_skipped=None) -> None:
         """'send' = Enter, 'stop' = Esc. After inserted text Enter waits a moment: terminals paste asynchronously
-        and Claude Code treats a key arriving in the same burst as typed text as part of a paste."""
+        and Claude Code treats a key arriving in the same burst as typed text as part of a paste. Only into the
+        window that is in front now: if another one (another chat, terminal, session) comes forward meanwhile, the
+        key isn't sent and on_skipped() is called."""
         vk = VK_RETURN if key == "send" else VK_ESCAPE
         delay = min(1500, 300 + len(after_text)) if after_text else 0
-        QTimer.singleShot(delay, lambda: _send([_key(vk), _key(vk, flags=KEYEVENTF_KEYUP)]))
+        window = foreground()
+
+        def send():
+            if window and not same_window(window, foreground()):
+                log.info("%s neposílám, okno se mezitím změnilo", "Enter" if vk == VK_RETURN else "Esc")
+                if on_skipped:
+                    on_skipped()
+                return
+            _send([_key(vk), _key(vk, flags=KEYEVENTF_KEYUP)])
+
+        QTimer.singleShot(delay, send)
 
     def _paste(self, text: str) -> bool:
         cb = QGuiApplication.clipboard()
@@ -235,7 +249,7 @@ class Inserter:
                 if fmt in ("text/plain", "application/x-qt-image") or copy.hasFormat(fmt):
                     continue
                 data = src.data(fmt)
-                if 0 < data.size() <= SNAPSHOT_MAX_BYTES:
+                if 0 < data.size() <= SNAPSHOT_MAX_BYTES or (fmt in _MARKERS and data.size() == 0):
                     copy.setData(fmt, data)
         except Exception:
             log.exception("Nepodařilo se zálohovat schránku")
@@ -247,6 +261,10 @@ class Inserter:
         if cb.text() != self._ours:
             return  # the user copied something new in the meantime – leave it
         if saved is not None:
+            # It was on the clipboard before, so Windows' history and cloud clipboard had their chance: putting it
+            # back mustn't add it again, above all a password a password manager marked as "not in history".
+            for fmt, data in _NO_HISTORY.items():
+                saved.setData(fmt, data)
             cb.setMimeData(saved)
         else:
             cb.clear()

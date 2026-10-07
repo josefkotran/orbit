@@ -67,6 +67,10 @@ log = logging.getLogger(__name__)
 
 problem = ""  # set by load(): what to tell the user when config.json couldn't be read ("" = all fine)
 missing: set[str] = set()  # set by load(): keys an existing config.json doesn't have yet (written by an older Orbit)
+# set by load(): config.json couldn't be read and not even copied aside (another program holds it locked): save()
+# doesn't write over it, or the user's vocabulary and settings would be gone for good
+readonly = False
+READ_TRIES, READ_PAUSE_S = 30, 0.1  # an antivirus or a backup tool holding it locked: wait up to ~3 s
 
 
 def is_first_run() -> bool:
@@ -100,24 +104,24 @@ def _valid(key: str, value) -> bool:
 
 def _read() -> dict | None:
     """config.json's content; None when there is none. Raises when it can't be read or isn't a JSON object."""
-    for attempt in range(5):
+    for attempt in range(READ_TRIES):
         try:
             data = json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
             break
         except FileNotFoundError:
             return None
         except PermissionError:  # an antivirus or a backup tool has it open for a moment
-            if attempt == 4:
+            if attempt == READ_TRIES - 1:
                 raise
-            time.sleep(0.1)
+            time.sleep(READ_PAUSE_S)
     if not isinstance(data, dict):
         raise ValueError("config.json neobsahuje objekt")
     return data
 
 
 def load() -> dict:
-    global problem, missing
-    problem, missing = "", set()
+    global problem, missing, readonly
+    problem, missing, readonly = "", set(), False
     cfg = json.loads(json.dumps(DEFAULTS))
     try:
         stored = _read()
@@ -130,7 +134,10 @@ def load() -> dict:
             shutil.copy2(CONFIG_PATH, backup)
             problem = f"Nastavení se nedalo načíst, platí výchozí. Původní soubor je tady: {backup}"
         except OSError:
-            problem = "Nastavení se nedalo načíst, platí výchozí."
+            readonly = True
+            log.warning("config.json nejde ani zkopírovat, do restartu Orbitu ho nepřepíšu")
+            problem = ("Nastavení se nedalo načíst ani zálohovat (nejspíš ho drží jiný program), platí výchozí. Aby "
+                       "se tvoje nastavení nepřepsalo, změny se teď neuloží. Restartuj prosím Orbit.")
         return cfg
     if stored is not None:
         missing = set(DEFAULTS) - set(stored)
@@ -149,7 +156,11 @@ def load() -> dict:
 
 
 def save(cfg: dict) -> None:
-    """Writes a temporary file and swaps it in, so a crash or a power cut never leaves a half-written config.json."""
+    """Writes a temporary file and swaps it in, so a crash or a power cut never leaves a half-written config.json.
+    Not at all when load() couldn't read it nor keep a copy (readonly)."""
+    if readonly:
+        log.warning("config.json neukládám: při startu nešel načíst ani zkopírovat")
+        return
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = CONFIG_PATH.with_name("config.json.tmp")
     tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")

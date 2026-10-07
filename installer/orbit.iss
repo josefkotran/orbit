@@ -73,14 +73,19 @@ en.DeleteUserData=Also delete Orbit's data?%n%n%1%n%nIt holds the settings, voca
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [InstallDelete]
-; an update replaces these folders whole, so files a newer version dropped don't linger
-Type: filesandordirs; Name: "{app}\runtime"
-Type: filesandordirs; Name: "{app}\app"
+; an update replaces these folders whole, so files a newer version dropped don't linger. Not runtime\ itself:
+; Claude Code may start runtime\python.exe for Orbit's hooks and status line at any moment (they need only the
+; stdlib next to it), and without it they failed until [Files] put it back. [Files] replaces those files one by one
+; (MoveAsideIfInUse); a new Python minor version would leave the old ones there, unused. app\ last: [Files] writes
+; it among the first.
+Type: filesandordirs; Name: "{app}\runtime\Lib"
+Type: files; Name: "{app}\runtime\*.orbit-old"
 Type: filesandordirs; Name: "{app}\assets"
 Type: filesandordirs; Name: "{app}\whisper"
+Type: filesandordirs; Name: "{app}\app"
 
 [Files]
-Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; BeforeInstall: MoveAsideIfInUse
 
 [Icons]
 ; -s: never the user's own %APPDATA%\Python\Python313\site-packages (the ._pth without "import site" keeps it out
@@ -106,6 +111,43 @@ Type: filesandordirs; Name: "{app}\__pycache__"
 Type: dirifempty; Name: "{app}"
 
 [Code]
+var
+  MovedAside: TStringList;
+
+function InitializeSetup: Boolean;
+begin
+  MovedAside := TStringList.Create;
+  Result := True;
+end;
+
+{ Before each file. A file in use can't be replaced: Setup would stop with an error, and /SUPPRESSMSGBOXES
+  (install.ps1) answers it with Abort. Claude Code may be running Orbit's runtime\python.exe for a hook or the
+  status line right then. A running .exe or a loaded .dll can't be deleted but can be renamed, so the old one
+  moves aside, the new one takes its place and the hook finishes with the old one. }
+procedure MoveAsideIfInUse;
+var
+  Dest: String;
+begin
+  Dest := ExpandConstant(CurrentFileName);
+  if not FileExists(Dest) or DeleteFile(Dest) then
+    Exit;
+  DeleteFile(Dest + '.orbit-old');
+  if RenameFile(Dest, Dest + '.orbit-old') then begin
+    Log('In use, moved aside: ' + Dest);
+    MovedAside.Add(Dest + '.orbit-old');
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  I: Integer;
+begin
+  { a hook takes a fraction of a second; what is still in use goes with the next update or the uninstall }
+  if CurStep = ssPostInstall then
+    for I := 0 to MovedAside.Count - 1 do
+      DelayDeleteFile(MovedAside.Strings[I], 8);
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   DataDir: String;

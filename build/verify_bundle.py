@@ -1,22 +1,52 @@
 """Smoke test of a built bundle, run by build_installer.py with the bundle's own runtime\\python.exe:
-    runtime\\python.exe build\\verify_bundle.py <bundle> <temp folder>
+    runtime\\python.exe build\\verify_bundle.py <bundle> <temp folder> [<folder with a Piper voice>]
 
 Imports every module of app/ and the packages Orbit needs, builds the settings dialog offscreen
-(QT_QPA_PLATFORM=offscreen, a screenshot goes to the temp folder) and feeds a sample event to the
-Claude Code hook. The caller points ORBIT_DATA_DIR and ORBIT_CLAUDE_DIR into the temp folder.
+(QT_QPA_PLATFORM=offscreen, a screenshot goes to the temp folder), feeds a sample event to the
+Claude Code hook and, with a downloaded Piper voice, reads a sentence aloud from a folder with diacritics.
+The caller points ORBIT_DATA_DIR and ORBIT_CLAUDE_DIR into the temp folder.
 Prints what failed and exits with 1 if anything did.
 """
+import _winapi
 import importlib
 import inspect
 import json
 import os
 import pkgutil
+import shutil
 import subprocess
 import sys
+import time
 import traceback
 from pathlib import Path
 
+
+def piper_say(model: str) -> int:
+    """The child process of piper_nonascii(): Orbit's voice module reads a text with Piper, its log goes to stdout."""
+    import logging
+    sys.stdout.reconfigure(encoding="utf-8")
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s", stream=sys.stdout)
+    from app import voice
+    if not voice.piper_installed():
+        print("NOPIPER")  # no ASCII form of the path (8.3 names off): Orbit doesn't offer Piper at all
+        return 0
+    speaker = voice.PiperSpeaker(model)
+    # only punctuation: espeak-ng starts and loads Czech (what a path with diacritics breaks), nothing is heard
+    speaker.say(".")
+    deadline = time.monotonic() + 120
+    while speaker.speaking and time.monotonic() < deadline:
+        time.sleep(0.05)
+    if speaker.speaking:
+        print("ERROR nedočetl do 2 minut")
+    getattr(speaker, "close", lambda: None)()
+    return 0
+
+
+if sys.argv[1:2] == ["--piper-say"]:
+    sys.exit(piper_say(sys.argv[2]))
+
 bundle, temp = Path(sys.argv[1]), Path(sys.argv[2])
+voices = Path(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] else None
 sys.path.insert(0, str(bundle))
 failed = []
 
@@ -101,9 +131,43 @@ def hook():
     return f"zapsal {', '.join(str(p) for p in written)}"
 
 
+def piper_nonascii():
+    """Orbit under a folder with diacritics (a Czech user name: C:\\Users\\Jiří Nový\\AppData\\Local\\Programs\\Orbit)
+    reads aloud with Piper. espeak-ng can't open its data through such a path and ends the whole process it runs in
+    with exit(1), no exception (1.0.0: Orbit vanished at the first text read aloud). The bundle is reached through a
+    junction there, the voice is copied into a data folder next to it. Any warning in Orbit's log fails it."""
+    model = next(p for p in sorted(voices.glob("*.onnx")) if Path(f"{p}.json").is_file())
+    home = temp / "Jiří Nový"
+    (home / "data" / "models" / "piper").mkdir(parents=True)
+    for f in (model, Path(f"{model}.json")):
+        shutil.copy2(f, home / "data" / "models" / "piper" / f.name)
+    link = home / "Orbit"
+    _winapi.CreateJunction(str(bundle.resolve()), str(link))
+    try:
+        r = subprocess.run([str(link / "runtime" / "python.exe"), str(Path(__file__).resolve()), "--piper-say",
+                            model.stem], env=dict(os.environ, ORBIT_DATA_DIR=str(home / "data")),
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+    finally:
+        os.rmdir(link)  # removes the junction only, never what it points to
+    out = (r.stdout + r.stderr).strip()
+    if r.returncode == 0 and "NOPIPER" in out.splitlines():
+        return "Orbit tu Piper nenabízí (cesta bez krátkého jména 8.3), to je v pořádku"
+    if "phontab" in out:
+        raise RuntimeError("espeak-ng neotevřel svá data v cestě s diakritikou a ukončil proces, ve kterém běží: "
+                           f"Orbit by tam hlasem Piperu nepřečetl nic (1.0.0 rovnou spadl).\n{out[-600:]}")
+    if r.returncode or "načten" not in out or any(line.startswith(("WARNING", "ERROR", "CRITICAL"))
+                                                  for line in out.splitlines()):
+        raise RuntimeError(f"exit {r.returncode}: {out[-800:]}")
+    return f"hlas načten, espeak-ng svá data našel ({link})"
+
+
 check("dialog nastavení (offscreen)", settings_dialog)
 check("hlasy QTextToSpeech", tts_engines)
 check("hook Claude Code (cc_hook.py)", hook)
+if piper and voices:
+    check("Piper ve složce s diakritikou", piper_nonascii)
+elif piper:
+    print("  --    Piper ve složce s diakritikou: přeskočeno, chybí stažený hlas (models\\piper)")
 
 print(f"Selhalo: {', '.join(failed)}" if failed else "Vše v pořádku.")
 sys.exit(1 if failed else 0)

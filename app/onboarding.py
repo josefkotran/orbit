@@ -31,6 +31,9 @@ class ClaudeConnection(QObject):
     _checked = Signal(object)
     POLL_MS = 2000
     RECHECK_MS = 5 * 60_000  # not connected: look again now and then (installed or logged in from a terminal)
+    # The check failed or claude.exe was missing before it ever worked in this run (a slow start of Windows, Claude
+    # Code updating itself): soon again, not only in 5 minutes with sessions, limits and the agent off till then
+    QUICK_RECHECK_MS = (15_000, 30_000, 60_000)
 
     def __init__(self):
         super().__init__()
@@ -39,6 +42,7 @@ class ClaudeConnection(QObject):
         self.message = ""  # how the last install or login ended when it didn't work
         self._proc = None
         self._inflight = False
+        self._quick = 0  # quick rechecks used (QUICK_RECHECK_MS)
         self._checked.connect(self._on_checked)
         self._poll = QTimer(self, interval=self.POLL_MS)
         self._poll.timeout.connect(self.refresh)
@@ -82,8 +86,12 @@ class ClaudeConnection(QObject):
                 self._set_busy("")
         if s.connected:
             self._recheck.stop()
-        elif not self._recheck.isActive():
-            self._recheck.start()
+            self._quick = len(self.QUICK_RECHECK_MS)  # it worked once: a later hiccup keeps that state (above)
+        elif (s.error or not s.installed) and self._quick < len(self.QUICK_RECHECK_MS):
+            self._recheck.start(self.QUICK_RECHECK_MS[self._quick])
+            self._quick += 1
+        elif not self._recheck.isActive() or self._recheck.interval() != self.RECHECK_MS:
+            self._recheck.start(self.RECHECK_MS)
         if before is None or (before.installed, before.logged_in, before.method) != (s.installed, s.logged_in,
                                                                                      s.method):
             log.info("Claude Code: %s", "nenainstalovaný" if not s.installed else

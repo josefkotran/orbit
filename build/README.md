@@ -20,12 +20,14 @@ Volby `build_installer.py`:
 | `--whisper-dir <složka>` | odkud vzít whisper-server (výchozí `whisper\`, pro distribuci `whisper-next\`) |
 | `--without-piper` | vynechá Piper (GPL-3.0) a onnxruntime, předčítat pak umí jen hlas Windows (viz Licence) |
 | `--no-installer` | jen sestaví a zkontroluje `build\dist\Orbit`, Inno Setup nespouští |
+| `--update-lock` | po změně `requirements.txt`: znovu vyřeší balíčky z PyPI a přepíše `BUNDLE_LOCK` ve skriptu (pak zkontrolovat git diff), nic nestaví |
 
 Napoprvé je potřeba internet. Vše stažené se ukládá do `build\cache` (MSYS2, zdrojáky whisper.cpp, Python,
 instalátor Inno Setupu) a `build\tools` (Inno Setup). Obojí je v `.gitignore`. Do systému se nic neinstaluje.
 MSYS2 je jen rozbalený archiv a Inno Setup se nainstaluje tiše v režimu „portable“ do `build\tools`, bez
 odinstalátoru a bez zápisu do registru. Každé stažení má ve skriptu pevný SHA256 a skript ho ověřuje. Wheely
-z PyPI hlídá přesná verze v `requirements.txt`.
+z PyPI hlídá zámek `BUNDLE_LOCK` v `build_installer.py`: všech 21 balíčků (i nepřímé závislosti jako urllib3,
+certifi, protobuf) s verzí a SHA256, pip je instaluje s `--require-hashes --no-deps`.
 
 Sestavení instalátoru trvá asi 2 minuty, když má pip balíčky v cache (poprvé se stahuje asi 300 MB wheelů).
 `build_whisper.py` poprvé stahuje MSYS2 s GCC (asi 1 GB rozbalené) a kompiluje asi 15 minut, pak už jen pár sekund.
@@ -47,8 +49,10 @@ Modely (1,6–3,1 GB) si Orbit stáhne sám.
    (u Pepy je tam spousta balíčků, jiný numpy i PySide6), a to i u spuštění, která si dělá Orbit sám bez `-s`
    (klíč Run, hooky, status line, MCP server agenta). Balíček žádné soubory `.pth` nemá, takže `site` nepotřebuje;
    `verify_bundle.py` to hlídá a spouští se schválně bez `-s`. Zástupci, `[Run]` a `--cleanup` mají `-s` i tak.
-3. Nainstaluje `requirements.txt` do `runtime\Lib\site-packages` přes pip z `.venv`, jen hotové wheely pro
-   win_amd64 a cp313.
+3. Nainstaluje balíčky ze zámku `BUNDLE_LOCK` do `runtime\Lib\site-packages` přes pip z `.venv`, jen hotové wheely
+   pro win_amd64 a cp313, s `--require-hashes --no-deps` (jiný soubor, než jaký byl 7. 10. na PyPI, pip odmítne).
+   Když `requirements.txt` chce balíček nebo verzi, kterou zámek nemá, build skončí s radou spustit `--update-lock`.
+   Řádky zámku s „piper“ potřebuje jen Piper, `--without-piper` je vynechá.
 4. Ořeže PySide6 (asi 640 MB → 46 MB). Nechá jen Qt moduly, které `app\` opravdu importuje (hledá
    `PySide6.QtXxx` ve zdrojácích, takže nový modul se přidá sám), pluginy `qwindows`, `qoffscreen`, styl Windows,
    ikony a obrázky (ico, svg, jpeg, gif) a hlasy `winrt`/`sapi`. Qt knihovny dopočítá podle importů v DLL.
@@ -65,6 +69,9 @@ Modely (1,6–3,1 GB) si Orbit stáhne sám.
    - `verify_bundle.py` naimportuje všechny moduly `app\` a balíčky a vytvoří okno nastavení mimo obrazovku
      (screenshot uloží do `%TEMP%\orbit-verify-*`). Zkontroluje hlas `winrt` a pošle ukázkovou událost hooku
      `cc_hook.py`.
+   - S Piperem a staženým hlasem (`models\piper` checkoutu, jinak `%LOCALAPPDATA%\Orbit\models\piper`) zkusí
+     předčítání z balíčku ve složce `Jiří Nový` (junction, hlas zkopírovaný do tempu, text „.“, nic není slyšet):
+     espeak-ng v 1.0.0 cestu s diakritikou neotevřel a ukončil proces. Bez hlasu se kontrola přeskočí.
    - Co kontrola v balíčku vytvoří, se zase smaže.
 8. Volitelně podepíše whisper-server a jeho DLL (viz níže) a zavolá Inno Setup s `installer\orbit.iss`.
 
@@ -114,8 +121,8 @@ proměnnými prostředí. Když nejsou nastavené, sestavení podpis přeskočí
 
 | Proměnná | Význam |
 |---|---|
-| `ORBIT_SIGN_PFX` | cesta k certifikátu `.pfx` |
-| `ORBIT_SIGN_PASSWORD` | heslo k `.pfx` (nepovinné) |
+| `ORBIT_SIGN_PFX` | cesta k certifikátu `.pfx` bez hesla |
+| `ORBIT_SIGN_PASSWORD` | nepoužívá se: s `ORBIT_SIGN_PFX` build skončí, heslo by bylo v příkazové řádce signtoolu a ISCC (čte ji každý proces uživatele). PFX s heslem naimportovat (`Import-PfxCertificate -CertStoreLocation Cert:\CurrentUser\My`, bez `-Exportable`) a použít `ORBIT_SIGN_THUMBPRINT` |
 | `ORBIT_SIGN_THUMBPRINT` | místo PFX otisk (SHA1) certifikátu v úložišti Windows, např. na tokenu |
 | `ORBIT_SIGN_TIMESTAMP` | časové razítko RFC 3161, výchozí `http://timestamp.digicert.com` |
 | `ORBIT_SIGNTOOL` | cesta k `signtool.exe`, výchozí nejnovější z Windows SDK (`Windows Kits\10\bin\*\x64`) |
@@ -135,8 +142,11 @@ Python a Qt podepsané už jsou (PSF, The Qt Company).
 - Zástupce v nabídce Start, na ploše jen na přání (úloha). Oba spouští
   `runtime\pythonw.exe -s "{app}\Orbit.pyw"` s ikonou `assets\orbit.ico` a AppUserModelID `Orbit`.
 - Na konci nabídne spuštění Orbitu (ne při tiché instalaci).
-- Aktualizace přes starou verzi nejdřív smaže `runtime\`, `app\`, `assets\` a `whisper\`, ať po staré verzi nezůstanou
-  soubory.
+- Aktualizace přes starou verzi nejdřív smaže `runtime\Lib`, `assets\`, `whisper\` a `app\`, ať po staré verzi
+  nezůstanou soubory. Zbytek `runtime\` (python.exe, stdlib) nechá, protože ho Claude Code může kdykoli spustit pro
+  Orbitovy hooky a stavový řádek: soubory se přepisují po jednom a ten, který běžící hook drží, se přejmenuje na
+  `*.orbit-old` (`MoveAsideIfInUse`), smaže ho další aktualizace nebo odinstalace. Spuštěním zatím neověřeno, před
+  vydáním vyzkoušet testovací variantou `.iss` (viz CLAUDE.md).
 - **Odinstalace:**
   - Nejdřív spustí `runtime\python.exe -s Orbit.pyw --cleanup`. To odebere hooky, status line a klíč Run *této*
     instalace, jiná kopie Orbitu je zachovaná.
