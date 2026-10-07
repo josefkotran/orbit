@@ -35,7 +35,7 @@
 [data-theme="teal"]{--space:#020908;--ink:#06171A;--ink-2:#0A1F22;--accent:#2DD4BF;--accent-rgb:45,212,191;--on-accent:#03201C}
 
 *,*::before,*::after{box-sizing:border-box}
-html{background:var(--space);-webkit-text-size-adjust:100%;transition:background-color .8s var(--ease)}
+html{background:var(--space);-webkit-text-size-adjust:100%;-webkit-tap-highlight-color:transparent;scroll-padding-top:96px;scroll-padding-bottom:24px;transition:background-color .8s var(--ease)}
 html.lenis,html.lenis body{height:auto}
 .lenis.lenis-smooth{scroll-behavior:auto!important}
 body{
@@ -50,7 +50,7 @@ body::before{ /* nebula in the theme colour */
     radial-gradient(35% 40% at 6% 42%,rgba(167,139,250,.07),transparent 70%),
     radial-gradient(40% 30% at 64% 96%,rgba(45,212,191,.06),transparent 70%);
 }
-#space{position:fixed;inset:0;width:100%;height:100%;z-index:0;pointer-events:none}
+#space{position:fixed;left:0;top:0;width:100%;height:100vh;height:100lvh;z-index:0;pointer-events:none}
 main,.nav,footer{position:relative;z-index:2}
 a{color:inherit}
 :focus-visible{outline:2px solid var(--accent);outline-offset:4px;border-radius:8px}
@@ -60,6 +60,8 @@ a{color:inherit}
 .skip{position:absolute;left:-999px;top:10px;z-index:50;background:var(--ink);padding:10px 16px;border-radius:10px}
 .skip:focus{left:14px}
 p{margin:0}
+[tabindex="-1"]:focus{outline:none}
+.nav.hidden:focus-within{transform:none}
 .nw{white-space:nowrap}
 .touch-only{display:none}
 @media (hover:none){.hover-only{display:none}.touch-only{display:inline}}
@@ -94,10 +96,11 @@ h3{font-family:var(--text-font);font-weight:600;font-stretch:112%;font-size:clam
 .cursor.is-rec .cursor-ring{width:84px;height:84px;margin:-42px 0 0 -42px;background:var(--rec);border-color:var(--rec);box-shadow:0 0 0 calc(var(--lv,0) * 26px) rgba(255,77,90,.25)}
 .cursor.is-rec .cursor-label{opacity:1;transform:none;color:#fff}
 .cursor.is-rec .cursor-dot{opacity:0}
+@media (forced-colors:active){.cursor{display:none!important}.has-cursor,.has-cursor *{cursor:auto!important}}
 
 /* ---------- nav ---------- */
 .nav{position:fixed;top:0;left:0;right:0;z-index:20;transition:transform .5s var(--ease),background-color .4s,border-color .4s;border-bottom:1px solid transparent}
-.nav.scrolled{background:rgba(4,6,12,.72);border-bottom-color:var(--line);-webkit-backdrop-filter:blur(16px) saturate(140%);backdrop-filter:blur(16px) saturate(140%)}
+.nav.scrolled{background:rgba(4,6,12,.9);border-bottom-color:var(--line)} /* no backdrop blur: it re-blurred the moving stars every frame */
 .nav.hidden{transform:translateY(-100%)}
 .nav .wrap{display:flex;align-items:center;gap:22px;height:74px}
 .brand{display:flex;align-items:center;gap:11px;text-decoration:none;font-family:var(--display);font-variation-settings:"wdth" 125,"wght" 700;font-size:22px;letter-spacing:.01em}
@@ -106,15 +109,18 @@ h3{font-family:var(--text-font);font-weight:600;font-stretch:112%;font-size:clam
 .nav-links{display:flex;gap:4px;margin-left:auto;font-size:15.5px}
 .nav-links a{position:relative;text-decoration:none;color:var(--soft);padding:8px 12px;border-radius:999px;transition:color .25s}
 .nav-links a::after{content:"";position:absolute;left:12px;right:12px;bottom:4px;height:1px;background:var(--accent);transform:scaleX(0);transform-origin:right;transition:transform .45s var(--ease)}
-.nav-links a:hover,.nav-links a.active{color:var(--text)}
-.nav-links a:hover::after,.nav-links a.active::after{transform:scaleX(1);transform-origin:left}
-.themes{display:flex;gap:7px;padding:7px 10px;border-radius:999px;border:1px solid var(--line-2);background:rgba(255,255,255,.03)}
-.themes button{width:14px;height:14px;padding:0;border-radius:50%;border:0;background:var(--c);position:relative;transition:transform .3s var(--ease)}
-.themes button:hover{transform:scale(1.3)}
-.themes button[aria-pressed="true"]{box-shadow:0 0 0 2px var(--space),0 0 0 3.5px var(--text)}
+.nav-links a.active{color:var(--text)}
+.nav-links a.active::after{transform:scaleX(1);transform-origin:left}
+@media (hover:hover){.nav-links a:hover{color:var(--text)}.nav-links a:hover::after{transform:scaleX(1);transform-origin:left}}
+.themes{display:flex;gap:2px;padding:2px 5px;border-radius:999px;border:1px solid var(--line-2);background:rgba(255,255,255,.03)}
+.themes button{display:grid;place-items:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:none;position:relative} /* 24 px target, 14 px disc */
+.themes button::before{content:"";width:14px;height:14px;border-radius:50%;background:var(--c);transition:transform .3s var(--ease)}
+.themes button[aria-pressed="true"]::before{box-shadow:0 0 0 2px var(--space),0 0 0 3.5px var(--text)}
+@media (hover:hover){.themes button:hover::before{transform:scale(1.3)}}
+@media (forced-colors:active){.themes button::before{forced-color-adjust:none;border:1px solid CanvasText}.themes button[aria-pressed="true"]::before{outline:2px solid Highlight;outline-offset:2px}}
 .gh{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;border:1px solid var(--line-2);color:var(--soft);transition:color .25s,border-color .25s,background-color .25s}
 .gh svg{width:18px;height:18px}
-.gh:hover{color:var(--text);border-color:rgba(var(--accent-rgb),.7);background:rgba(var(--accent-rgb),.12)}
+@media (hover:hover){.gh:hover{color:var(--text);border-color:rgba(var(--accent-rgb),.7);background:rgba(var(--accent-rgb),.12)}}
 @media (max-width:980px){.nav-links{display:none}.gh{margin-left:auto}}
 @media (max-width:520px){.nav .btn{display:none}}
 
@@ -127,35 +133,40 @@ h3{font-family:var(--text-font);font-weight:600;font-stretch:112%;font-size:clam
   transition:box-shadow .4s var(--ease),background-color .6s;
 }
 .btn::before{content:"";position:absolute;inset:0;z-index:-1;border-radius:inherit;background:radial-gradient(120px circle at var(--bx,50%) var(--by,50%),rgba(255,255,255,.55),transparent 60%);opacity:0;transition:opacity .3s}
-.btn:hover::before{opacity:1}
-.btn:hover{box-shadow:0 0 0 1px rgba(255,255,255,.2) inset,0 22px 70px -14px rgba(var(--accent-rgb),1)}
+@media (hover:hover){.btn:hover::before{opacity:1}.btn:hover{box-shadow:0 0 0 1px rgba(255,255,255,.2) inset,0 22px 70px -14px rgba(var(--accent-rgb),1)}}
+.btn:active{filter:brightness(1.12)} /* not transform: magnetic buttons carry GSAP's */
+.btn:active::before{opacity:1;transition:none}
 .btn .lbl{display:inline-flex;align-items:center;gap:10px;pointer-events:none}
 .btn svg{width:19px;height:19px}
 .btn.small{padding:11px 18px;font-size:14.5px}
 .btn.ghost{background:transparent;color:var(--text);box-shadow:inset 0 0 0 1px var(--line-2)}
 .btn.ghost::before{background:radial-gradient(90px circle at var(--bx,50%) var(--by,50%),rgba(var(--accent-rgb),.35),transparent 60%)}
-.btn.ghost:hover{box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),.7)}
+@media (hover:hover){.btn.ghost:hover{box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),.7)}}
 [data-release="ready"] .when-pending,[data-release="pending"] .when-ready{display:none!important}
 
 /* ---------- hero ---------- */
-.hero{--h1:clamp(56px,12.4vw,188px);padding:clamp(104px,14vh,150px) 0 0;position:relative}
+.hero{--h1:clamp(56px,12.4vw,188px);padding:clamp(104px,14vh,150px) 0 0;position:relative;overflow-x:clip}
 .hero-grid{position:relative}
-.hero h1{font-size:var(--h1);line-height:.9;letter-spacing:-.02em;white-space:nowrap;user-select:none;-webkit-user-select:none;touch-action:pan-y}
+.hero h1{font-size:var(--h1);line-height:.9;letter-spacing:-.02em;white-space:nowrap;user-select:none;-webkit-user-select:none;touch-action:pan-y pinch-zoom}
 .hero h1 .ch{transform-origin:50% 80%}
-/* the text sits in the empty space right of the short second line (JS measures the line and moves it there) */
-.hero-side{position:absolute;left:var(--side-left,calc(var(--h1) * 3.2 + 56px));right:0;top:calc(var(--h1) * 1.04);max-width:540px;display:grid;gap:22px}
+/* the text sits in the empty space right of the short second line (JS measures the line, the fallback is the same),
+   pulled up beside it but still in flow, so the stage always starts below it */
+.hero-side{position:relative;margin:calc(var(--h1) * -.76) 0 0 var(--side-left,calc(var(--h1) * 3.526));max-width:540px;display:grid;gap:22px}
 .hero-side .lede{font-size:clamp(17px,1.35vw,19.5px)}
 .hero-cta{display:flex;flex-wrap:wrap;align-items:center;gap:14px 20px}
 .hero-cta .fine{max-width:44ch}
-.hint{position:relative;font-size:14px;line-height:1.9;color:var(--dim)}
+/* the hint sits under the headline it talks about, in the empty space left of the text */
+.hint{position:absolute;left:0;top:calc(var(--h1) * 1.85 + 20px);max-width:calc(var(--h1) * 3.2);font-size:14px;line-height:1.9;color:var(--dim)}
 .hint .rec{position:absolute;left:-17px;top:.72em;width:8px;height:8px;border-radius:50%;background:var(--rec);opacity:0;transition:opacity .2s}
 .listening .hint .rec{opacity:1;animation:blinkrec 1.2s infinite}
 @keyframes blinkrec{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.listening .hint .rec{animation:none}}
 .hint .key{display:inline-block;margin:0 3px;font:600 12.5px/1 var(--text-font);font-stretch:112%;color:var(--soft);padding:6px 9px;border-radius:7px;border:1px solid var(--line-2);border-bottom-width:2px}
 @media (hover:none){.hint .kb{display:none}}
-@media (max-width:1100px){.hero-side{position:static;margin-top:clamp(26px,4vw,40px)}.hero h1{white-space:normal}.hint .rec{position:static;display:none;margin-right:8px}.listening .hint .rec{display:inline-block}}
+@media (max-width:1100px){.hero-side{position:static;margin:clamp(26px,4vw,40px) 0 0}.hint{position:relative;top:auto;max-width:none;margin-top:22px}.hero h1{white-space:normal}.hint .rec{position:static;display:none;margin-right:8px}.listening .hint .rec{display:inline-block}}
 
 .stage-wrap{position:relative;margin:clamp(56px,7vw,96px) auto 0;max-width:1180px;perspective:1600px}
+@media (min-width:1101px){.stage-wrap{margin-top:clamp(28px,3vw,44px)}}
 .halo{position:absolute;left:-14%;width:128%;top:50%;transform:translateY(-50%);pointer-events:none;z-index:0;overflow:visible}
 @media (max-width:760px){.halo{display:none}}
 .stage{
@@ -168,32 +179,65 @@ h3{font-family:var(--text-font);font-weight:600;font-stretch:112%;font-size:clam
 .stage-wrap:has(.orrery) .halo{display:none}
 .stage:has(.orrery){background:none;box-shadow:none;border-radius:0;overflow:visible}
 .stage video{display:block;width:100%;height:100%;object-fit:cover;background:var(--space)}
+.stage video:focus-visible{outline-offset:-4px;border-radius:22px}
 .stage{container-type:inline-size}
 /* the real download button: lands exactly on the one drawn in the video (490×76 at 818,855 in 1920×1080) and floats there */
 .stage-cta{position:absolute;left:42.6%;top:79.2%;z-index:4;visibility:hidden;opacity:0}
 .stage-cta.on{visibility:visible}
+.stage-cta::before{content:"";position:absolute;inset:-14px}  /* a hover margin: near the button it already holds still */
+/* hidden for 64 of 76 s: don't tick its loops; hovered: it holds still under the cursor */
+.stage-cta:not(.on) *,.stage-cta:not(.on) .cta-float::before,.stage-cta:hover .cta-float,.stage-cta:hover .cta-shadow{animation-play-state:paused}
 .cta-float{position:relative;animation:levitate 3.4s ease-in-out infinite}
 @keyframes levitate{0%,100%{transform:translateY(5px) rotate(-.5deg)}50%{transform:translateY(-5px) rotate(.5deg)}}
+@keyframes levitate-s{0%,100%{transform:translateY(3px) rotate(-.5deg)}50%{transform:translateY(-3px) rotate(.5deg)}}
+/* the glow breathes by opacity on its own layer (an animated box-shadow repaints every frame) */
+.cta-float::before{content:"";position:absolute;inset:0;border-radius:999px;box-shadow:0 26px 80px -8px rgba(var(--accent-rgb),1);opacity:0;pointer-events:none;animation:ctaglow 3.4s ease-in-out infinite}
+@keyframes ctaglow{50%{opacity:1}}
 .cta-shadow{position:absolute;left:10%;right:10%;top:100%;height:16px;margin-top:10px;border-radius:50%;background:radial-gradient(closest-side,rgba(var(--accent-rgb),.6),transparent);filter:blur(5px);animation:levshadow 3.4s ease-in-out infinite}
 @keyframes levshadow{0%,100%{transform:scale(1);opacity:.8}50%{transform:scale(.72);opacity:.4}}
 .cta-ring{position:absolute;inset:0;border-radius:999px;border:2px solid var(--accent);opacity:0;pointer-events:none}
-/* a little larger than the drawn one, so it stays covered while this one floats */
-.stage .cta-btn{height:calc(max(38px,3.96cqw) + 14px);min-width:calc(max(170px,25.5cqw) + 16px);justify-content:center;padding:0 max(16px,2.29cqw);
-  font-size:max(13px,1.667cqw);font-stretch:100%;letter-spacing:.01em;
-  box-shadow:0 0 0 1px rgba(255,255,255,.14) inset,0 18px 60px -10px rgba(var(--accent-rgb),.75);animation:ctaglow 3.4s ease-in-out infinite}
-@keyframes ctaglow{50%{box-shadow:0 0 0 1px rgba(255,255,255,.22) inset,0 26px 80px -8px rgba(var(--accent-rgb),1)}}
+/* a little larger than the drawn one (492×77 of 1920×1080), so it stays covered while this one floats ±5 px;
+   while the drawn one springs in, JS swells this one with it. Clear of the drawn "orbit.easya.cz" (from x 1102). */
+.stage .cta-btn{height:calc(4.4cqw + 12px);min-width:max(170px,27cqw);justify-content:center;padding:0 max(16px,2.29cqw);
+  font-size:max(13px,1.667cqw);font-stretch:100%;letter-spacing:.01em;white-space:nowrap;
+  box-shadow:0 0 0 1px rgba(255,255,255,.14) inset,0 18px 60px -10px rgba(var(--accent-rgb),.75)}
 .stage .cta-btn .lbl{gap:max(8px,.83cqw)}
 .stage .cta-btn svg{width:max(15px,1.4cqw);height:max(15px,1.4cqw)}
-.stage .cta-btn.when-pending{background:var(--ink);color:var(--text);box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),.8),0 18px 60px -10px rgba(var(--accent-rgb),.6);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
-@media (prefers-reduced-motion:reduce){.cta-float,.cta-shadow,.stage .cta-btn{animation:none}}
-.sound{
-  position:absolute;right:18px;bottom:18px;z-index:3;display:inline-flex;align-items:center;gap:9px;
-  font:600 14.5px/1 var(--text-font);color:var(--text);background:rgba(4,6,12,.6);border:1px solid var(--line-2);
-  padding:12px 17px;border-radius:999px;-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);transition:border-color .3s,background-color .3s
+.stage .cta-btn.when-pending{background:var(--ink);color:var(--text);box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),.8),0 18px 60px -10px rgba(var(--accent-rgb),.6)}
+@media (prefers-reduced-motion:reduce){.cta-float,.cta-float::before,.cta-shadow{animation:none}}
+/* pause + "start over with sound", bottom right; above the native controls once they are on */
+.stage-ctrl{position:absolute;right:18px;bottom:18px;z-index:3;display:flex;align-items:center;gap:10px}
+.stage video[controls] ~ .stage-ctrl{bottom:64px}
+.sound,.pause{
+  display:inline-flex;align-items:center;justify-content:center;gap:9px;cursor:pointer;
+  font:600 14.5px/1 var(--text-font);color:var(--text);background:rgba(4,6,12,.78);border:1px solid var(--line-2);
+  padding:12px 17px;border-radius:999px;transition:border-color .3s,background-color .3s
 }
-.sound:hover{border-color:rgba(var(--accent-rgb),.8);background:rgba(4,6,12,.8)}
-.stage video[controls] ~ .sound{bottom:64px}
+.pause{width:43px;height:43px;padding:0;border-radius:50%}
+.sound[hidden],.pause[hidden]{display:none}
+.sound:hover,.pause:hover{border-color:rgba(var(--accent-rgb),.8);background:rgba(4,6,12,.9)}
 .sound svg{width:17px;height:17px}
+.pause svg{width:16px;height:16px}
+.pause .i-play,.pause.paused .i-pause{display:none}
+.pause.paused .i-play{display:inline}
+/* neither file plays: the poster stays, the controls that would do nothing go */
+.stage.novideo .stage-ctrl,.stage.novideo .stage-cta{display:none}
+/* narrow stages: icon-only controls in the top corner; the real button covers the whole drawn row
+   (button and address, x 570–1350 of 1920, centred) and keeps clear of the phone's native controls */
+@container (max-width:800px){
+  .stage-ctrl{top:10px;right:10px;bottom:auto;gap:8px}
+  .stage video[controls] ~ .stage-ctrl{bottom:auto}
+  .sound{padding:10px;border-radius:50%}
+  .sound span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+  .pause{width:39px;height:39px}
+}
+@container (max-width:700px){
+  .stage-cta{left:50%}
+  .cta-float{animation-name:levitate-s}  /* floats less, clear of the drawn headline above */
+  .stage .cta-btn{height:max(30px,calc(4.4cqw + 12px));min-width:max(185px,42cqw);padding:0 14px;font-size:12px}
+  .stage .cta-btn svg{width:14px;height:14px}
+  .stage.with-controls .stage-cta{display:none}
+}
 
 /* orrery */
 .orrery{position:absolute;inset:0;transform-style:preserve-3d}
@@ -247,12 +291,24 @@ section{position:relative}
 /* commands: the marquee is the section */
 .marquee{position:relative;padding:20px 0;border-block:1px solid var(--line);overflow:hidden;white-space:nowrap;user-select:none}
 .marquee-track{display:inline-flex;align-items:center;will-change:transform}
-.marquee .said{font-family:var(--display);font-style:italic;font-size:clamp(46px,7vw,110px);line-height:1.08;padding:0 .32em;font-variation-settings:"wdth" 118,"wght" 520;color:var(--text);transition:font-variation-settings .6s var(--ease),color .4s;cursor:default}
-.marquee .said.on,.marquee .said:hover{font-variation-settings:"wdth" 150,"wght" 860;color:var(--accent)}
+/* upright until the section is near (JS loads the italic then), so the italic files don't compete with the hero */
+.marquee .said{font-family:var(--display);font-size:clamp(46px,7vw,110px);line-height:1.08;padding:0 .32em;font-variation-settings:"wdth" 118,"wght" 520;color:var(--text);transition:font-variation-settings .6s var(--ease),color .4s;cursor:default}
+.marquee.near .said,:root:not(.js) .marquee .said{font-style:italic}
+/* .on (hover, tap, chip) widens all copies alike; .lit (phones' auto-rotation) only colours, so nothing shifts */
+.marquee .said.on{font-variation-settings:"wdth" 150,"wght" 860;color:var(--accent)}
+.marquee .said.lit{color:var(--accent)}
 .marquee .sep{width:clamp(26px,3vw,44px);height:clamp(26px,3vw,44px);color:var(--accent);flex:none}
-.cmd-caption{margin-top:22px;min-height:2.4em;font-size:clamp(16px,1.4vw,19px);color:var(--soft);display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}
+/* reduced motion and no script (:not(.js) also covers GSAP failing to load): one still copy, wrapped and centred */
+.reduce .marquee,:root:not(.js) .marquee{white-space:normal;text-align:center}
+.reduce .marquee-track,:root:not(.js) .marquee-track{display:flex;flex-wrap:wrap;justify-content:center}
+.reduce .marquee .sep:last-child,:root:not(.js) .marquee .sep:last-child{display:none}
+.cmd-caption{margin-top:22px;min-height:2.4em;font-size:clamp(16px,1.4vw,19px);color:var(--soft);display:flex;gap:12px;align-items:baseline;align-content:flex-start;flex-wrap:wrap}
 .cmd-caption b{font-weight:650;font-stretch:115%;color:var(--text)}
 #cmdText{transition:opacity .25s}
+.cmd-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.cmd-chips button{font:600 13.5px/1 var(--text-font);font-stretch:108%;color:var(--soft);background:rgba(255,255,255,.05);border:1px solid var(--line-2);border-radius:999px;padding:9px 14px;cursor:pointer;transition:background-color .25s,border-color .25s,color .25s}
+.cmd-chips button:hover,.cmd-chips button.on{color:var(--text);border-color:rgba(var(--accent-rgb),.8);background:rgba(var(--accent-rgb),.14)}
+:root:not(.js) .cmd-chips,:root:not(.js) #cmdText{display:none}
 
 /* dictation */
 #dictPin{position:relative}
@@ -261,9 +317,9 @@ section{position:relative}
 @media (max-width:980px){.dict-stage{grid-template-columns:1fr}}
 .bigclock{display:none}
 .pinned .bigclock{display:flex;position:absolute;inset:0;z-index:0;align-items:center;justify-content:center;pointer-events:none;overflow:hidden}
-.bigclock span{font-family:var(--display);font-variation-settings:"wdth" 132,"wght" 760;font-size:30vw;line-height:1;letter-spacing:-.03em;white-space:nowrap;color:rgba(var(--accent-rgb),.04);-webkit-text-stroke:1px rgba(var(--accent-rgb),.24);font-variant-numeric:tabular-nums}
+.bigclock span{font-family:var(--display);font-variation-settings:"wdth" 132,"wght" 760;font-size:min(19vw,58vh);line-height:1;letter-spacing:-.03em;white-space:nowrap;color:rgba(var(--accent-rgb),.04);-webkit-text-stroke:1px rgba(var(--accent-rgb),.16);font-variant-numeric:tabular-nums}
 .pinned .demo .clock{display:none}
-.demo{position:relative;padding:26px;border-radius:22px;background:linear-gradient(180deg,rgba(14,19,34,.88),rgba(10,14,26,.8));border:1px solid var(--line);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+.demo{position:relative;padding:26px;border-radius:22px;background:linear-gradient(180deg,rgba(14,19,34,.96),rgba(10,14,26,.92));border:1px solid var(--line)}
 .clock{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:18px}
 .clock .t{font-family:var(--display);font-variation-settings:"wdth" 130,"wght" 700;font-size:clamp(48px,4.6vw,64px);line-height:1;font-variant-numeric:tabular-nums;color:var(--text)}
 .clock .lbl{font-size:14.5px;color:var(--dim);text-align:right}
@@ -272,7 +328,7 @@ section{position:relative}
 .win-bar .ctl{display:flex;gap:16px;opacity:.7}
 .win-bar .ctl svg{width:11px;height:11px}
 .win-body{padding:18px 18px 22px;min-height:132px;font-size:18px;line-height:1.55}
-.win-body .ph{color:#56607A}
+.win-body .ph{color:#7A849C}
 .win-body .ins{border-radius:4px;transition:background-color 1.2s}
 .win-body .ins.flash{background:rgba(var(--accent-rgb),.28);transition:none}
 .caret{display:inline-block;width:2px;height:1.1em;background:var(--accent);vertical-align:-3px;margin-left:1px;animation:blink 1.1s steps(1) infinite}
@@ -295,7 +351,7 @@ section{position:relative}
 .tl-fill{position:absolute;left:5px;top:12px;width:1px;height:calc(100% - 24px);background:var(--accent);transform-origin:top;transform:scaleY(var(--p,0));box-shadow:0 0 12px rgba(var(--accent-rgb),.8)}
 .tl li{position:relative;padding:0 0 22px;transition:opacity .45s}
 .tl li:last-child{padding-bottom:0}
-.pinned .tl li{opacity:.55}
+.pinned .tl li{opacity:.75}
 .pinned .tl li .d{color:var(--soft)}
 .pinned .tl li.on{opacity:1}
 .tl li::before{content:"";position:absolute;left:-30px;top:6px;width:11px;height:11px;border-radius:50%;background:var(--space);border:1px solid var(--line-2);transition:background-color .3s,border-color .3s,box-shadow .3s}
@@ -304,6 +360,7 @@ section{position:relative}
 .tl b{display:block;font-weight:600;font-stretch:112%;font-size:clamp(18px,1.5vw,21px);line-height:1.22;letter-spacing:-.01em;color:var(--text);margin-bottom:3px}
 .tl span.d{color:var(--dim);font-size:15.5px;line-height:1.5;display:block;max-width:46ch}
 .tl-note{margin-top:28px}
+@media (max-height:820px){.pinned .dict-stage{padding-top:72px}.pinned .tl li:not(:last-child){padding-bottom:12px}.pinned .tl-note{margin-top:14px}}
 
 /* spotlight + tilt (the accuracy card) */
 .spot{
@@ -315,8 +372,8 @@ section{position:relative}
 .spot:hover::before,.spot:hover::after{opacity:1}
 
 /* privacy */
-.scrub{font-family:var(--display);font-variation-settings:"wdth" 104,"wght" 560;font-size:clamp(34px,5.4vw,84px);line-height:1.04;letter-spacing:-.015em;max-width:23ch;margin:0}
-.scrub .sw{opacity:.14}
+.scrub{font-family:var(--display);font-variation-settings:"wdth" 104,"wght" 560;font-size:clamp(34px,5.4vw,84px);line-height:1.04;letter-spacing:-.015em;max-width:13.5em;margin:0}
+.scrub .sw{opacity:.28}
 .no-js .scrub .sw,.reduce .scrub .sw{opacity:1}
 .flow-wrap{position:relative;margin-top:clamp(70px,9vw,120px)}
 .flow{display:block;width:100%;height:auto;overflow:visible}
@@ -354,7 +411,7 @@ section{position:relative}
   font-family:"Segoe UI",var(--text-font);font-size:15px;line-height:1;color:#E6E8EC;box-shadow:0 50px 100px -40px #000
 }
 .w-zone{position:relative;border-radius:8px;margin:0 -7px;padding:0 7px;transition:opacity .45s,background-color .45s,box-shadow .45s}
-.w-panel.focus .w-zone{opacity:.32}
+.w-panel.focus .w-zone{opacity:.5}
 .w-panel.focus .w-zone.lit{opacity:1;background:rgba(var(--accent-rgb),.07);box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),.35)}
 .w-row{display:flex;align-items:center;height:25px;gap:10px;min-width:0}
 .w-row b{font-weight:600}
@@ -391,12 +448,20 @@ section{position:relative}
 .w-speaker.reading{background:var(--accent);color:var(--on-accent)}
 .w-speaker .bars{position:absolute;right:-6px;top:-4px;display:flex;gap:2px;align-items:flex-end;height:16px;opacity:0;transition:opacity .3s}
 .w-speaker.reading .bars{opacity:1}
-.w-speaker .bars i{width:3px;background:var(--accent);border-radius:2px;animation:eq .9s infinite ease-in-out}
+.w-speaker .bars i{width:3px;height:15px;background:var(--accent);border-radius:2px;transform:scaleY(.27);transform-origin:50% 100%}
+/* the bars only move while reading (transform, no layout), and stop when the panel is out of view */
+.w-speaker.reading .bars i{animation:eq .9s infinite ease-in-out}
 .w-speaker .bars i:nth-child(2){animation-delay:.15s}.w-speaker .bars i:nth-child(3){animation-delay:.3s}
-@keyframes eq{0%,100%{height:4px}50%{height:15px}}
+@keyframes eq{0%,100%{transform:scaleY(.27)}50%{transform:none}}
+.widget.off .dot,.widget.off .bars i{animation-play-state:paused}
+@media (prefers-reduced-motion:reduce){
+  .w-ses .dot.pulse-dot,.w-speaker.reading .bars i{animation:none}
+  .w-speaker .bars i:nth-child(1){transform:scaleY(.6)}.w-speaker .bars i:nth-child(2){transform:none}
+  .w-bar i{transition:none}.w-slot .bubble{transform:none}
+}
 .w-slot{position:relative;flex:1;min-width:0;min-height:118px}
-.w-slot figcaption{padding-top:8px;max-width:34ch;transition:opacity .3s}
-.w-slot.busy figcaption{opacity:0}
+.w-slot .w-cap{padding-top:8px;max-width:34ch;transition:opacity .3s}
+.w-slot.busy .w-cap{opacity:0}
 .bubble{
   position:absolute;left:0;top:0;width:min(340px,100%);padding:13px 15px 14px;border-radius:14px;
   background:rgba(22,27,40,.98);border:1px solid rgba(255,255,255,.12);box-shadow:0 30px 70px -20px #000;
@@ -410,19 +475,28 @@ section{position:relative}
 .bubble .bn{margin-left:auto;font-weight:400;font-size:12.5px}
 .bubble p{margin-top:7px;font-size:13.5px;line-height:1.45;color:#AEB5C2}
 .features{display:grid;gap:10px}
-.feat{display:block;width:100%;text-align:left;font:inherit;color:inherit;background:none;border:0;padding:22px 24px;border-radius:18px;border:1px solid transparent;transition:background-color .4s,border-color .4s}
+.feat{position:relative;padding:22px 24px;border-radius:18px;border:1px solid transparent;transition:background-color .4s,border-color .4s}
 .feat h3{margin-bottom:6px;transition:font-stretch .6s var(--ease),color .4s}
-.feat p{color:var(--soft);font-size:16px;max-width:46ch}
+/* the heading's button covers the whole card; the text lets clicks through even while dimmed */
+.feat h3 button{all:unset;cursor:pointer;scroll-margin:calc(var(--panel-b,0px) + 24px) 0 150px}
+.has-cursor .feat h3 button{cursor:none}
+.feat h3 button::after{content:"";position:absolute;inset:0;border-radius:18px}
+.feat h3 button:focus-visible::after{outline:2px solid var(--accent);outline-offset:3px}
+.feat p{color:var(--soft);font-size:16px;max-width:46ch;pointer-events:none}
 .features.has-active .feat:not(.on) > *{opacity:.55;transition:opacity .4s}
 .features .feat.on{background:rgba(255,255,255,.035);border-color:var(--line-2)}
-.feat.on h3,.feat:hover h3{font-stretch:125%;color:var(--accent)}
+.feat.on h3{font-stretch:125%;color:var(--accent)}
+@media (hover:hover){.feat:hover h3{font-stretch:125%;color:var(--accent)}}
 .needs{margin-top:14px;padding:20px 24px;border-radius:18px;border:1px dashed var(--line-2);color:var(--soft);font-size:15.5px}
+#h-claude{max-width:none}
 @media (max-width:1000px){
   .claude{grid-template-columns:1fr;gap:28px}
   /* the panel stays in view while the features scroll under it */
   .widget{top:64px;padding:10px 0 6px;background:linear-gradient(var(--space) 88%,transparent);transform-origin:50% 0}
   .w-slot{min-height:104px}
 }
+/* too tall for the screen (zoom, phone landscape): the panel scrolls with the page instead of covering the features */
+.widget.free{position:relative;top:auto;background:none}
 @media (max-width:560px){
   .widget{zoom:.84}
   .w-panel{font-size:13px;padding:10px 11px 12px}.w-row{height:22px;gap:8px}
@@ -430,17 +504,15 @@ section{position:relative}
   .w-foot{padding-left:0;gap:14px}.w-buttons .mic,.w-speaker{width:56px;height:56px}
 }
 
-/* specs: sticky left column, the list scrolls past it */
+/* specs: the accuracy card stays put on the left, the list scrolls past it */
 .specs{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:56px clamp(40px,6vw,96px);align-items:start}
-.specs-side{position:sticky;top:110px;display:grid;gap:28px}
-.specs-side h2{max-width:11ch}
-@media (max-width:1000px){.specs{grid-template-columns:1fr}.specs-side{position:static}.specs-side h2,#instalace h2{max-width:none}}
+.specs-side{position:sticky;top:110px}
+@media (max-width:1000px){.specs{grid-template-columns:1fr}.specs-side{position:static}#instalace h2{max-width:none}}
 .spec{margin:0;border-top:1px solid var(--line-2)}
 .spec > div{position:relative;display:grid;grid-template-columns:170px 1fr;gap:6px 28px;padding:24px 0;border-bottom:1px solid var(--line-2);overflow:hidden}
 .spec > div::before{content:"";position:absolute;left:0;right:0;bottom:-1px;height:1px;background:var(--accent);transform:scaleX(0);transform-origin:left;transition:transform .6s var(--ease)}
-.spec > div:hover::before{transform:scaleX(1)}
 .spec dt{font-weight:600;font-stretch:112%;font-size:19px;line-height:1.35;letter-spacing:-.01em;transition:font-stretch .5s var(--ease),color .3s}
-.spec > div:hover dt{font-stretch:125%;color:var(--accent)}
+@media (hover:hover){.spec > div:hover::before{transform:scaleX(1)}.spec > div:hover dt{font-stretch:125%;color:var(--accent)}}
 .spec dd{margin:0;color:var(--soft);font-size:16.5px}
 .spec dd b{color:var(--text);font-weight:600}
 @media (max-width:560px){.spec > div{grid-template-columns:1fr}}
@@ -453,7 +525,7 @@ section{position:relative}
 .bar-row .track{height:8px;border-radius:4px;background:rgba(255,255,255,.08);overflow:hidden}
 .bar-row .track i{display:block;height:100%;border-radius:4px;background:var(--accent);width:var(--w);transform-origin:left;transform:scaleX(var(--s,1));transition:background-color .6s}
 .bar-group + .bar-group{padding-top:22px;border-top:1px solid var(--line)}
-.bar-group .gl{font-size:14px;color:var(--soft);margin-bottom:12px}
+.bar-group .gl{font-size:14px;color:var(--soft);margin-bottom:12px;text-wrap:balance}
 
 /* install: a ruler, not cards */
 #instalace h2{max-width:11ch}
@@ -466,7 +538,7 @@ section{position:relative}
 .steps li.on .tick{background:var(--accent)}
 .steps .num{font-family:var(--display);font-size:clamp(64px,6.6vw,100px);line-height:.9;display:block;margin-bottom:16px;color:var(--dim);font-variation-settings:"wdth" 120,"wght" 700;transition:font-variation-settings .8s var(--ease),color .5s}
 .steps li.on .num{color:var(--accent);font-variation-settings:"wdth" 138,"wght" 800}
-.steps li:hover .num{font-variation-settings:"wdth" 150,"wght" 900}
+@media (hover:hover){.steps li:hover .num{font-variation-settings:"wdth" 150,"wght" 900}}
 .steps h3{margin-bottom:6px}
 .steps p{color:var(--soft);font-size:15.5px;max-width:28ch}
 @media (max-width:900px){.steps{grid-template-columns:repeat(2,minmax(0,1fr));gap:20px 24px}.orbit-path,.ruler-sat{display:none}.steps li{padding-top:8px;border-top:1px solid var(--line-2)}.steps .tick{display:none}}
@@ -509,7 +581,7 @@ section{position:relative}
 .faq details{border-bottom:1px solid var(--line-2)}
 .faq details:first-child{border-top:1px solid var(--line-2)}
 .faq summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:24px;padding:22px 4px;font-weight:500;font-size:clamp(18px,1.6vw,20px);line-height:1.3;transition:font-stretch .5s var(--ease),color .3s}
-.faq summary:hover{font-stretch:115%;color:var(--accent)}
+@media (hover:hover){.faq summary:hover{font-stretch:115%;color:var(--accent)}}
 .faq summary::-webkit-details-marker{display:none}
 .faq .pm{position:relative;flex:none;width:30px;height:30px;border-radius:50%;border:1px solid var(--line-2);color:var(--text);transition:transform .5s var(--ease),border-color .3s,background-color .3s}
 .faq .pm::before,.faq .pm::after{content:"";position:absolute;left:50%;top:50%;width:11px;height:1.5px;margin:-.75px 0 0 -5.5px;background:currentColor;transition:transform .5s var(--ease)}
@@ -517,11 +589,14 @@ section{position:relative}
 .faq details[open] .pm{transform:rotate(180deg);border-color:var(--accent);background:rgba(var(--accent-rgb),.12)}
 .faq details[open] .pm::after{transform:rotate(0)}
 .faq .ans{overflow:hidden}
+.faq code{font-family:Consolas,"Cascadia Mono",monospace;font-size:.9em;color:var(--text);padding:1px 6px;border-radius:6px;background:rgba(255,255,255,.06);white-space:nowrap}
+@media (max-width:374px){.faq code{white-space:normal;overflow-wrap:anywhere}}
 .faq .ans p{padding:0 4px 24px;color:var(--soft);font-size:16.5px;max-width:62ch}
 
 /* closing */
 .closing{text-align:center;padding:clamp(150px,18vw,260px) 0 clamp(80px,10vw,140px);overflow:hidden}
-.wordmark{font-size:clamp(76px,19vw,360px);line-height:.8;letter-spacing:-.03em;margin:0 auto;white-space:nowrap;user-select:none}
+/* flex centres even when the glyphs overflow the column (text-align can't), the .sr copy is absolute */
+.wordmark{display:flex;justify-content:center;font-size:clamp(76px,19vw,360px);line-height:.8;letter-spacing:-.03em;margin:0 auto;white-space:nowrap;user-select:none}
 .closing .lede{margin:clamp(24px,3vw,40px) auto 34px}
 .closing-cta{display:grid;justify-items:center;gap:16px}
 footer{border-top:1px solid var(--line);padding:38px 0 50px;color:var(--dim);font-size:14px}
@@ -532,13 +607,9 @@ footer p{max-width:72ch}
 /* reveal (set up by JS, so nothing hides without it) */
 .js .rv{opacity:0;transform:translateY(30px)}
 .reduce .rv{opacity:1!important;transform:none!important}
+/* site.js failed or is very late (class set by the head script): show it all, !important beats GSAP's inline styles */
+.failsafe .rv,.failsafe [data-kinetic],.failsafe .kinetic .ch,.failsafe .scrub .sw{opacity:1!important;transform:none!important;filter:none!important}
+@media print{.rv,[data-kinetic],.kinetic .ch,.scrub .sw{opacity:1!important;transform:none!important;filter:none!important}}
 
 @media (prefers-reduced-motion:reduce){.caret{animation:none}.pulse{animation:none}}
 @media (max-width:1000px){#instalace h2{max-width:none}}
-@media (max-width:700px){
-  .sound{top:10px;right:10px;bottom:auto;padding:10px;border-radius:50%}
-  .sound span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-  .stage video[controls] ~ .sound{bottom:auto}
-  .stage .cta-btn{height:32px;min-width:0;padding:0 14px;font-size:12px}
-  .stage .cta-btn svg{width:14px;height:14px}
-}

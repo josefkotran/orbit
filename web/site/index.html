@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Orbit – české diktování pro Windows</title>
-<meta name="description" content="Drž klávesu, mluv česky a pusť. Orbit přepíše řeč do kteréhokoli okna ve Windows přímo na tvé grafice, zvuk nikam neodchází. A s Claude Code hlídá limity, relace i odpovědi.">
+<meta name="description" content="České diktování do kteréhokoli okna ve Windows. Přepis běží na tvé grafice, zvuk nikam neodchází. Zdarma a open source, s přehledem pro Claude Code.">
 <meta name="theme-color" content="#04060C">
 <meta name="color-scheme" content="dark">
 <link rel="canonical" href="https://orbit.easya.cz/">
@@ -14,17 +14,27 @@
 <meta property="og:locale" content="cs_CZ">
 <meta property="og:url" content="https://orbit.easya.cz/">
 <meta property="og:title" content="Orbit – drž, mluv, pusť.">
-<meta property="og:description" content="České diktování do kteréhokoli okna ve Windows. Přepisuje se na tvé grafice, zvuk nikam neodchází. A s Claude Code hlídá limity, relace i odpovědi.">
+<meta property="og:site_name" content="Orbit">
+<meta property="og:image:alt" content="Orbit – drž, mluv, pusť. České diktování do kteréhokoli okna ve Windows.">
+<meta property="og:description" content="České diktování do kteréhokoli okna ve Windows. Přepisuje se na tvé grafice, zvuk nikam neodchází. Zdarma a open source. A s Claude Code hlídá limity, relace i odpovědi.">
 <meta property="og:image" content="https://orbit.easya.cz/assets/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="preload" href="assets/fonts/anybody-normal-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/anybody-normal-latin-ext.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="assets/fonts/mona-sans-normal-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/mona-sans-normal-latin-ext.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="assets/site.css">
 <script>
   document.documentElement.classList.replace("no-js", "js");
   try { var t = localStorage.getItem("orbit-theme"); if (t === "violet" || t === "teal") document.documentElement.dataset.theme = t; } catch (e) {}
+  // if a script fails or never runs, show everything that waits for its reveal
+  (function (h) {
+    var fail = function () { h.classList.add("failsafe"); };
+    addEventListener("error", function (e) { if (e.target && e.target.tagName === "SCRIPT" || e.filename && e.filename.indexOf("/assets/") >= 0) fail(); }, true);
+    setTimeout(function () { if (!h.classList.contains("ready")) fail(); }, 4000);
+  })(document.documentElement);
 </script>
 </head>
 <body>
@@ -73,7 +83,7 @@
       <a href="#instalace">Instalace</a>
     </div>
     <a class="gh" href="https://github.com/josefkotran/orbit" aria-label="Zdrojový kód Orbitu na GitHubu" data-cursor="GitHub"><svg aria-hidden="true"><use href="#i-github"/></svg></a>
-    <div class="themes" role="group" aria-label="Barva stránky, stejné jako v Orbitu">
+    <div class="themes" role="group" aria-label="Barva stránky, stejná jako v Orbitu">
       <button type="button" data-theme="blue" style="--c:#5B9DFF" aria-label="Modrá"></button>
       <button type="button" data-theme="violet" style="--c:#A78BFA" aria-label="Fialová"></button>
       <button type="button" data-theme="teal" style="--c:#2DD4BF" aria-label="Tyrkysová"></button>
@@ -87,17 +97,17 @@
 <header class="hero" id="top">
   <div class="wrap">
     <div class="hero-grid" id="heroGrid">
-      <h1 class="display kinetic" id="heroTitle" data-kinetic="hero" data-break="2" data-cursor="Podrž">Drž, mluv, pusť.</h1>
+      <h1 class="display kinetic" id="heroTitle" data-kinetic="hero" data-break="2" data-cursor="Podrž">Drž, mluv,<br> pusť.</h1>
       <div class="hero-side" id="heroSide">
         <p class="lede rv">České diktování do kteréhokoli okna ve Windows. Přepisuje se přímo na tvé grafice, zvuk nikam neodchází. A když pracuješ s Claude Code, hlídá ti limity, relace i odpovědi.</p>
         <div class="hero-cta rv">
           <a class="btn when-ready" href="__HREF__" download data-magnetic data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-download"/></svg>Stáhnout pro Windows</span></a>
-          <p class="fine when-ready">Verze __VERSION__, __SIZE__. Windows 10 a 11, 64bit.<br>Zdarma a open source.</p>
+          <p class="fine when-ready">Verze __VERSION__, __SIZE__. 64bitová Windows 10 a 11.<br>Zdarma a open source.</p>
           <a class="btn when-pending" href="#diktovani" data-magnetic data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-play"/></svg>Ukaž mi, jak to funguje</span></a>
           <p class="fine when-pending"><span class="pulse"></span>Instalátor dokončujeme, stažení bude tady.</p>
         </div>
-        <p class="hint rv" aria-hidden="true"><span class="rec"></span>Podrž nadpis<span class="kb"> nebo <span class="key">mezerník</span></span> a uvidíš, jak Orbit poslouchá.</p>
       </div>
+      <p class="hint rv" aria-hidden="true"><span class="rec"></span>Podrž nadpis<span class="kb"> nebo <span class="key">mezerník</span></span> a uvidíš, jak Orbit poslouchá.</p>
     </div>
 
     <div class="stage-wrap" id="stageWrap">
@@ -111,17 +121,21 @@
       </svg>
       <div class="stage" id="stage">
         <!--video-->
-        <video id="heroVideo" autoplay muted loop playsinline preload="auto" poster="assets/video/poster.jpg" aria-label="Video o Orbitu">
-          <source src="assets/video/orbit.webm" type="video/webm">
-          <source src="assets/video/orbit.mp4" type="video/mp4">
+        <video id="heroVideo" muted loop playsinline preload="none" poster="assets/video/poster.jpg" aria-label="Video o Orbitu" aria-describedby="videoText">
+          <source src="assets/video/orbit.webm" type='video/webm; codecs="vp9, opus"'>
+          <source src="assets/video/orbit.mp4" type='video/mp4; codecs="avc1.640032, mp4a.40.2"'>
         </video>
-        <button class="sound" id="soundBtn" type="button"><svg aria-hidden="true"><use href="#i-speaker"/></svg><span>Pustit od začátku se zvukem</span></button>
+        <p class="sr" id="videoText">Video je bez mluveného slova, hraje jen hudba. Ukazuje, jak podržíš klávesu, řekneš větu česky a text se napíše do kteréhokoli okna, a že přepis běží na tvé grafické kartě, takže zvuk nikam neodchází. Pak se v panelu Orbitu zeptáš hlasového agenta, co dělá relace Claude Code, a necháš ho poslat jí zadání; na konci je tlačítko Stáhnout pro Windows.</p>
+        <div class="stage-ctrl">
+          <button class="pause" id="pauseBtn" type="button" aria-label="Zastavit video" data-cursor="Zastavit"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="i-pause" d="M8.6 6.4v11.2M15.4 6.4v11.2" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path class="i-play" d="M8.4 6.3v11.4l9.4-5.7z" fill="currentColor" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></button>
+          <button class="sound" id="soundBtn" type="button"><svg aria-hidden="true"><use href="#i-speaker"/></svg><span>Pustit od začátku se zvukem</span></button>
+        </div>
         <div class="stage-cta" id="stageCta">
           <span class="cta-shadow" aria-hidden="true"></span>
           <div class="cta-float">
             <span class="cta-ring" id="ctaRing" aria-hidden="true"></span>
-            <a class="btn cta-btn when-ready" href="__HREF__" download data-magnetic data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-download"/></svg>Stáhnout pro Windows</span></a>
-            <a class="btn cta-btn when-pending" href="#instalace" data-magnetic><span class="lbl"><span class="pulse"></span>Instalátor už brzy</span></a>
+            <a class="btn cta-btn when-ready" href="__HREF__" download data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-download"/></svg>Stáhnout pro Windows</span></a>
+            <a class="btn cta-btn when-pending" href="#instalace"><span class="lbl"><span class="pulse"></span>Instalátor už brzy</span></a>
           </div>
         </div>
         <!--/video-->
@@ -155,21 +169,27 @@
 <section class="commands" id="povely" aria-labelledby="h-cmd">
   <h2 class="sr" id="h-cmd">Hlasové povely</h2>
   <ul class="sr">
-    <li>„Odešli.“ Na konci diktátu stiskne Enter, takže zpráva odejde, aniž sáhneš na klávesnici.</li>
-    <li>„Stop.“ Samotné slovo stiskne Esc a přeruší, co Claude zrovna dělá.</li>
-    <li>„Nový řádek.“ Zalomí text. V chatu pošle Shift+Enter, aby se zpráva neodeslala předčasně.</li>
-    <li>„Nový odstavec.“ Vynechá řádek a začne nový odstavec.</li>
+    <li id="cmd-d0">„Odešli.“ Na konci diktátu stiskne Enter, takže zpráva odejde, aniž sáhneš na klávesnici.</li>
+    <li id="cmd-d1">„Stop.“ Samotné slovo stiskne Esc a přeruší, co Claude zrovna dělá.</li>
+    <li id="cmd-d2">„Nový řádek.“ Zalomí text. V chatu pošle Shift+Enter, aby se zpráva neodeslala předčasně.</li>
+    <li id="cmd-d3">„Nový odstavec.“ Vynechá řádek a začne nový odstavec.</li>
   </ul>
   <div class="marquee" id="marquee" aria-hidden="true">
     <div class="marquee-track" id="marqueeTrack">
       <span class="said cmd" data-say="Na konci diktátu stiskne Enter, takže zpráva odejde, aniž sáhneš na klávesnici.">„Odešli.“</span><svg class="sep"><use href="#i-star"/></svg>
-      <span class="said cmd" data-say="Samotné slovo stiskne Esc a přeruší, co Claude zrovna dělá.">„Stop.“</span><svg class="sep"><use href="#i-star"/></svg>
-      <span class="said cmd" data-say="Zalomí text. V chatu pošle Shift+Enter, aby se zpráva neodeslala předčasně.">„Nový řádek.“</span><svg class="sep"><use href="#i-star"/></svg>
-      <span class="said cmd" data-say="Vynechá řádek a začne nový odstavec.">„Nový odstavec.“</span><svg class="sep"><use href="#i-star"/></svg>
+      <span class="said cmd" data-say="Samotné slovo stiskne Esc a&nbsp;přeruší, co Claude zrovna dělá.">„Stop.“</span><svg class="sep"><use href="#i-star"/></svg>
+      <span class="said cmd" data-say="Zalomí text. V&nbsp;chatu pošle Shift+Enter, aby se zpráva neodeslala předčasně.">„Nový řádek.“</span><svg class="sep"><use href="#i-star"/></svg>
+      <span class="said cmd" data-say="Vynechá řádek a&nbsp;začne nový odstavec.">„Nový odstavec.“</span><svg class="sep"><use href="#i-star"/></svg>
     </div>
   </div>
   <div class="wrap">
     <p class="cmd-caption" aria-hidden="true"><b id="cmdWord">Hlasové povely.</b> <span id="cmdText"><span class="hover-only">Najeď na povel a uvidíš, co udělá.</span><span class="touch-only">Ťukni na povel a uvidíš, co udělá.</span></span></p>
+    <div class="cmd-chips" role="group" aria-label="Hlasové povely">
+      <button type="button" aria-describedby="cmd-d0">Odešli</button>
+      <button type="button" aria-describedby="cmd-d1">Stop</button>
+      <button type="button" aria-describedby="cmd-d2">Nový řádek</button>
+      <button type="button" aria-describedby="cmd-d3">Nový odstavec</button>
+    </div>
   </div>
 </section>
 
@@ -195,12 +215,13 @@
         </div>
         <div class="chunks" aria-hidden="true"><span class="chunk" id="chunk1">Ahoj Petře, posílám ti nabídku…</span><span class="chunk" id="chunk2">Kdyby ti něco nesedělo…</span></div>
         <p class="demo-status" id="demoStatus" aria-live="polite">Podrž mikrofon a pak ho pusť.</p>
+        <p class="sr" id="demoSaid" aria-live="polite"></p>
         <p class="fine" style="margin-top:8px">Jen ukázka, stránka k tvému mikrofonu nepřistupuje.</p>
       </div>
       <div>
         <div class="tl-wrap">
           <ol class="tl" id="tl">
-            <li><span class="t">0 s</span><b>Stiskneš klávesu</b><span class="d">Vybereš si ji sám: boční tlačítko myši, pravý Ctrl, cokoli. Ostatní programy ji pak nedostanou.</span></li>
+            <li><span class="t">0 s</span><b>Stiskneš klávesu</b><span class="d">Vybereš si ji v průvodci: boční tlačítko myši, pravý Ctrl, cokoli. Ostatní programy ji pak nedostanou.</span></li>
             <li><span class="t">0,1 s</span><b>Pípne</b><span class="d">Až ve chvíli, kdy mikrofon opravdu posílá zvuk. První slabika se tak neusekne.</span></li>
             <li><span class="t">mluvíš</span><b>Přepisuje se průběžně</b><span class="d">U delšího diktátu posílá Orbit hotové věty na grafiku už v pauzách mezi nimi.</span></li>
             <li><span class="t">+0,25 s</span><b>Pustíš</b><span class="d">Nahrává ještě čtvrt vteřiny, protože klávesu většinou pouštíš během posledního slova.</span></li>
@@ -208,7 +229,7 @@
           </ol>
           <span class="tl-fill" id="tlFill"></span>
         </div>
-        <p class="fine tl-note">Průměrné čekání po puštění klávesy, změřené na 30 skutečných diktátech s grafikou Radeon RX 9070 XT.</p>
+        <p class="fine tl-note">Průměrné čekání po puštění klávesy s modelem large-v3 a průběžným přepisem, změřené na 30 skutečných diktátech s grafikou Radeon RX&nbsp;9070&nbsp;XT.</p>
       </div>
     </div>
   </div>
@@ -275,19 +296,19 @@
       </svg>
     </div>
     <div class="notes">
-      <div class="note rv"><h3>Žádné poslouchání na pozadí</h3><p>Mikrofon se otevře stiskem klávesy a po puštění se zavře. Mezi tím je zavřený.</p></div>
+      <div class="note rv"><h3>Žádné poslouchání na pozadí</h3><p>Mikrofon se otevře, až když stiskneš klávesu, a po puštění se zavře. Jinak je zavřený. Otevře ho ještě hlasový agent, když ho zavoláš, a okno nastavení nebo průvodce, dokud ukazuje hlasitost mikrofonu.</p></div>
       <div class="note rv"><h3>Přepis běží na tvé grafice</h3><p>Funguje s kartami NVIDIA, AMD i Intel přes Vulkan. Model Whisper <span class="nw">large-v3</span> se stáhne jednou a pak běží jen u tebe.</p></div>
-      <div class="note rv"><h3>Claude dostane jen to, co pustíš</h3><p>Učení slovníku mu posílá text diktátů, ne zvuk, a jen když ho zapneš. Hlasový agent pošle zprávu do relace, až když řekneš <span class="said">„jo“</span>.</p></div>
+      <div class="note rv"><h3>Claude dostane jen text, a jen když chceš</h3><p>Zvuk nikdy neodchází. Text jde Claudovi jen u tří funkcí, které jsou na začátku vypnuté: učení slovníku (text diktátů), hlasový agent (co mu řekneš, přehled tvých relací a stránky, které ti najde v historii Chromu) a předčítání artefaktů (text stránky). Do relace agent nic nepošle, dokud neřekneš <span class="said">„jo“</span>.</p></div>
     </div>
-    <p class="privacy-note rv">Ani tahle stránka nic neměří: nemá analytiku, reklamní skripty ani písma z cizích serverů.</p>
+    <p class="privacy-note rv">Ani tahle stránka tě nesleduje: nemá analytiku, reklamní skripty, cookies ani písma z cizích serverů.</p>
   </div>
 </section>
 
 <section id="claude" aria-labelledby="h-claude">
   <div class="wrap">
     <div class="sec-intro">
-      <h2 class="display kinetic" id="h-claude" data-kinetic="h2">Pro ty, kdo pracují s Claude Code.</h2>
-      <p class="lede rv">Nad mikrofonem je panel s limity a relacemi. <span class="hover-only">Najeď na funkci a panel ti ji předvede.</span><span class="touch-only">Ťukni na funkci a panel ti ji předvede.</span></p>
+      <h2 class="display kinetic" id="h-claude" data-kinetic="h2" data-break="4">Pro ty, kdo pracují s Claude Code.</h2>
+      <p class="lede rv">Nad mikrofonem je panel s limity, relacemi a hlasovým agentem. <span class="hover-only">Najeď na funkci a panel ti ji předvede.</span><span class="touch-only">Ťukni na funkci a panel ti ji předvede.</span></p>
     </div>
     <div class="claude">
       <figure class="widget rv" id="widget">
@@ -323,7 +344,7 @@
             <span class="mic"><svg><use href="#i-mic"/></svg></span>
           </div>
           <div class="w-slot">
-            <figcaption class="fine" id="wCaption">Panel nad plovoucím mikrofonem. Reproduktor vlevo ztlumí všechny zvuky Orbitu.</figcaption>
+            <p class="fine w-cap" id="wCaption">Panel nad plovoucím mikrofonem. Reproduktor vlevo ztlumí všechny zvuky Orbitu.</p>
             <div class="bubble" id="bubble" aria-hidden="true">
               <div class="bt"><span class="bi" id="bIcon">✓</span><span id="bTitle"></span><span class="bn" id="bNote"></span></div>
               <p id="bText"></p>
@@ -333,49 +354,53 @@
       </figure>
 
       <div class="features" id="features">
-        <button class="feat rv" type="button" data-scene="limity"><h3>Limity</h3><p>Pětihodinové okno a týdenní limit. Když tempem vyčerpáš okno dřív, než se obnoví, panel ukáže, v kolik dojde.</p></button>
-        <button class="feat rv" type="button" data-scene="relace"><h3>Relace</h3><p>Každá relace s tématem, složkou a stavem: pracuje, čeká na tebe, hotovo. Klik na řádek tě přepne do jejího okna.</p></button>
-        <button class="feat rv" type="button" data-scene="bubliny"><h3>Bubliny a předčítání</h3><p>Když relace dokončí delší práci a ty se díváš jinam, ukáže bublinu a přečte ti první věty odpovědi.</p></button>
-        <button class="feat rv" type="button" data-scene="artefakty"><h3>Artefakty</h3><p>Stránku, kterou relace zveřejní, shrne do sedmi vět a přečte ti je nahlas.</p></button>
-        <button class="feat rv" type="button" data-scene="agent"><h3>Hlasový agent</h3><p>Podržíš druhé tlačítko a zeptáš se: <span class="said">„Co dělá relace s ceníkem?“</span> Nebo mu nadiktuješ zadání. Do relace ho pošle, až když řekneš <span class="said">„jo“</span>.</p></button>
-        <button class="feat rv" type="button" data-scene="chrome"><h3>Stránky z prohlížeče</h3><p><span class="said">„Otevři mi objednávku 82.“</span> Agent ji najde v historii Google Chrome a otevře v nové kartě.</p></button>
-        <p class="needs rv">Potřebuješ nainstalovaný Claude Code a vlastní předplatné Claude. Přihlašuješ se na stránce Anthropicu, Orbit tvoje heslo nikdy nevidí.</p>
+        <div class="feat rv" data-scene="limity"><h3><button type="button" aria-pressed="false">Limity</button></h3><p>Pětihodinové okno a týdenní limit. Když jedeš tak rychle, že okno vyčerpáš dřív, než se obnoví, panel ukáže, v kolik ti dojde.</p></div>
+        <div class="feat rv" data-scene="relace"><h3><button type="button" aria-pressed="false">Relace</button></h3><p>Každá relace s tématem, složkou, stavem a zaplněním kontextu: pracuje, čeká na tebe, hotovo. Klik na řádek tě přepne do jejího okna.</p></div>
+        <div class="feat rv" data-scene="bubliny"><h3><button type="button" aria-pressed="false">Bubliny a předčítání</button></h3><p>Když relace dokončí delší práci a ty se díváš jinam, ukáže bublinu a přečte ti první věty odpovědi.</p></div>
+        <div class="feat rv" data-scene="artefakty"><h3><button type="button" aria-pressed="false">Artefakty</button></h3><p>Když relace zveřejní artefakt (stránku s výsledkem), Claude ho shrne do sedmi vět a Orbit ti je přečte nahlas. Zapíná se v nastavení.</p></div>
+        <div class="feat rv" data-scene="agent"><h3><button type="button" aria-pressed="false">Hlasový agent</button></h3><p>Podržíš boční tlačítko myši zpět (nebo jiné, které si nastavíš) a zeptáš se: <span class="said">„Co dělá relace s ceníkem?“</span> Nebo mu nadiktuješ zadání do běžící relace, nebo do nové. Pošle ho, až když řekneš <span class="said">„jo“</span>.</p></div>
+        <div class="feat rv" data-scene="chrome"><h3><button type="button" aria-pressed="false">Stránky z prohlížeče</button></h3><p><span class="said">„Otevři mi objednávku 82.“</span> Agent ji najde v historii Google Chrome a otevře v nové kartě.</p></div>
+        <p class="needs rv">Potřebuješ vlastní předplatné Claude, limity panel ukáže u Pro a Max. Když Claude Code ještě nemáš, průvodce ho nainstaluje oficiálním instalátorem Anthropicu. Přihlašuješ se na stránce Anthropicu, Orbit tvoje heslo nikdy nevidí.</p>
       </div>
     </div>
   </div>
 </section>
 
 <section id="pozadavky" aria-labelledby="h-req">
-  <div class="wrap specs">
-    <div class="specs-side">
-      <h2 class="display kinetic" id="h-req" data-kinetic="h2">Co potřebuje tvůj počítač.</h2>
+  <div class="wrap">
+    <div class="sec-intro">
+      <h2 class="display kinetic" id="h-req" data-kinetic="h2" data-break="2">Co potřebuje tvůj počítač.</h2>
       <p class="lede rv">Diktování chce hlavně grafickou kartu. Všechno kolem Clauda je volitelné.</p>
-      <div class="acc spot rv" id="acc">
-        <h3>Jak přesně píše</h3>
-        <p class="fine">Změřeno na 150 nahrávkách z české části testu FLEURS.</p>
-        <div class="acc-bars">
-          <div class="bar-group">
-            <p class="gl">Chybná slova, méně je lépe</p>
-            <div class="bar-row"><div class="top"><span class="name">large-v3</span><span class="val" data-count="8.9" data-unit=" %">8,9 %</span></div><div class="track"><i style="--w:74%"></i></div></div>
-            <div class="bar-row"><div class="top"><span class="name">large-v3-turbo</span><span class="val" data-count="10.2" data-unit=" %">10,2 %</span></div><div class="track"><i style="--w:85%;background:rgba(255,255,255,.35)"></i></div></div>
-          </div>
-          <div class="bar-group">
-            <p class="gl">Přepis jedné nahrávky, Radeon RX 9070 XT</p>
-            <div class="bar-row"><div class="top"><span class="name">large-v3</span><span class="val" data-count="1.9" data-unit=" s">1,9 s</span></div><div class="track"><i style="--w:95%"></i></div></div>
-            <div class="bar-row"><div class="top"><span class="name">large-v3-turbo</span><span class="val" data-count="0.9" data-unit=" s">0,9 s</span></div><div class="track"><i style="--w:45%;background:rgba(255,255,255,.35)"></i></div></div>
-          </div>
-        </div>
-        <p class="fine">Jména a značky, které model neslyší správně, mu napíšeš do slovníku.</p>
-      </div>
     </div>
-    <dl class="spec">
-      <div class="rv"><dt>Systém</dt><dd>Windows 10 nebo 11, 64bit.</dd></div>
-      <div class="rv"><dt>Grafika</dt><dd>S podporou Vulkanu, tedy skoro každá novější karta NVIDIA, AMD nebo Intel. Na nejpřesnější model <b>aspoň 6 GB paměti grafiky</b>, na slabší kartě Orbit použije rychlejší model turbo. Bez grafiky přepisuje procesor, jen pomalu.</dd></div>
-      <div class="rv"><dt>Disk</dt><dd>Model se stáhne při prvním spuštění: <b>3,1 GB</b>, turbo 1,6 GB.</dd></div>
-      <div class="rv"><dt>Mikrofon</dt><dd>Jakýkoli. Bluetooth sluchátka se při nahrávání přepnou do režimu hovoru a přesnost klesne, Orbit tě na to upozorní.</dd></div>
-      <div class="rv"><dt>Claude Code</dt><dd>Volitelně, pro limity, relace, předčítání a hlasového agenta. S vlastním předplatným Claude.</dd></div>
-      <div class="rv"><dt>Google Chrome</dt><dd>Volitelně, pro otevírání stránek hlasem.</dd></div>
-    </dl>
+    <div class="specs">
+      <div class="specs-side">
+        <div class="acc spot rv" id="acc">
+          <h3>Jak přesně píše</h3>
+          <p class="fine">Změřeno na 150 nahrávkách z české části testu FLEURS.</p>
+          <div class="acc-bars">
+            <div class="bar-group">
+              <p class="gl">Chybná slova, méně je lépe</p>
+              <div class="bar-row"><div class="top"><span class="name">large-v3</span><span class="val" data-count="8.9" data-unit=" %">8,9 %</span></div><div class="track"><i style="--w:74%"></i></div></div>
+              <div class="bar-row"><div class="top"><span class="name">large-v3-turbo</span><span class="val" data-count="10.2" data-unit=" %">10,2 %</span></div><div class="track"><i style="--w:85%;background:rgba(255,255,255,.35)"></i></div></div>
+            </div>
+            <div class="bar-group">
+              <p class="gl">Přepis celé nahrávky najednou (kolem 10 s řeči), Radeon RX 9070 XT</p>
+              <div class="bar-row"><div class="top"><span class="name">large-v3</span><span class="val" data-count="1.9" data-unit=" s">1,9 s</span></div><div class="track"><i style="--w:95%"></i></div></div>
+              <div class="bar-row"><div class="top"><span class="name">large-v3-turbo</span><span class="val" data-count="0.9" data-unit=" s">0,9 s</span></div><div class="track"><i style="--w:45%;background:rgba(255,255,255,.35)"></i></div></div>
+            </div>
+          </div>
+          <p class="fine">Jména a značky, které model neslyší správně, mu napíšeš do slovníku.</p>
+        </div>
+      </div>
+      <dl class="spec">
+        <div class="rv"><dt>Systém</dt><dd>64bitová Windows 10 (verze 1809 nebo novější) nebo Windows 11.</dd></div>
+        <div class="rv"><dt>Grafika</dt><dd>S podporou Vulkanu, tedy skoro každá novější karta NVIDIA, AMD nebo Intel. Na nejpřesnější model <b>aspoň 6 GB paměti grafiky</b>, na slabší kartě ti Orbit doporučí rychlejší model turbo. Bez grafiky přepisuje procesor: 10 s řeči s modelem turbo zhruba za 8 až 13 s, podle počtu jader.</dd></div>
+        <div class="rv"><dt>Disk</dt><dd>Orbit sám zabere asi 300 MB. Model se stáhne při prvním spuštění: <b>3,1 GB</b>, turbo 1,6 GB.</dd></div>
+        <div class="rv"><dt>Mikrofon</dt><dd>Jakýkoli. Bluetooth sluchátka se při nahrávání přepnou do režimu hovoru a přesnost klesne, Orbit tě na to upozorní.</dd></div>
+        <div class="rv"><dt>Claude Code</dt><dd>Volitelně, pro limity, relace, předčítání a hlasového agenta. S vlastním předplatným Claude.</dd></div>
+        <div class="rv"><dt>Google Chrome</dt><dd>Volitelně, pro otevírání stránek hlasem.</dd></div>
+      </dl>
+    </div>
   </div>
 </section>
 
@@ -389,7 +414,7 @@
       </svg>
       <span class="ruler-sat" id="instSat" aria-hidden="true"></span>
       <ol class="steps" id="steps">
-        <li><span class="tick"></span><span class="num">1</span><h3>Stáhni instalátor</h3><p class="when-ready">Verze __VERSION__, __SIZE__, vydaná __DATE__.</p><p class="when-pending">Bude tady, jakmile ho dokončíme.</p></li>
+        <li><span class="tick"></span><span class="num">1</span><h3>Stáhni instalátor</h3><p class="when-ready">Verze __VERSION__, __SIZE__, vydaná&nbsp;<span class="nw">__DATE__</span>.</p><p class="when-pending">Bude tady, jakmile ho dokončíme.</p></li>
         <li><span class="tick"></span><span class="num">2</span><h3>Spusť ho</h3><p>Nainstaluje se jen pro tebe, bez práv správce.</p></li>
         <li><span class="tick"></span><span class="num">3</span><h3>Projdi průvodce</h3><p>Jméno, mikrofon, klávesa. Model se stáhne sám.</p></li>
         <li><span class="tick"></span><span class="num">4</span><h3>Připoj Claude Code</h3><p>Volitelně, přihlášením na stránce Anthropicu.</p></li>
@@ -404,12 +429,13 @@
       <div class="ci-boxes rv">
         <div class="copybox">
           <div class="cb-head"><span>Zadání pro Claude Code</span><button type="button" class="cb-copy" data-copy="#ciPrompt"><svg aria-hidden="true"><use href="#i-copy"/></svg><span>Zkopírovat</span></button></div>
-          <p class="cb-body" id="ciPrompt">Nainstaluj mi Orbit, české diktování pro Windows (https://orbit.easya.cz, zdrojový kód je na https://github.com/josefkotran/orbit). Nejdřív si stáhni a přečti instalační skript https://orbit.easya.cz/install.ps1 a v pár větách mi řekni, co udělá. Když bude v pořádku, spusť ho příkazem: powershell -NoProfile -Command "irm https://orbit.easya.cz/install.ps1 | iex". Až Orbit naběhne, provede mě průvodce nastavením. Nakonec mi krátce řekni, jak se s Orbitem diktuje.</p>
+          <p class="cb-body" id="ciPrompt">Nainstaluj mi Orbit, české diktování pro Windows (https://orbit.easya.cz, zdrojový kód je na https://github.com/josefkotran/orbit). Nejdřív si stáhni a přečti instalační skript https://orbit.easya.cz/install.ps1 a v pár větách mi řekni, co udělá. Pak počkej, až ti to odsouhlasím, a teprve potom ho spusť příkazem: <span class="nw">powershell -NoProfile -Command</span> "irm https://orbit.easya.cz/install.ps1 | iex". Až Orbit naběhne, provede mě průvodce nastavením. Nakonec mi krátce řekni, jak se s Orbitem diktuje.</p>
         </div>
         <div class="copybox">
           <div class="cb-head"><span>PowerShell</span><button type="button" class="cb-copy" data-copy="#ciCmd"><svg aria-hidden="true"><use href="#i-copy"/></svg><span>Zkopírovat</span></button></div>
           <code class="cb-body cb-code" id="ciCmd">irm https://orbit.easya.cz/install.ps1 | iex</code>
         </div>
+        <p class="sr" role="status" id="copyStatus"></p>
       </div>
     </div>
     <div class="install-foot">
@@ -435,14 +461,17 @@
   <div class="wrap faq-grid">
     <div class="sticky"><h2 class="display kinetic" id="h-faq" data-kinetic="h2">Otázky.</h2></div>
     <div class="faq" id="faq">
-      <details class="rv"><summary>Kolik Orbit stojí?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Nic. Orbit je zdarma a open source pod licencí GNU GPL 3.0. Celý zdrojový kód, i se skripty, které staví instalátor, je <a href="https://github.com/josefkotran/orbit">na GitHubu</a>. Najdeš tam i licence všech přibalených součástí.</p></div></details>
+      <details class="rv"><summary>Kolik Orbit stojí?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Nic. Orbit je zdarma a open source pod licencí GNU GPL 3.0 nebo novější. Celý zdrojový kód, i se skripty, které staví instalátor, je <a href="https://github.com/josefkotran/orbit">na GitHubu</a>. Najdeš tam i licence všech přibalených součástí. Funkce kolem Claude Code běží na tvém vlastním předplatném Claude: hlasový agent, učení slovníku a souhrny artefaktů z jeho limitu ukrojí trochu.</p></div></details>
       <details class="rv"><summary>Funguje Orbit i bez Claude Code?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Ano. Diktování, slovník a hlasové povely fungují samy. Claude Code přidává limity, přehled relací, předčítání a hlasového agenta.</p></div></details>
-      <details class="rv"><summary>Posílá Orbit můj hlas na internet?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Ne. Nahrávku přepíše Whisper na tvé grafice. Ven může odejít jen text: když zapneš učení slovníku, nebo když hlasovému agentovi potvrdíš zprávu do Claude Code.</p></div></details>
-      <details class="rv"><summary>Proč mě Windows před instalátorem varuje?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Instalátor zatím nemá placený podpis vydavatele, a takové programy Windows ze začátku hlídá. Když chceš mít jistotu, že je soubor celý a nezměněný, porovnej jeho kontrolní součet SHA-256 s tím, který je uvedený u instalace.</p></div></details>
-      <details class="rv"><summary>Do kterých oken umí psát?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Do všech, kam se dá psát klávesnicí: e-mail, Word, prohlížeč, chat, terminál. Výjimkou jsou okna spuštěná jako správce, tam Windows vkládání z běžných programů nedovolí.</p></div></details>
-      <details class="rv"><summary>Co když mám slabší grafiku, nebo žádnou?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Na slabší kartě Orbit použije model turbo, který je dvakrát rychlejší a dělá o něco víc chyb. Bez grafiky přepisuje procesor, to už je na rychlosti znát.</p></div></details>
-      <details class="rv"><summary>Umí i jiné jazyky než češtinu?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Orbit je postavený pro češtinu: rozpoznávání, povely i celé prostředí aplikace.</p></div></details>
-      <details class="rv"><summary>Jak Orbit odinstaluju?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>V Nastavení Windows, v části Aplikace. Odinstalace se zeptá, jestli smazat i stažené modely a tvoje nastavení.</p></div></details>
+      <details class="rv"><summary>Co Orbit mění v nastavení Claude Code?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Jen to, co odsouhlasíš v průvodci. Pro přehled relací a artefakty přidá do settings.json svoje hooky, pro limity svůj stavový řádek. Tvůj původní stavový řádek dál uvidíš, cizí hooky nechá být a před první změnou uloží zálohu settings.json.orbit-backup. Odinstalace jeho záznamy zase odebere.</p></div></details>
+      <details class="rv"><summary>Funguje diktování bez internetu?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Ano. Internet je potřeba jen jednou, na stažení modelu. Pak přepis běží celý na tvém počítači.</p></div></details>
+      <details class="rv"><summary>Posílá Orbit můj hlas na internet?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Ne. Nahrávku přepíše Whisper přímo na tvém počítači a zvuk nikam neodchází. Obyčejné diktování na internet vůbec nesahá. Text jde k Claudovi (na servery Anthropicu) jen u funkcí, které si zapneš: učení slovníku posílá text diktátů, hlasový agent všechno, co mu řekneš, spolu s přehledem tvých relací, a předčítání artefaktů text zveřejněné stránky. Ve výchozím nastavení jsou všechny tři vypnuté.</p></div></details>
+      <details class="rv"><summary>Proč mě Windows před instalátorem varuje?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Instalátor zatím není digitálně podepsaný (certifikát vydavatele se platí) a nové nepodepsané programy Windows ze začátku zastavuje. Když chceš mít jistotu, že je soubor celý a nezměněný, spusť ve složce se staženým souborem v PowerShellu <code>Get-FileHash .\Orbit-Setup-__VERSION__.exe</code> a porovnej výsledek se SHA-256 u tlačítka Stáhnout instalátor (na velikosti písmen nezáleží).</p></div></details>
+      <details class="rv"><summary>Do kterých oken umí psát?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Do všech, kam se dá psát klávesnicí: e-mail, Word, prohlížeč, chat, terminál. Výjimkou jsou okna spuštěná jako správce, tam Windows vkládání z běžných programů nedovolí. Text pak najdeš ve schránce a Orbit ti to řekne. Stejně to dopadne, když mezitím přepneš do jiného okna: text neskončí v cizím okně.</p></div></details>
+      <details class="rv"><summary>Co když mám slabší grafiku, nebo žádnou?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Na slabší kartě ti Orbit doporučí model turbo, který je dvakrát rychlejší a dělá o něco víc chyb (10,2 % chybných slov místo 8,9 %). Bez grafiky přepisuje procesor: 10 s řeči mu s modelem turbo trvá zhruba 8 až 13 s, podle počtu jader.</p></div></details>
+      <details class="rv"><summary>Umí i jiné jazyky než češtinu?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Ne. Orbit je postavený jen pro češtinu: Whisper má jazyk napevno nastavený na češtinu a povely i celé prostředí aplikace jsou česky. Cizí jména a značky mu napíšeš do slovníku.</p></div></details>
+      <details class="rv"><summary>Jak Orbit aktualizuju?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Stáhni nový instalátor a spusť ho. Nastavení, slovník i stažené modely zůstanou. Když Orbit zrovna běží, instalátor tě požádá, ať ho nejdřív ukončíš.</p></div></details>
+      <details class="rv"><summary>Jak Orbit odinstaluju?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>V Nastavení Windows, v části Aplikace. Odinstalace odebere Orbitovy záznamy z nastavení Claude Code, vrátí tvůj původní stavový řádek a zeptá se, jestli smazat i stažené modely a tvoje nastavení.</p></div></details>
     </div>
   </div>
 </section>
@@ -454,7 +483,7 @@
     <p class="lede rv">Podrž klávesu a řekni, co chceš napsat. Zbytek udělá tvoje grafika.</p>
     <div class="rv closing-cta">
       <a class="btn when-ready" href="__HREF__" download data-magnetic data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-download"/></svg>Stáhnout pro Windows</span></a>
-      <p class="fine when-ready">Verze __VERSION__, __SIZE__. Windows 10 a 11, 64bit. Zdarma a open source.</p>
+      <p class="fine when-ready">Verze __VERSION__, __SIZE__. 64bitová Windows 10 a 11. Zdarma a open source.</p>
       <a class="btn when-pending" href="#diktovani" data-magnetic data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-play"/></svg>Zkusit ukázku diktování</span></a>
       <p class="fine when-pending"><span class="pulse"></span>Instalátor dokončujeme, stažení bude tady.</p>
     </div>
@@ -466,7 +495,7 @@
   <div class="wrap">
     <a class="brand" href="#top" aria-label="Orbit, na začátek stránky" style="font-size:19px"><svg viewBox="0 0 32 32" aria-hidden="true"><g transform="rotate(-24 16 16)"><path d="M3 16a13 4.6 0 0 1 26 0" fill="none" stroke="currentColor" stroke-width="1.4" opacity=".5"/><circle cx="16" cy="16" r="6.6" fill="currentColor"/><path d="M3 16a13 4.6 0 0 0 26 0" fill="none" stroke="#04060C" stroke-width="2.8"/><path d="M3 16a13 4.6 0 0 0 26 0" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><circle class="moon" r="1.9" cx="25.9" cy="19" stroke="#04060C" stroke-width="1"/></g></svg>Orbit</a>
     <div>
-      <p>Orbit je svobodný software pod licencí GNU GPL 3.0, zdrojový kód je <a href="https://github.com/josefkotran/orbit">na GitHubu</a>.</p>
+      <p>Orbit vytvořil Josef Kotran. Je to svobodný software pod licencí GNU GPL 3.0 nebo novější, bez jakékoli záruky. Zdrojový kód je <a href="https://github.com/josefkotran/orbit">na GitHubu</a>, chyby a nápady tam piš do <a href="https://github.com/josefkotran/orbit/issues">Issues</a>.</p>
       <p style="margin-top:8px">Orbit není produktem společnosti Anthropic. Claude a Claude Code jsou ochranné známky společnosti Anthropic, PBC.</p>
       <p style="margin-top:8px">Rozpoznávání řeči: whisper.cpp a modely Whisper od OpenAI, obojí pod licencí MIT. Animace: GSAP a Lenis. Hudba ve videu: Mountains, Andrew Ev (Mixkit).</p>
     </div>

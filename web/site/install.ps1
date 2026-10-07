@@ -15,16 +15,43 @@
         return
     }
 
+    # with Orbit running the installer gives up, so say it before downloading 80 MB (the dry run installs nothing)
+    if (-not $env:ORBIT_INSTALL_DRYRUN) {
+        $m = $null; $running = $false
+        try { $running = [Threading.Mutex]::TryOpenExisting('Local\Orbit-single-instance', [ref]$m) }
+        catch [UnauthorizedAccessException] { $running = $true }   # it exists, it is just not ours to open
+        if ($running) {
+            if ($m) { $m.Dispose() }
+            Write-Host 'Orbit právě běží. Ukonči ho (pravým tlačítkem na jeho ikonu u hodin, Ukončit) a spusť příkaz znovu.' -ForegroundColor Yellow
+            return
+        }
+    }
+
     $base = 'https://orbit.easya.cz/download/'
     try { $release = Invoke-RestMethod ($base + 'latest.json') -UseBasicParsing }
     catch {
         Write-Host 'Instalátor zatím není ke stažení, nebo je web nedostupný. Zkus to později na https://orbit.easya.cz' -ForegroundColor Red
         return
     }
+    # the name ends up in a path under %TEMP%, the hash is compared below: accept only what the page itself writes
+    if ($release.file -notmatch '^Orbit-Setup-[\d.]+\.exe$' -or $release.sha256 -notmatch '^[0-9a-fA-F]{64}$' -or -not ($release.size -gt 0)) {
+        Write-Host 'Popis instalátoru na webu je poškozený, nic jsem nestáhl. Zkus to později na https://orbit.easya.cz' -ForegroundColor Red
+        return
+    }
 
     $file = Join-Path $env:TEMP $release.file
     Write-Host ("Stahuji Orbit {0} ({1} MB)…" -f $release.version, [math]::Round($release.size / 1MB))
-    Invoke-WebRequest ($base + $release.file) -OutFile $file -UseBasicParsing
+    try { Invoke-WebRequest ($base + $release.file) -OutFile $file -UseBasicParsing }
+    catch {
+        Remove-Item $file -Force -ErrorAction SilentlyContinue
+        Write-Host 'Stažení se přerušilo nebo soubor na webu chybí. Zkontroluj připojení a zkus to znovu.' -ForegroundColor Red
+        return
+    }
+    if ((Get-Item $file).Length -ne $release.size) {
+        Remove-Item $file -Force -ErrorAction SilentlyContinue
+        Write-Host 'Stažení se nedokončilo. Zkus to znovu.' -ForegroundColor Red
+        return
+    }
     $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($hash -ne $release.sha256.ToLowerInvariant()) {
         Remove-Item $file -Force -ErrorAction SilentlyContinue
