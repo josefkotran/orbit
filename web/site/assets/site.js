@@ -581,14 +581,17 @@
     else if (video.networkState === video.NETWORK_NO_SOURCE) setTimeout(function () { if (video.networkState === video.NETWORK_NO_SOURCE && !video.readyState) fail(); }, 1500);
     if (!still) video.preload = "metadata";  // the HTML loads nothing (reduced motion, data saver); the rest get the start, so it begins at once
 
-    var markPause = function () {
-      var label = userPaused ? "Pustit" : "Zastavit";
-      pauseBtn.classList.toggle("paused", userPaused);
+    var markPause = function () {  // what the video does, not what was asked: the browser may block autoplay
+      var off = video.paused, label = off ? "Pustit" : "Zastavit";
+      pauseBtn.classList.toggle("paused", off);
       pauseBtn.setAttribute("aria-label", label + " video"); pauseBtn.setAttribute("data-cursor", label);
       if (cursor.classList.contains("is-label") && pauseBtn.matches(":hover")) cLabel.textContent = label;
     };
+    video.addEventListener("play", markPause);
+    video.addEventListener("pause", markPause);
+    markPause();
     pauseBtn.addEventListener("click", function () {  // stays paused, also after scrolling away and back
-      userPaused = !userPaused; markPause();
+      userPaused = !video.paused;
       if (userPaused) { want = false; video.pause(); } else { want = true; play(); }
     });
     if (still) { pauseBtn.hidden = true; soundBtn.querySelector("span").textContent = "Přehrát video"; }
