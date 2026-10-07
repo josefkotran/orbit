@@ -848,7 +848,10 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 ## GitHub
 
 Repozitář **https://github.com/josefkotran/orbit**, větev `main`, **od 7. 10. 2026 veřejný** (GPL-3.0). Nic osobního
-do něj nepatří: `config.json`, `orbit.log`, `recordings/`, `sessions/` a hudba videa hlídá `.gitignore`. Vytvořen přes GitHub API s tokenem
+do něj nepatří: `config.json`, `orbit.log`, `recordings/`, `sessions/` a hudba videa hlídá `.gitignore`.
+7. 10. vracel `git push` asi 10 minut „remote: Internal Server Error“ (i pro prázdný commit, zápis přes API přitom
+fungoval, githubstatus.com hlásil vše v pořádku), pak prošel sám. Git Data API soubory nad ~50 MB nepřijme
+(`ggml-vulkan.dll` má 53 MB), takže velké binárky jdou jen pushem. Vytvořen přes GitHub API s tokenem
 z Git Credential Manageru (`git credential fill`, `GCM_INTERACTIVE=never`), protože `gh` chybí. Push funguje normálně.
 Autor commitů: `Josef Kotran <josef.kotran@seznam.cz>`. `whisper-server.exe` má 59 MB, GitHub jen varuje (limit 100 MB);
 ve `whisper-next/` je největší `ggml-vulkan.dll` (56 MB). Výstupy buildu (`build/cache`, `tools`, `dist`, `output`)
