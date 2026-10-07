@@ -14,6 +14,7 @@ import re
 import time
 from ctypes import wintypes
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import paths
@@ -28,6 +29,8 @@ STATE_LABELS = {"working": "pracuje", "waiting": "čeká na tebe", "done": "hoto
                 "error": "chyba"}
 STALE_S = 12 * 3600  # sessions whose process can't be checked disappear after this long without an event
 STATUS_FRESH_S = 600  # the status line's context counts while it isn't this much older than the transcript
+LOOP_EXPIRES_S = 7 * 86400  # Claude Code deletes a loop's recurring job after this long
+LOOP_LATE_S = 300  # a self-paced loop this late with its next round (and the session idle) has ended
 
 _user32 = ctypes.windll.user32
 _kernel32 = ctypes.windll.kernel32
@@ -42,6 +45,219 @@ def _settings() -> Path:
 def _registry_dir() -> Path:
     """Claude Code's list of running sessions, <pid>.json each."""
     return paths.claude_dir() / "sessions"
+
+
+@dataclass
+class Loop:
+    """A /loop running in a session: a recurring job (CronCreate, cron "7 * * * *") or one that paces itself
+    (ScheduleWakeup). Read from the transcript, which isn't an official interface either: the jobs live only in the
+    session's process."""
+    since: float  # when it was set up
+    text: str = ""  # what it repeats (its prompt, what /loop was given): the end time is read from it
+    cron: str = ""  # "" = it paces itself
+    wake: float = 0.0  # paces itself: when it goes on next (0 = not scheduled yet, its first round runs)
+
+    @property
+    def until(self) -> float | None:
+        """When it ends by its own words ("do 23:00", "pokud je 23:00 nebo později, skonči"), None = not said."""
+        found = min((m for pattern in _UNTIL_RES if (m := pattern.search(self.text))), default=None,
+                    key=lambda m: m.start())
+        if not found:
+            return None
+        hour, minute = int(found.group(1)), int(found.group(2) or 0)
+        if hour > 23 or minute > 59:
+            return None
+        start = datetime.fromtimestamp(self.since)
+        end = start.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        return (end if end > start else end + timedelta(days=1)).timestamp()
+
+    def label(self) -> str:
+        """Next to the session's name: until when it runs ("do 23:00"), or just that it's a loop."""
+        until = self.until
+        return f"do {_clock(until)}" if until and until > time.time() else "loop"
+
+    def describe(self) -> str:
+        """For the session's tooltip: until when, how often, when the next round comes."""
+        until, now = self.until, time.time()
+        text = "Běží ve smyčce (loop)" + (f" do {_clock(until)}" if until and until > now else "")
+        if self.cron:
+            text += f", {_cron_text(self.cron)}"
+        nxt = _cron_next(self.cron, now) if self.cron else self.wake if self.wake > now else None
+        text += f", další kolo v {_clock(nxt)}." if nxt else "." if self.cron else ", další kolo si naplánuje sama."
+        if until and until <= now:
+            text += f" Měla skončit v {_clock(until)}, skončí při dalším kole."
+        elif not until and self.cron:
+            text += f" Konec v zadání nemá, Claude Code ji zruší {_clock(self.since + LOOP_EXPIRES_S)}."
+        return text
+
+
+_UNTIL_RES = [re.compile(p, re.IGNORECASE) for p in (
+    r"\b(?:do|until|till)\s+(\d{1,2})[:.](\d{2})(?!\.?\d)",  # "do 23:00", "until 23.00"
+    r"\b(?:konec|konči|skonči|ukonči|zastav|stop|end)\w*\s+(?:ve?|at|by)\s+(\d{1,2})[:.](\d{2})(?!\.?\d)",
+    r"\b(\d{1,2})[:.](\d{2})(?!\.?\d)\s+(?:nebo později|or later)",  # "pokud je 23:00 nebo později, ukonči"
+    r"\bdo\s+(\d{1,2})()\s*(?:h\b|hod)",  # "do 23 hodin"
+)]
+
+
+def _clock(when: float) -> str:
+    """19:07 today, otherwise with the day: 8. 10. 19:07."""
+    t = datetime.fromtimestamp(when)
+    day = "" if t.date() == datetime.now().date() else f"{t.day}. {t.month}. "
+    return f"{day}{t.hour}:{t.minute:02d}"
+
+
+def _cron_text(cron: str) -> str:
+    """The usual schedules in words ("každou hodinu v :07"), anything else as the cron it is."""
+    fields = cron.split()
+    if len(fields) == 5 and fields[2:] == ["*", "*", "*"]:
+        minute, hour = fields[:2]
+        if hour == "*" and minute.isdigit():
+            return f"každou hodinu v :{int(minute):02d}"
+        if hour == "*" and minute.startswith("*/") and minute[2:].isdigit():
+            return f"každých {minute[2:]} min"
+        if minute.isdigit() and hour.startswith("*/") and hour[2:].isdigit():
+            return f"každé {hour[2:]} h v :{int(minute):02d}"
+        if minute.isdigit() and hour.isdigit():
+            return f"každý den v {int(hour)}:{int(minute):02d}"
+    return f"podle cronu {cron}"
+
+
+def _cron_values(field: str, low: int, high: int) -> set[int]:
+    values = set()
+    for part in field.split(","):
+        part, _, step = part.partition("/")
+        if part == "*":
+            start, end = low, high
+        elif "-" in part:
+            start, end = map(int, part.split("-"))
+        else:
+            start = int(part)
+            end = high if step else start
+        values.update(range(start, end + 1, int(step) if step else 1))
+    return values
+
+
+def _cron_next(cron: str, after: float) -> float | None:
+    """When a 5-field cron (local time, like Claude Code's) fires next; None when it can't be read."""
+    fields = cron.split()
+    try:
+        minutes, hours, days, months, weekdays = (
+            _cron_values(f, low, high) for f, (low, high) in
+            zip(fields, ((0, 59), (0, 23), (1, 31), (1, 12), (0, 7)), strict=True))
+    except ValueError:
+        return None
+    if 7 in weekdays:
+        weekdays.add(0)  # Sunday both ways
+    either = fields[2] != "*" and fields[4] != "*"  # both restricted: cron fires on either
+    t = datetime.fromtimestamp(after).replace(second=0, microsecond=0) + timedelta(minutes=1)
+    for _ in range(8 * 24 * 60):
+        weekday = (t.weekday() + 1) % 7
+        day = (t.day in days or weekday in weekdays) if either else (t.day in days and weekday in weekdays)
+        if day and t.month in months and t.hour in hours and t.minute in minutes:
+            return t.timestamp()
+        t += timedelta(minutes=1)
+    return None
+
+
+class _LoopScan:
+    """What a session's transcript says about /loop. Read on from where it stopped: a transcript only grows."""
+
+    def __init__(self):
+        self.offset = 0
+        self.jobs: dict[str, Loop] = {}  # recurring jobs by Claude Code's job id (CronCreate, until CronDelete)
+        self.creating: dict[str, Loop] = {}  # CronCreate's tool_use id -> its job, until the result names the job
+        self.paced: Loop | None = None  # paces itself (ScheduleWakeup); None again after a stop
+        self.asked: Loop | None = None  # /loop given, nothing scheduled yet (its first round runs)
+
+    def read(self, transcript: str) -> None:
+        try:
+            with open(transcript, "rb") as f:
+                size = f.seek(0, 2)
+                if size < self.offset:  # rewritten: start over
+                    self.__init__()
+                if size == self.offset:
+                    return
+                f.seek(self.offset)
+                data = f.read()
+        except (OSError, ValueError):
+            return
+        end = data.rfind(b"\n") + 1  # a line being written is read next time, whole
+        self.offset += end
+        for line in data[:end].splitlines():
+            if (self.creating and b'"tool_use_id"' in line) or any(hint in line for hint in _LOOP_HINTS):
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(entry, dict):
+                    self._entry(entry)
+
+    def _entry(self, entry: dict) -> None:
+        try:
+            when = datetime.fromisoformat(str(entry.get("timestamp"))).timestamp()
+        except ValueError:
+            when = time.time()
+        message = entry.get("message") if isinstance(entry.get("message"), dict) else {}
+        content = message.get("content")
+        blocks = content if isinstance(content, list) else [{"type": "text", "text": content}]
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text" and entry.get("type") == "user" and \
+                    "<command-name>/loop</command-name>" in str(block.get("text")):
+                args = re.search(r"<command-args>(.*?)</command-args>", str(block["text"]), re.DOTALL)
+                self.asked = Loop(when, text=args.group(1) if args else "")
+            elif block.get("type") == "tool_result" and block.get("tool_use_id") in self.creating:
+                job = self.creating.pop(block["tool_use_id"])
+                result = entry.get("toolUseResult") if isinstance(entry.get("toolUseResult"), dict) else {}
+                job_id = result.get("id") or next(iter(re.findall(r"job (\w+)", str(block.get("content")))), "")
+                if job_id and not block.get("is_error"):
+                    self.jobs[str(job_id)] = job
+                    self.asked = None
+            elif block.get("type") == "tool_use" and isinstance(block.get("input"), dict):
+                self._tool(str(block.get("name")), block["input"], str(block.get("id")), when)
+
+    def _tool(self, name: str, args: dict, use_id: str, when: float) -> None:
+        prompt = str(args.get("prompt") or "")
+        given = self.paced or self.asked  # what /loop was given: the end time may be only there
+        if name == "Skill" and str(args.get("skill")).split(":")[-1] == "loop":
+            self.asked = Loop(when, text=str(args.get("args") or ""))
+        elif name == "CronCreate" and args.get("recurring", True) is not False:
+            self.creating[use_id] = Loop(when, text="\n".join(filter(None, (prompt, given and given.text))),
+                                         cron=str(args.get("cron", "")))
+        elif name == "CronDelete":
+            self.jobs.pop(str(args.get("id")), None)
+        elif name == "ScheduleWakeup":
+            if args.get("stop"):
+                self.paced = self.asked = None
+                return
+            try:
+                delay = min(max(float(args.get("delaySeconds", 0)), 60), 3600)  # Claude Code clamps it the same
+            except (TypeError, ValueError):
+                delay = 60
+            text = prompt if prompt and not prompt.startswith("<<") else ""  # not the "<<autonomous-loop…>>" mark
+            self.paced = Loop(given.since if given else when, text=text or (given.text if given else ""),
+                              wake=when + delay)
+            self.asked = None
+
+    def active(self, process_started: float, busy: bool, turn_started: float) -> Loop | None:
+        """The loop running now. Jobs set up before the process started are gone (a resumed session)."""
+        now = time.time()
+
+        def ours(loop: Loop) -> bool:
+            return loop.since >= process_started - 60
+
+        jobs = [j for j in self.jobs.values() if ours(j) and now - j.since < LOOP_EXPIRES_S]
+        if jobs:
+            return max(jobs, key=lambda j: j.since)
+        if self.paced and ours(self.paced) and (busy or self.paced.wake > now - LOOP_LATE_S):
+            return self.paced
+        if self.asked and ours(self.asked) and busy and self.asked.since >= turn_started - 5:
+            return self.asked  # its first round, in the turn that started it
+        return None
+
+
+_LOOP_HINTS = (b'"CronCreate"', b'"CronDelete"', b'"ScheduleWakeup"', b'"loop"', b"/loop</command-name>")
 
 
 @dataclass
@@ -66,6 +282,7 @@ class Session:
     prompt: str = ""  # what the user asked it last
     mode: str = ""  # permission mode: default, acceptEdits, plan, auto, dontAsk, bypassPermissions ("" = not known)
     bypass_seen: bool = False  # it has run in bypassPermissions (so it was started with bypass allowed)
+    loop: Loop | None = None  # a /loop running in it
 
     @property
     def folder(self) -> str:
@@ -97,6 +314,8 @@ class Session:
             used = f"{self.context_tokens // 1000} tis. z {_size_text(self.context_size)} tokenů" \
                 if self.context_size else ""
             lines.append(f"Kontext {self.context * 100:.0f} %" + (f" ({used})" if used else ""))
+        if self.loop:
+            lines.append(self.loop.describe())
         if self.mode_class == "bypass":
             lines.append("Běží bez ptaní na oprávnění.")
         if self.hwnd:
@@ -115,6 +334,7 @@ class SessionTracker:
         # transcript path -> (mtime, context tokens, topic, permission mode, bypass seen)
         self._transcript_cache: dict[str, tuple[float, int, str, str, bool]] = {}
         self._status_cache: dict[str, tuple[float, dict]] = {}  # session id -> (mtime, status line record)
+        self._loops: dict[str, _LoopScan] = {}  # transcript path -> what it says about /loop so far
         self._first = True
 
     def poll(self) -> list[tuple[Session, str]]:
@@ -167,6 +387,9 @@ class SessionTracker:
             else:  # no hook event yet: Claude Code's own busy/idle
                 s.state = "working" if reg.get("status") == "busy" else "idle"
             self._update_transcript(s)
+            scan = self._loops.setdefault(s.transcript, _LoopScan())
+            scan.read(s.transcript)
+            s.loop = scan.active(reg.get("startedAt", 0) / 1000, s.state in ("working", "waiting"), s.since)
             hook_mode = max((r for r in events.values() if r.get("permission_mode")), default=None,
                             key=lambda r: r.get("time", 0))
             if hook_mode:

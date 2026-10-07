@@ -20,6 +20,7 @@ from .version import VERSION
 
 MIC_GLYPH = ""  # "Microphone" in Segoe Fluent Icons / Segoe MDL2 Assets
 REFRESH_GLYPH = chr(0xE72C)  # "Refresh" in Segoe Fluent Icons / Segoe MDL2 Assets
+LOOP_GLYPH = chr(0xE8EE)  # "RepeatAll": a session running a /loop
 SPEAKER_GLYPH = chr(0xE767)  # "Volume"
 MUTE_GLYPH = chr(0xE74F)  # "Mute"
 
@@ -731,10 +732,12 @@ class FloatingButton(QWidget):
 
     def _paint_sessions(self, p: QPainter, x: float, right: float, y: float, font: QFont, bold: QFont,
                         text: QColor, dim: QColor) -> float:
-        """One row per Claude Code session: status dot, its topic, its folder, what it's doing, how full its
-        context is."""
-        pct_w, state_w, gap = 34, 70, 10
-        metrics = QFontMetricsF(font)
+        """One row per Claude Code session: status dot, its topic (with a /loop: a mark and until when), its folder,
+        what it's doing, how full its context is."""
+        pct_w, state_w, gap, icon_w = 34, 70, 10, 12
+        metrics, bold_metrics = QFontMetricsF(font), QFontMetricsF(bold)
+        icon_font = QFont(theme.icon_font())
+        icon_font.setPixelSize(10)
         folder_w = min(110.0, max(metrics.horizontalAdvance(s.folder) for s in self._sessions)) if any(
             s.topic for s in self._sessions) else 0.0  # no topics: the names already are the folders
         for s in self._sessions:
@@ -747,8 +750,18 @@ class FloatingButton(QWidget):
             p.setPen(text)
             name_rect = QRectF(row.left() + 13, row.top(),
                                row.width() - 13 - (folder_w + gap if folder_w else 0) - state_w - pct_w, row.height())
-            p.drawText(name_rect, Qt.AlignLeft | Qt.AlignVCenter,
-                       QFontMetricsF(bold).elidedText(s.name, Qt.ElideRight, name_rect.width()))
+            loop = s.loop.label() if s.loop else ""
+            loop_w = icon_w + 2 + metrics.horizontalAdvance(loop) if loop else 0.0
+            name = bold_metrics.elidedText(s.name, Qt.ElideRight, name_rect.width() - (loop_w + 6 if loop else 0))
+            p.drawText(name_rect, Qt.AlignLeft | Qt.AlignVCenter, name)
+            if loop:  # right after the name, in the accent colour
+                left = name_rect.left() + bold_metrics.horizontalAdvance(name) + 6
+                p.setPen(QColor(theme.ACCENT))
+                p.setFont(icon_font)
+                p.drawText(QRectF(left, row.top(), icon_w, row.height()), Qt.AlignCenter, LOOP_GLYPH)
+                p.setFont(font)
+                p.drawText(QRectF(left + icon_w + 2, row.top(), loop_w, row.height()), Qt.AlignLeft | Qt.AlignVCenter,
+                           loop)
             p.setFont(font)
             if folder_w and s.topic:
                 p.setPen(dim)

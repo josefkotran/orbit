@@ -184,6 +184,8 @@ def context(sessions: list[Session], heard: str, name: str = "") -> str:
         parts.append(f"stav: {STATE_LABELS[s.state]}{since}")
         if s.context is not None:
             parts.append(f"kontext {s.context * 100:.0f} %")
+        if s.loop:
+            parts.append(s.loop.describe().rstrip("."))
         if s.prompt:
             parts.append(f"poslední zadání: „{summary(s.prompt, 3, 300)}“")
         if s.message:

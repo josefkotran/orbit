@@ -312,6 +312,14 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   Claude Code do titulku okna. Používá se v panelu, v bublinách i v hlasu („Hotovo: …“). V panelu je za názvem
   tlumeně i složka (Pepa chtěl vidět, kde relace pracuje), proto je panel široký 440 px (s 320 px se názvy
   ořezávaly). Relace jsou seřazené podle složky a začátku relace (pořadí neskáče se změnou stavu).
+- **Loop v relaci** (od 7. 10., `Session.loop`, `sessions._LoopScan`): za názvem relace ikona smyčky (E8EE) a „do 23:00“
+  (bez konce v zadání „loop“) v barvě akcentu, v tooltipu jak často a kdy je další kolo, totéž dostane agent. Joby
+  `/loop` žijí jen v procesu relace, proto se čtou z přepisu (čte se dál od posledního místa, poprvé celý):
+  `CronCreate` (opakovaný; id jobu z `toolUseResult.id`, konec `CronDelete` nebo po 7 dnech), `ScheduleWakeup`
+  (loop bez intervalu, sám si plánuje kola; `stop` = konec, víc než 5 min po plánovaném kole a relace v klidu =
+  skončil) a samotné spuštění (`Skill` `loop` nebo `<command-name>/loop`) jen během jeho prvního tahu. Joby z doby
+  před startem procesu (obnovená relace) se nepočítají. Konec se čte z textu zadání („do 23:00“, „pokud je 23:00 nebo
+  později“, „do 23 hodin“, „until 23:00“), nejbližší takový čas po spuštění loopu.
 - `claude -p --safe-mode` (učení slovníku) hooky nespouští a jeho záznam v seznamu (`entrypoint` `sdk-cli`)
   Orbit vynechá, v přehledu se neobjeví.
 - Stop hook nese `last_assistant_message` → bublina a předčítání. Oznamuje se jen když okno relace není v popředí
