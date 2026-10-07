@@ -41,6 +41,7 @@ CLICK_S = 0.35  # the agent's button let go sooner than this = a click: it liste
 LISTEN_MAX_MS = 30_000  # hands-free listening ends after this at the latest
 CONFIRM_TIMEOUT_MS = 120_000  # a message for a session that Pepa doesn't confirm within this isn't sent
 CONFIRM_MAX_CHARS = 500  # longer messages aren't confirmed by voice: the agent has to shorten them
+CONFIRM_SEEN_S = 1.0  # a recording started this long after the question showed up in the panel answers it
 FEED_KEEP_MS = 90_000  # the agent's part of the panel goes away after this long without anything new
 MAX_RECORDING_S = 300  # a recording ends after this at the latest (a key-up the hook never saw)
 WATCH_MS = 1000  # how often a running recording is checked (the key's release, the secure desktop, its length)
@@ -62,7 +63,7 @@ class Take:
         self.error: str | None = None
         self.released_at = 0.0
         self.target = 0  # the window in front when it ended: the text goes there only if it still is
-        self.confirm_id: str | None = None  # for the agent: the "Mám to poslat?" already heard when it started
+        self.confirm_id: str | None = None  # for the agent: the "Mám to poslat?" already shown when it started
 
 
 class Bridge(QObject):
@@ -172,7 +173,6 @@ class Dictation:
         self._forecast_warned = None  # the 5-hour window we already warned about
         self.agent = agent.VoiceAgent(self.cfg["agent_model"], self.bridge.agent_event.emit, self.cfg["name"],
                                       bypass=self._sessions_bypass)
-        self._saying: tuple[str, str] | None = None  # (text, kind) being read aloud right now
         self._no_voice_told = False  # told once that there's no voice to read Czech with
         self.agent_ptt: hotkey.PushToTalk | None = None
         self._agent_capture: hotkey.PushToTalk | None = None  # a hook capturing the agent's new button (settings)
@@ -521,8 +521,10 @@ class Dictation:
             vocabulary = ", ".join([vocabulary, *sorted({s.folder for s in self.tracker.sessions.values()})])
         self.live_timer.start()
         self.take = Take(build_prompt(vocabulary), for_agent)
-        if for_agent and self._confirm and self._confirm.get("asked"):
-            self.take.confirm_id = self._confirm["id"]  # only then can what's said be the answer to it
+        # Only a question already in the panel can be answered: what was said before it came is no answer to it.
+        # Not waiting until it's read to the end: a long one takes half a minute, Pepa reads it and cuts it short.
+        if for_agent and self._confirm and time.monotonic() - self._confirm["shown"] >= CONFIRM_SEEN_S:
+            self.take.confirm_id = self._confirm["id"]
         try:
             self.recorder.start()
         except Exception as e:
@@ -932,9 +934,6 @@ class Dictation:
         return self.tts
 
     def _say_next(self):
-        finished, self._saying = self._saying, None
-        if finished and finished[1] == "confirm" and self._confirm and self._confirm.get("speech") == finished[0]:
-            self._confirm["asked"] = True  # read to the end: from now on the agent's button answers it
         self._speaking = bool(self._speech)
         text, kind = self._speech.pop(0) if self._speech else ("", "")
         self._reading_artifact = kind == "artifact"
@@ -946,7 +945,6 @@ class Dictation:
         speaker = self._speaker() if text else None
         if speaker:
             self._said_at = time.monotonic()
-            self._saying = (text, kind)
             log.info("Čtu nahlas (%d znaků)", len(text))
             log.debug("Čtu: %s", text)
             speaker.say(text)
@@ -964,7 +962,6 @@ class Dictation:
         """Silence now and forget what's queued (or only the artifact summaries; an answer after them still comes)."""
         self._speech = [s for s in self._speech if s[1] != "artifact"] if artifacts_only else []
         if self._reading_artifact or not artifacts_only:
-            self._saying = None  # cut short: not heard to the end
             for speaker in (self.tts, self.piper):
                 if speaker:
                     speaker.stop()
@@ -1110,8 +1107,8 @@ class Dictation:
             self._finish_recording()
 
     def _agent_heard(self, text: str, confirm_id=None):
-        """What Pepa said to the agent: an answer to "Mám to poslat?" (only when the question had been heard before
-        the recording started, confirm_id), or something for the agent."""
+        """What Pepa said to the agent: an answer to "Mám to poslat?" (only when the question was already in the
+        panel when the recording started, confirm_id), or something for the agent."""
         text = text.strip()
         if self._confirm:
             if not text:
@@ -1119,12 +1116,13 @@ class Dictation:
             elif confirm_id is not None and confirm_id == self._confirm["id"]:
                 self._feed_update(you=text)
                 self._answer_confirm(text)
-            else:  # said before the question came (or while it was being read): it's no answer to it
+            else:  # started before the question came: it's no answer to it
                 request, self._confirm = self._confirm, None
                 self.confirm_timer.stop()
-                log.info("Agent: věta přišla dřív, než zazněla otázka, nic neodchází")
-                self.agent.resolve(request["id"], False, f"Než otázka na potvrzení zazněla, uživatel řekl: „{text}“. "
-                                   "Nic neodešlo. Reaguj na to a případně požádej o potvrzení znovu.")
+                log.info("Agent: věta začala dřív, než přišla otázka, nic neodchází")
+                self.agent.resolve(request["id"], False, f"Uživatel začal mluvit dřív, než se otázka na potvrzení "
+                                   f"ukázala, a řekl: „{text}“. Nic neodešlo. Reaguj na to a případně požádej "
+                                   "o potvrzení znovu.")
                 send = self._feed.get("send")
                 self._feed_update(you=text, **({"send": dict(send, status="changed")} if send else {}))
                 self._set_agent_state("thinking")
@@ -1250,12 +1248,11 @@ class Dictation:
             self.agent.resolve(data["id"], False, refused)
             self._feed_update(send=dict(send, status="changed"))
             return
-        self._confirm = dict(data, speech=speech, mode=mode, asked=False)
+        self._confirm = dict(data, mode=mode, shown=time.monotonic())
         self.confirm_timer.start()
         self._feed_update(send=send)
         self._set_agent_state("confirm")
-        if not self._speak(speech, wait=True, kind="confirm"):
-            self._confirm["asked"] = True  # it won't be read (muted, no voice): the panel shows it all
+        self._speak(speech, wait=True, kind="confirm")
 
     def _answer_confirm(self, text: str):
         request, self._confirm = self._confirm, None

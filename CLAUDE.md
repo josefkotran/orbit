@@ -414,8 +414,10 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   v panelu je zpráva celá až na 10 řádků). Zprávu s blokem kódu, delší než 500 znaků nebo s víc než 6 řádky vrátí
   agentovi, ať ji zkrátí (`_unreadable`), a novou relaci jen ve složce ze seznamu `project_folders`
   (`agent.known_folder`, dvě stejně pojmenované složky se čtou i s nadřazenou). Odpověď platí jen pro otázku, která
-  **dozněla celá před začátkem nahrávky** (`Take.confirm_id`, `_confirm["asked"]` nastaví `_say_next` po dočtení;
-  ztlumeno nebo bez hlasu hned): co uživatel řekl dřív, agent dostane jako důvod zamítnutí a zeptá se znovu.
+  **byla v panelu aspoň 1 s před začátkem nahrávky** (`Take.confirm_id`, `_confirm["shown"]`, `CONFIRM_SEEN_S`):
+  co uživatel začal říkat dřív, agent dostane jako důvod zamítnutí a zeptá se znovu. Dočtení otázky se nečeká:
+  dřív platilo jen „dozněla celá“, jenže zadání nové relace (451 znaků) se čte ~35 s, Pepa si ho přečetl v panelu,
+  čtení přerušil svým „jo“ a Orbit každé „jo“ zahodil (7. 10. třikrát po sobě, nová relace nešla založit).
   Odpověď (`agent.confirmation`, max 5 slov): ano jen když jsou všechna slova „ano“ nebo výplň („jo, pošli to“),
   ne když je tam ne/počkej/zruš nebo slovo na „ne…“ delší než 3 písmena („není to ono“), cokoli jiného („ano, ale
   do jiné“) = zamítne s jeho slovy jako důvodem a agent zprávu upraví. Bez odpovědi do 2 min se zahodí.
