@@ -853,7 +853,11 @@ do něj nepatří: `config.json`, `orbit.log`, `recordings/`, `sessions/` a hudb
 fungoval, githubstatus.com hlásil vše v pořádku), pak prošel sám. Git Data API soubory nad ~50 MB nepřijme
 (`ggml-vulkan.dll` má 53 MB), takže velké binárky jdou jen pushem. Vytvořen přes GitHub API s tokenem
 z Git Credential Manageru (`git credential fill`, `GCM_INTERACTIVE=never`), protože `gh` chybí. Push funguje normálně.
-Autor commitů: `Josef Kotran <josef.kotran@seznam.cz>`. `whisper-server.exe` má 59 MB, GitHub jen varuje (limit 100 MB);
+**Přispěvatel má být jen účet `josefkotran`** (Pepa, 7. 10.): autor commitů `Josef Kotran
+<235639876+josefkotran@users.noreply.github.com>` (nastavené v `git config` repozitáře; `josef.kotran@seznam.cz` patří
+jinému jeho účtu `joseKot`) a **commity bez řádku `Co-Authored-By`** ani jiné zmínky o Claudovi jako autorovi. Historie
+se kvůli tomu 7. 10. přepsala (záloha lokálně ve větvi `backup/before-author-rewrite`).
+`whisper-server.exe` má 59 MB, GitHub jen varuje (limit 100 MB);
 ve `whisper-next/` je největší `ggml-vulkan.dll` (56 MB). Výstupy buildu (`build/cache`, `tools`, `dist`, `output`)
 v gitu nejsou.
 
