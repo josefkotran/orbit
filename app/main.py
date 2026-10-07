@@ -5,6 +5,7 @@ import re
 import sys
 import threading
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from logging.handlers import RotatingFileHandler
@@ -43,6 +44,7 @@ CONFIRM_TIMEOUT_MS = 120_000  # a message for a session that Pepa doesn't confir
 CONFIRM_MAX_CHARS = 500  # longer messages aren't confirmed by voice: the agent has to shorten them
 CONFIRM_SEEN_S = 1.0  # a recording started this long after the question showed up in the panel answers it
 FEED_KEEP_MS = 90_000  # the agent's part of the panel goes away after this long without anything new
+AGENT_IDLE_CHECK_MS = 60_000  # how often a long-idle agent process is ended (agent.VoiceAgent.stop_if_idle)
 MAX_RECORDING_S = 300  # a recording ends after this at the latest (a key-up the hook never saw)
 WATCH_MS = 1000  # how often a running recording is checked (the key's release, the secure desktop, its length)
 SILENT_TELL_S = 1.5  # a recording this long that had nothing in it gets a bubble saying why
@@ -96,6 +98,9 @@ class Dictation:
     def __init__(self):
         first_run = config.is_first_run()
         self.cfg = config.load()
+        # config.json couldn't be read, the defaults hold: they mustn't take Orbit's hooks or status line out of
+        # Claude Code (the defaults say no to both) until the user saves settings themselves
+        self._cfg_doubtful = bool(config.problem)
         if first_run:
             self.cfg["wizard_pending"] = True  # cleared when the wizard closes; a crash before that shows it again
         if "claude_hooks" in config.missing:
@@ -190,6 +195,11 @@ class Dictation:
         self.confirm_timer.timeout.connect(self._confirm_expired)
         self.feed_timer = QTimer(singleShot=True, interval=FEED_KEEP_MS)
         self.feed_timer.timeout.connect(self._feed_expired)
+        self.agent_idle_timer = QTimer(interval=AGENT_IDLE_CHECK_MS)
+        # in a thread: ending the process waits for it (up to 3 s), the UI mustn't
+        self.agent_idle_timer.timeout.connect(
+            lambda: threading.Thread(target=self.agent.stop_if_idle, daemon=True).start())
+        self.agent_idle_timer.start()
         self.button.agent_clicked.connect(self._agent_clicked)
         self.button.connect_clicked.connect(lambda: self.open_wizard("claude"))
         self.button.statusline_clicked.connect(self._enable_statusline)
@@ -395,6 +405,8 @@ class Dictation:
         folder is never created."""
         if not self.claude.connected or not paths.claude_dir().is_dir():
             return
+        if self._cfg_doubtful and not self.cfg["claude_statusline"]:
+            return  # a "no" only because config.json couldn't be read
         try:
             claude_settings.set_statusline(self.cfg["claude_statusline"])
         except claude_settings.SettingsError as e:
@@ -708,8 +720,6 @@ class Dictation:
             log.info("Přepis %.1f s zvuku za %.2f s po puštění (kusů: %d)%s: %s%s", len(audio) / SAMPLE_RATE,
                      time.perf_counter() - take.released_at, len(take.raw), " pro agenta" if take.agent else "",
                      repr(text) if learn else f"{len(text)} znaků", f" + {key}" if key else "")
-            if keep:
-                self._save_recording(audio, " ".join(take.raw))
         except Exception as e:
             log.exception("Dokončení přepisu selhalo")
             self.bridge.transcribe_failed.emit(str(e), take)
@@ -718,6 +728,8 @@ class Dictation:
             self.bridge.agent_heard.emit(text, take.confirm_id)
         else:
             self.bridge.text_ready.emit(text, key, take.target)
+        if keep:  # after the text is on its way: writing the WAV took ~11 ms (up to 50) on the way to the window
+            self._save_recording(audio, " ".join(take.raw))
 
     @staticmethod
     def _save_recording(audio, text):
@@ -766,7 +778,9 @@ class Dictation:
                              title="Diktování")
                 return  # no Enter after a text that may not be there
             if key:
-                self.inserter.press(key, after_text=text)
+                said = "Odešli" if key == "send" else "Stop"
+                self.inserter.press(key, after_text=text, on_skipped=lambda: self._notify(
+                    f"Okno se mezitím změnilo, povel „{said}“ jsem neprovedl.", title="Diktování"))
         except Exception as e:
             log.exception("Vložení textu selhalo")
             self._notify(f"Text se nepodařilo vložit: {e}", error=True)
@@ -821,6 +835,8 @@ class Dictation:
         on = self.cfg["claude_hooks"] and (self.cfg["show_sessions"] or self.cfg["read_artifacts"])
         if not self.claude.connected or (on and not paths.claude_dir().is_dir()):  # never create Claude's folder
             on = False
+        elif self._cfg_doubtful and not on:
+            pass  # a "no" only because config.json couldn't be read: the hooks stay as they are
         else:
             try:
                 if claude_settings.set_hooks(on) and on:
@@ -1046,6 +1062,7 @@ class Dictation:
         theme.set_theme(name)
         theme.apply(QApplication.instance())
         self.icons = {s: mic_icon(s) for s in self.icons}
+        self._tray_look = None  # the new icon even in the same state
         self.button.update()
         if self.bubble:
             self.bubble.update()
@@ -1187,9 +1204,12 @@ class Dictation:
 
     @staticmethod
     def _readable(text: str) -> str:
-        """The whole message as it's read out: Markdown marks dropped, an address as its server (the panel shows it
-        whole)."""
-        text = re.sub(r"https?://([^\s/?#]+)\S*", lambda m: m.group(1).removeprefix("www."), text)
+        """The whole message as it's read out: Markdown marks dropped, an address as its server and the words of its
+        path ("evil.example, cesta x install ps1"), so nothing in it goes unheard (the panel shows it whole)."""
+        def address(m: re.Match) -> str:
+            words = re.findall(r"[^\W_]+", m.group(2))
+            return m.group(1).removeprefix("www.") + (f", cesta {' '.join(words)}," if words else "")
+        text = re.sub(r"https?://([^\s/?#]+)(\S*)", address, text)
         return sessions.summary(text, 10_000, 1_000_000)
 
     @staticmethod
@@ -1198,6 +1218,15 @@ class Dictation:
         if "```" in text:
             return ("Zpráva obsahuje blok kódu a ten nejde přečíst nahlas. Napiš ji prostým textem bez kódu a pošli "
                     "ji znovu ke schválení.")
+        if re.search(r"\[[^\]]*\]\([^)]*\)", text):  # the link's target wouldn't be read out
+            return ("Zpráva obsahuje odkaz v Markdownu a jeho cíl nejde přečíst nahlas. Napiš ji prostým textem "
+                    "a pošli ji znovu ke schválení.")
+        if any(unicodedata.category(c).startswith("C") and c != "\n" for c in text):  # zero-width, bidi, tags
+            return ("Zpráva obsahuje neviditelné nebo řídicí znaky. Napiš ji obyčejným textem a pošli ji znovu "
+                    "ke schválení.")
+        if "(hlasem přes orbit)" in text.lower():  # what stood before it was never read out
+            return ("Zpráva má „(hlasem přes Orbit)“ jinde než na začátku nebo s jiným jménem. Začni ji přesně "
+                    "předepsanými slovy a pošli ji znovu ke schválení.")
         if len(text) > CONFIRM_MAX_CHARS or text.count("\n") > 6:
             return (f"Zpráva je na přečtení nahlas moc dlouhá. Zkrať ji pod {CONFIRM_MAX_CHARS} znaků (pár vět na "
                     "jednom řádku) a pošli ji znovu ke schválení.")
@@ -1211,7 +1240,7 @@ class Dictation:
             self._confirm = None
             self.confirm_timer.stop()
         if data["tool"] == "open":
-            known, prompt = agent.known_folder(data["folder"]), agent.without_prefix(data["prompt"])
+            known, prompt = agent.known_folder(data["folder"]), agent.without_prefix(data["prompt"], self.agent.name)
             refused = self._unreadable(prompt) if known else \
                 f"Složka {data['folder']} není v seznamu složek pro nové relace. Vezmi celou cestu ze seznamu."
             label = agent.folder_label(known) if known else Path(data["folder"]).name
@@ -1222,13 +1251,19 @@ class Dictation:
             speech = f"Otevřu novou relaci ve složce {label}" + (
                 f" se zadáním: {self._readable(prompt)}" if prompt else ".") + " Mám?"
             mode = ""
+            # what goes out: the known folder and exactly the task that was read aloud (agent_tools adds no more)
+            updated = dict(data.get("input") or {}, folder=known or data["folder"],
+                           prompt=agent.with_prefix(prompt, self.agent.name))
         else:
             to = data["to"].split(" [")[0].strip()
             s = next((s for s in self.tracker.sessions.values() if s.peer == to), None)
             name, folder = (s.name, s.folder) if s else (to, "")
             folder = "" if folder == name else folder
-            message = agent.without_prefix(data["message"])
-            refused = self._unreadable(message)
+            message = agent.without_prefix(data["message"], self.agent.name)
+            # only a session in the overview (one on this PC that Pepa sees), with exactly what was read aloud
+            refused = self._unreadable(message) if s else \
+                f"Relace {to} není v přehledu relací na tomhle počítači. Vezmi adresu přesně z přehledu."
+            updated = dict(data.get("input") or {}, message=agent.with_prefix(message, self.agent.name))
             log.info("Agent chce poslat do %s zprávu (%d znaků)", to, len(message))
             log.debug("Zpráva pro %s: %r", name, message)
             send = {"tool": "send", "name": name, "folder": folder, "message": message, "status": "confirm",
@@ -1248,7 +1283,7 @@ class Dictation:
             self.agent.resolve(data["id"], False, refused)
             self._feed_update(send=dict(send, status="changed"))
             return
-        self._confirm = dict(data, mode=mode, shown=time.monotonic())
+        self._confirm = dict(data, mode=mode, shown=time.monotonic(), updated=updated)
         self.confirm_timer.start()
         self._feed_update(send=send)
         self._set_agent_state("confirm")
@@ -1259,7 +1294,8 @@ class Dictation:
         self.confirm_timer.stop()
         verdict = agent.confirmation(text)
         if verdict:
-            self.agent.resolve(request["id"], True, mode=request.get("mode", ""))
+            self.agent.resolve(request["id"], True, mode=request.get("mode", ""),
+                               updated_input=request.get("updated"))
             status = "sending"
         elif verdict is False:
             self.agent.resolve(request["id"], False, "Uživatel odeslání zrušil, nic neodešlo. Jen to krátce potvrď.")
@@ -1384,11 +1420,13 @@ class Dictation:
         self.button.set_state(state)
         self.button.set_button_tip(tip)
         self.button.set_agent_state("listening" if self.recorder.live and for_agent else self._agent_state)
-        self.tray.setIcon(self.icons[state])
         tray_tip = f"Orbit – {tip}"
         if self.cfg["show_usage"] and self.usage and self.usage.limits:
             tray_tip += "\nClaude: " + " · ".join(f"{lim.label} {lim.percent:.0f} %" for lim in self.usage.limits)
-        self.tray.setToolTip(tray_tip[:127])
+        if getattr(self, "_tray_look", None) != (state, tray_tip[:127]):  # each is a round trip to Explorer
+            self._tray_look = (state, tray_tip[:127])
+            self.tray.setIcon(self.icons[state])
+            self.tray.setToolTip(tray_tip[:127])
         self.hint_action.setText(f"Mluvení: drž {key}")
 
     def _notify(self, msg, error=False, title="Orbit", kind=None, note="", session_id=None, url="", on_click=None):
@@ -1673,6 +1711,7 @@ class Dictation:
 
     def _apply_values(self, values: dict):
         """New settings from the settings dialog or the wizard: save them and make them take effect."""
+        self._cfg_doubtful = False  # the user's own choice now, also a "no"
         autostart = values.pop("autostart", None)
         if autostart is not None and autostart != winutil.autostart_enabled():
             try:

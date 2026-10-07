@@ -564,12 +564,30 @@ def _tail(transcript: str) -> list[bytes]:
         return []
 
 
+TITLE_BLOCK = 1024 * 1024
+
+
 def _title_lines(transcript: str) -> list[bytes]:
+    """The "ai-title" lines, read backwards in 1 MB blocks from the end until there's a usable one: the newest one
+    wins anyway (the whole file is read only when there's none; forwards it took 0.3-0.4 s for 57-88 MB on the
+    main thread)."""
+    titles: list[bytes] = []
     try:
         with open(transcript, "rb") as f:
-            return [line for line in f if b'"ai-title"' in line]
+            end, carry = f.seek(0, 2), b""
+            while end > 0:
+                start = max(0, end - TITLE_BLOCK)
+                f.seek(start)
+                lines = (f.read(end - start) + carry).split(b"\n")
+                carry = lines.pop(0) if start else b""  # may start mid-line: completed by the block before it
+                found = [line for line in lines if b'"ai-title"' in line]
+                titles = found + titles
+                if found and _topic(found):
+                    break
+                end = start
     except (OSError, ValueError):
-        return []
+        pass
+    return titles
 
 
 def _topic(lines: list[bytes]) -> str:

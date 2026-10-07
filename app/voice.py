@@ -194,7 +194,7 @@ class PiperSpeaker(QObject):
 
     def release(self, wait: float) -> bool:
         """Is the sound card free for PortAudio in Orbit's process to re-initialize? Always: Piper plays in its own
-        process."""
+        process, which re-reads the devices itself before each text (_fresh_output)."""
         return True
 
     def close(self) -> None:
@@ -274,6 +274,19 @@ def _load_voice(model: str, espeak: str):
     return PiperVoice(session=session, config=config, espeak_data_dir=Path(espeak))
 
 
+def _fresh_output() -> None:
+    """PortAudio reads the sound devices, and which one is the Windows default, once when it starts. Without this the
+    Piper process would play for Orbit's whole run on the speakers that were the default at Orbit's start: a headset
+    plugged in later stays silent, and once that device is gone the MME numbers shift (another device, or every
+    text fails). So it starts again before each text (~30 ms), while this process has no stream open (its only one
+    is closed between texts); the same as Recorder's refresh does in Orbit's process."""
+    try:
+        sd._terminate()
+    except sd.PortAudioError:
+        pass  # not running: the last start failed
+    sd._initialize()
+
+
 def _play(voice, text: str, stopped) -> None:
     stream = None
     try:
@@ -281,6 +294,7 @@ def _play(voice, text: str, stopped) -> None:
             if stopped():
                 break
             if stream is None:
+                _fresh_output()
                 stream = sd.OutputStream(samplerate=chunk.sample_rate, channels=1, dtype="int16")
                 stream.start()
             audio, step = chunk.audio_int16_array, chunk.sample_rate // 10

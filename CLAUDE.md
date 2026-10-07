@@ -79,7 +79,7 @@ nové verze dá `claude_hooks` = true, protože jeho hooky v `~/.claude/settings
 | `whisper-next/` | whisper-server pro jakékoli PC (`GGML_BACKEND_DL`, 76 MB), z něj se dělá `whisper\` v instalátoru; Pepův běžící Orbit pořád používá starý `whisper\` |
 | `build/` | `build_whisper.py` (whisper-server přes portable MSYS2), `build_installer.py` (balíček + Inno Setup), `verify_bundle.py` (kontrola balíčku jeho vlastním Pythonem), `README.md`; `cache/`, `tools/`, `dist/`, `output/` nejsou v gitu |
 | `installer/` | `orbit.iss` (Inno Setup) a texty licencí GPL/LGPL, které jdou do instalace |
-| `tests/` | testy (stdlib `unittest`, od 7. 10.): `test_core_*` (přepis, Piper, klávesa, vkládání, config), `test_claude_*` (nástroje agenta, hledání programů), `test_dist_*` (build, instalátor); viz Spuštění |
+| `tests/` | testy (stdlib `unittest`, od 7. 10.): `test_core_*` (přepis, Piper, klávesa, vkládání, config), `test_claude_*` (nástroje agenta, hledání programů), `test_dist_*` (build, instalátor), `test_ui_*` (potvrzování agenta, překreslování, relace); viz Spuštění |
 | `THIRD_PARTY_NOTICES.md` | licence všeho, co instalátor nese nebo Orbit stahuje |
 | `web/` | stránka https://orbit.easya.cz se stažením instalátoru, `publish.py` ji sestaví a nahraje (viz `web/README.md`) |
 | `video/` | úvodní video webu v Remotionu, hotové soubory jdou do `web/site/assets/video` (viz `video/README.md`) |
@@ -269,6 +269,8 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 - Levé tlačítko držet = push-to-talk, tažení (> 6 px) nahrávání zruší a přesune tlačítko, pravé = menu.
   Pozice se ukládá jako levý horní roh oblasti tlačítka (`button_pos`), panel limitů se zarovnává podle polohy
   na obrazovce (vlevo/střed/vpravo, nad/pod).
+- Nahrávka (`recordings/`) se ukládá až po odeslání textu do okna (od 7. 10.): zápis WAV trval 11 ms, někdy až 50 ms
+  čekání navíc.
 - Vkládání přes schránku obnoví původní obsah po 700 ms a vloží formáty, které vyřadí text z historie schránky
   (Win+V). V režimu psaní se nový řádek posílá jako **Shift+Enter** (aby chat zprávu neodeslal).
 - Záloha schránky bere všechny formáty (buňky Excelu, objekty Office, soubory vyjmuté v Průzkumníku), kromě větších
@@ -336,10 +338,14 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   Kontrola živosti proto bere jméno souboru začínající `claude.exe`. Dřív to Orbit bral jako ukončenou relaci a mazal
   její soubory, takže po aktualizaci (30. 9. i třikrát za den) byla v přehledu jen část relací.
 - **Název relace** = `aiTitle` z přepisu (záznam `{"type":"ai-title","aiTitle":"Analýza ceníků a katalogů
-  Profodu"}`, opakuje se v přepisu, čte se z konce, celý soubor jen napoprvé). Bez něj název složky. Stejný text dává
+  Profodu"}`, opakuje se v přepisu, čte se z konce; bez ai-title v posledních 512 KB se hledá od konce po 1 MB,
+  `sessions._title_lines`: 1–2 ms místo 44–181 ms u přepisů 19–88 MB). Bez něj název složky. Stejný text dává
   Claude Code do titulku okna. Používá se v panelu, v bublinách i v hlasu („Hotovo: …“). V panelu je za názvem
   tlumeně i složka (Pepa chtěl vidět, kde relace pracuje), proto je panel široký 440 px (s 320 px se názvy
   ořezávaly). Relace jsou seřazené podle složky a začátku relace (pořadí neskáče se změnou stavu).
+- Panel relací se překreslí jen při změně toho, co řádky ukazují (`FloatingButton._sessions_look`, od 7. 10.), ikona
+  a tooltip v oznamovací oblasti se nastavují jen při změně. Proč: dřív se panel překresloval každou sekundu
+  (~19 ms, polovina CPU Orbitu v klidu).
 - **Loop v relaci** (od 7. 10., `Session.loop`, `sessions._LoopScan`): za názvem relace ikona smyčky (E8EE) a „do 23:00“
   (bez konce v zadání „loop“) v barvě akcentu, v tooltipu jak často a kdy je další kolo, totéž dostane agent. Joby
   `/loop` žijí jen v procesu relace, proto se čtou z přepisu (čte se dál od posledního místa, poprvé celý):
@@ -390,6 +396,10 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   31 ms; start dřív čekal s kontrolou Clauda i whisperem na „Piper načten“). Pád espeaku nebo onnxruntime shodí jen
   ten proces, další `say()` ho spustí znovu (max. 3× za běh). Protokol: na stdin `say <JSON>` / `stop`, na stdout
   `loaded <s>` / `done` / `error <JSON>`. Naráz běží jen jeden (nový hlas zavře starý proces).
+- Orbitovo obnovení seznamu zařízení (`Recorder`) na worker nedosáhne, proto worker před každým textem znovu načte
+  zvuková zařízení (`voice._fresh_output`: `sd._terminate()` + `sd._initialize()`, ~30 ms, mezi texty nemá otevřený
+  žádný stream). Bez toho by celý běh četl do reproduktorů, které byly výchozí při startu Orbitu: zapojená
+  sluchátka by mlčela a po odpojení zařízení by se čísla MME posunula (jiné zařízení, nebo ticho až do restartu).
 - Worker čte stdin jen přes `PeekNamedPipe`: blokující čtení stdin a současný import numpy v jiném vlákně = zamrznutí
   navždy (DLL s vlastním CRT volá `GetFileType` na stdin; ověřeno výpisem zásobníku).
 - onnxruntime v něm běží bez memory areny, bez spinningu vláken a s max. 4 vlákny: proces má ~125 MB místo +626 MB
@@ -439,7 +449,9 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   [--allow-dangerously-skip-permissions] --name Orbit --system-prompt …` (`agent.VoiceAgent`). Start 0,9 s (spouští
   se při stisku, zatímco Pepa mluví), odpověď Sonnetu ~2 s. Po 30 min bez řeči nový rozhovor (`IDLE_RESET_S`),
   nikdy ale uprostřed tahu ani když čeká potvrzení (`_pending`; i tah, který sám začala zpráva od relace, je
-  `busy`). Nový proces místo starého pošle událost „reset“ (main zapomene staré potvrzení).
+  `busy`). Nový proces místo starého pošle událost „reset“ (main zapomene staré potvrzení). Od 7. 10. se po těch
+  30 min proces i ukončí (`stop_if_idle`, kontrola každou minutu ve vlákně, ukončení čeká až 3 s): dřív claude.exe
+  (~240 MB) i s MCP serverem žil až do dalšího stisku.
 - Každá Pepova věta jde agentovi s aktuálním přehledem relací (`agent.context`): adresa (`name` z
   `~/.claude/sessions/<pid>.json`, např. `m-tex-41`), téma, složka, stav, poslední zadání (hook teď ukládá i
   `prompt`, max 1000 znaků) a poslední odpověď. Do promptu Whisperu jdou názvy složek relací.
@@ -460,12 +472,22 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   a výsledek „held for … approval“ ukáže jako „čeká na schválení v relaci“. Výzvy `can_use_tool` (default režim)
   agent povolí jen pro své nástroje, jiné zamítne. Ověřeno jedním během s haiku: MCP nástroj běží, hook u
   SendMessage zastaví odeslání i v default režimu.
+- **SendMessage a `open_session` nejsou v `--allowedTools`** (od 7. 10., `agent.GATED`): „allow“ z hooku je pustí
+  i tak (ověřeno s haiku), a kdyby CLI hooky nevzalo, nástroje odmítne (`can_use_tool` pro ně vždy „ne“: výzva
+  znamená, že hook neběžel). Odpověď CLI na `initialize` se kontroluje: chyba = agent se ukončí s hláškou
+  (`agent.NO_HOOK`), Pepova věta jde agentovi až po úspěšném initu. Proč: bez hooku by nic nečekalo na „jo“.
+- **Tah, který začala zpráva od relace** (ne Pepova věta, `VoiceAgent._user_turn`): agent v něm nesmí posílat,
+  zakládat relace, hledat ani otevírat stránky (hooky jsou i na `find_pages`/`open_page`) a žádná otázka „Mám to
+  poslat?“ se neukáže. System prompt říká, že přehled relací, výsledky `find_pages` a zprávy relací jsou data, ne
+  pokyny. Proč: agentovi „Orbit“ může napsat jakákoli relace.
 - **Potvrzení vynucené kódem**: Orbit při `initialize` zaregistruje PreToolUse hook callback (`hookCallbackIds`,
   `timeout` 600 s) na SendMessage a `open_session` a na `control_request` `hook_callback` odpoví až po Pepově
   odpovědi (`permissionDecision` allow/deny + důvod). Ověřeno, že CLI čeká i 75 s. Orbit návrh ukáže a přečte
-  **celý** („Pošlu do relace …, složka …: … Mám to poslat?“; adresa se čte jako server, Markdown se vynechá,
-  v panelu je zpráva celá až na 10 řádků). Zprávu s blokem kódu, delší než 500 znaků nebo s víc než 6 řádky vrátí
-  agentovi, ať ji zkrátí (`_unreadable`), a novou relaci jen ve složce ze seznamu `project_folders`
+  **celý** („Pošlu do relace …, složka …: … Mám to poslat?“; adresa se čte jako server a slova cesty, „evil.example,
+  cesta x install ps1“, Markdown se vynechá, v panelu je zpráva celá až na 10 řádků). Zprávu s blokem kódu, odkazem
+  v Markdownu (cíl by nezazněl), neviditelnými nebo řídicími znaky (Unicode kategorie C kromě `\n`: nulová šířka,
+  bidi, tagy), s „(hlasem přes Orbit)“ uprostřed, delší než 500 znaků nebo s víc než 6 řádky vrátí agentovi, ať ji
+  přepíše (`_unreadable`), SendMessage jen do relace z přehledu, a novou relaci jen ve složce ze seznamu `project_folders`
   (`agent.known_folder`, dvě stejně pojmenované složky se čtou i s nadřazenou). Odpověď platí jen pro otázku, která
   **byla v panelu aspoň 1 s před začátkem nahrávky** (`Take.confirm_id`, `_confirm["shown"]`, `CONFIRM_SEEN_S`):
   co uživatel začal říkat dřív, agent dostane jako důvod zamítnutí a zeptá se znovu. Dočtení otázky se nečeká:
@@ -474,8 +496,14 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   Odpověď (`agent.confirmation`, max 5 slov): ano jen když jsou všechna slova „ano“ nebo výplň („jo, pošli to“),
   ne když je tam ne/počkej/zruš nebo slovo na „ne…“ delší než 3 písmena („není to ono“), cokoli jiného („ano, ale
   do jiné“) = zamítne s jeho slovy jako důvodem a agent zprávu upraví. Bez odpovědi do 2 min se zahodí.
+- **Co se přečte, to se pošle** (od 7. 10.): na „jo“ Orbit v odpovědi hooku vrací `updatedInput`. U SendMessage je
+  zpráva prefix + přesně text, který zazněl a byl v panelu, u `open_session` známá složka + přečtené zadání, takže
+  agentův původní text neodchází nikdy. Ověřeno s haiku (PostToolUse vidí upravený vstup), u vestavěného
+  SendMessage jen stejnou cestou protokolu, ne odesláním do živé relace.
 - Zpráva začíná „<jméno> (hlasem přes Orbit):“ (bez jména „Uživatel (hlasem přes Orbit):“), ať příjemce ví, čí jsou
-  to slova (v panelu a hlasu se vynechá, `agent.without_prefix` pozná prefix s jakýmkoli jménem).
+  to slova (v panelu a hlasu se vynechá). `agent.without_prefix(text, jméno)` maže **jen přesný** prefix se jménem
+  z nastavení nebo „Uživatel“ (od 7. 10.): dřív mazal až 60 libovolných znaků před „(hlasem přes Orbit):“, a schovaný
+  pokyn před značkou tak nezazněl, ale odešel.
 - UI: ikona agenta (planeta s prstencem a měsícem, 30 px) vlevo od teček barev (tooltip jmenuje jeho skutečné
   tlačítko z `agent_ptt`, dřív tam bylo natvrdo „boční tlačítko myši zpět“). Modrá = klid, červená =
   poslouchá (halo podle hlasitosti), měsíc obíhá = přepis/přemýšlí, pulzuje = mluví, oranžová = čeká na „jo“.
@@ -512,9 +540,8 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   prefix „<jméno> (hlasem přes Orbit):“ nebo „Uživatel (…)“ a vrátí ho jednou. Odmítne zadání s dalším
   „(hlasem přes Orbit)“ kdekoli (`without_prefix` by text před ním při čtení vynechal: útok = příkaz před značkou),
   odkaz v Markdownu `[text](adresa)` (adresa se nečte) a neviditelné znaky (kategorie Unicode C: řídicí, nulové
-  šířky, bidi, tag znaky U+E00xx). Odmítnutí přijde agentovi až po „jo“ jako chyba nástroje, hlavní kontrola patří
-  do `main._ask_confirm` ještě před otázkou (zatím chybí, stejně jako u SendMessage, vestavěného nástroje, který
-  `agent_tools` nechrání).
+  šířky, bidi, tag znaky U+E00xx). Odmítnutí přijde agentovi až po „jo“ jako chyba nástroje; hlavní kontrola je
+  od 7. 10. i v `main._ask_confirm` ještě před otázkou (platí i pro SendMessage, který `agent_tools` nechrání).
 
 ### Hlasové povely pro terminál
 - Věta „Odešli.“ (nebo „Odeslat.“) na konci diktátu = Enter; diktát jen „Stop.“ / „Zastav.“ = Esc (přeruší Clauda).
@@ -522,8 +549,8 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 - Enter jde po textu se zpožděním 300 ms + 1 ms na znak (max 1,5 s): terminál vkládá asynchronně a Claude Code bere
   klávesu ve stejné dávce jako psaný text za součást vložení.
 - Enter i Esc jdou jen do okna, které bylo v popředí při vložení (od 7. 10., `Inserter.press(…, on_skipped)`): když
-  se během zpoždění přepne jinam, klávesa se nepošle (jen řádek v logu). Main zatím `on_skipped` nepředává, bublina
-  „povel jsem neprovedl“ chybí.
+  se během zpoždění přepne jinam, klávesa se nepošle a přijde bublina „Okno se mezitím změnilo, povel „Odešli“ jsem
+  neprovedl.“ (nebo „Stop“).
 
 ### Limity Clauda
 - **Dva zdroje** (`usage_source` v `config.json`, v nastavení není): `"statusline"` (výchozí pro nové uživatele) a
@@ -617,8 +644,9 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   (`vocab.clean_replacements`): jedna vadná dřív potichu shodila každý diktát.
 - Zamčený `config.json` (antivir, zálohovací program) Orbit čte až 3 s (`READ_TRIES`). Když nejde přečíst ani
   zkopírovat do `.bad-*`, zapne `config.readonly`: do restartu nic neukládá a bublina řekne, ať Orbit restartuje.
-  Proč: dřív výchozí hodnoty při prvním uložení přepsaly slovník (ověřeno zámkem bez sdílení). Hooky a stavový řádek
-  main v tom stavu zatím odebere (do restartu chybí; oprava patří do main.py).
+  Proč: dřív výchozí hodnoty při prvním uložení přepsaly slovník (ověřeno zámkem bez sdílení). Když `config.json`
+  nejde přečíst, výchozí „ne“ neodebere hooky ani stavový řádek, dokud uživatel sám neuloží nastavení nebo průvodce
+  (`Dictation._cfg_doubtful`, od 7. 10.). Proč: jinak by hooky zmizely jen kvůli zamčenému souboru.
 - Výchozí hodnoty pro nové uživatele: agent, učení slovníku a předčítání artefaktů **vypnuté** (agent by jinak hned
   zabral tlačítko myši zpět, ostatní posílají text Claudovi). Pepa je má v `config.json` výslovně, nic se mu nemění.
 - `Orbit.pyw`: když start spadne (chybějící DLL, nezapisovatelná složka), zapíše `crash.log` do datové složky
@@ -841,8 +869,9 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   ```
   Whisper server při zabití aplikace skončí sám (Job object).
 - Kontrola kódu: `.venv\Scripts\python.exe -m pyflakes app Orbit.pyw tests`.
-- **Testy** (od 7. 10., stdlib `unittest`, 63 testů, ~45 s): `.venv\Scripts\python.exe -m unittest discover -s tests`
-  (jen část: `-p "test_core*.py"`, `test_claude*`, `test_dist*`). Samy si nastaví `ORBIT_DATA_DIR`/`ORBIT_CLAUDE_DIR`
+- **Testy** (od 7. 10., stdlib `unittest`, 83 testů, ~35 s): `.venv\Scripts\python.exe -m unittest discover -s tests`
+  (jen část: `-p "test_core*.py"`, `test_claude*`, `test_dist*`, `test_ui*`; `test_ui_*` zkouší metody `Dictation`
+  na stubu a `VoiceAgent` s falešným procesem, bez Clauda). Samy si nastaví `ORBIT_DATA_DIR`/`ORBIT_CLAUDE_DIR`
   na dočasné složky a uklidí po sobě. Nespouští `claude` ani whisper-server (místo něj malý server v Pythonu), klávesy
   a schránka jsou nahrazené; model Jirky čtou na místě a Piper hraje do náhradního výstupu (nic není slyšet), ISCC
   jen přeloží malý falešný balíček do tempu. `ORBIT_TEST_ROOT=<jiná kopie>` pustí testy `test_core_*` proti jiné

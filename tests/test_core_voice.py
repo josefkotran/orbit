@@ -12,6 +12,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(os.environ.get("ORBIT_TEST_ROOT") or Path(__file__).resolve().parent.parent)  # another copy: before/after
 if "app.config" not in sys.modules:  # nothing a test does may touch the real data folder or Claude Code
@@ -160,6 +161,76 @@ class Speaker(unittest.TestCase):
         while proc.poll() is None and time.monotonic() < deadline:
             time.sleep(0.05)
         self.assertIsNotNone(proc.poll())
+
+
+class Output(unittest.TestCase):
+    """_play in the Piper process: PortAudio reads the devices again before each text, so reading aloud follows the
+    current Windows default (a headset plugged in, the old speakers gone) instead of the one at Orbit's start."""
+
+    class Chunk:
+        sample_rate = 22050
+
+        def __init__(self, n):
+            import numpy as np
+            self.audio_int16_array = np.zeros(n, dtype="int16")
+
+    class Voice:
+        def __init__(self, chunks):
+            self.chunks = chunks
+
+        def synthesize(self, text):
+            yield from (Output.Chunk(n) for n in self.chunks)
+
+    def play(self, chunks, terminate=None, stopped=lambda: False):
+        calls = []
+
+        class Stream:
+            def __init__(self, **kw):
+                calls.append("open")
+
+            def start(self):
+                pass
+
+            def write(self, audio):
+                calls.append(len(audio))
+
+            def stop(self):
+                pass
+
+            def abort(self):
+                pass
+
+            def close(self):
+                calls.append("close")
+
+        def fake_terminate():
+            calls.append("terminate")
+            if terminate:
+                terminate()
+
+        with mock.patch.object(voice.sd, "_terminate", fake_terminate), \
+                mock.patch.object(voice.sd, "_initialize", lambda: calls.append("initialize")), \
+                mock.patch.object(voice.sd, "OutputStream", Stream):
+            voice._play(self.Voice(chunks), "text", stopped)
+        return calls
+
+    def test_each_text_reads_the_devices_before_its_stream(self):
+        first = self.play([4410])
+        self.assertEqual(first[:3], ["terminate", "initialize", "open"])
+        self.assertEqual(first[-1], "close")
+        second = self.play([4410, 4410])  # the next text: again, and only once for its stream
+        self.assertEqual(second.count("initialize"), 1)
+        self.assertEqual(second[:3], ["terminate", "initialize", "open"])
+
+    def test_after_a_failed_start_it_starts_again(self):
+        def not_running():
+            raise voice.sd.PortAudioError("PortAudio not initialized", -10000)
+
+        calls = self.play([2205], terminate=not_running)
+        self.assertEqual(calls[:3], ["terminate", "initialize", "open"])
+
+    def test_a_text_stopped_before_its_first_sentence_opens_nothing(self):
+        self.assertEqual(self.play([2205], stopped=lambda: True), [])
 
 
 class Paths(unittest.TestCase):

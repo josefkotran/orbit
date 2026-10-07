@@ -372,13 +372,23 @@ class FloatingButton(QWidget):
         self._forecast = eta
         self.update()
 
+    @staticmethod
+    def _sessions_look(sessions: list[Session]) -> tuple:
+        """What the rows show (_paint_sessions): a poll every second that changes none of it repaints nothing (one
+        repaint of the layered window ~19 ms, half of Orbit's idle CPU)."""
+        return tuple((s.id, s.state, s.name, s.folder, bool(s.topic), s.loop.label() if s.loop else "",
+                      None if s.context is None else round(s.context * 100)) for s in sessions)
+
     def set_sessions(self, sessions: list[Session]) -> None:
-        count_before = len(self._sessions)
+        count_before, look_before = len(self._sessions), self._sessions_look(self._sessions)
         self._sessions = sessions
         if len(sessions) != count_before:
             self._relayout()
             self._auto_align()
-        self.update()
+        if self._sessions_look(sessions) != look_before:
+            self.update()
+        else:  # clicks and tooltips get the current sessions (the rows stay where they were painted)
+            self._session_rows = [(rect, new) for (rect, _), new in zip(self._session_rows, sessions)]
 
     def set_attention(self, on: bool) -> None:
         if on != self._attention:
