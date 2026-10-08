@@ -11,6 +11,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -76,6 +77,9 @@ class OpenSession(unittest.TestCase):
         popen = mock.patch.object(agent_tools.subprocess, "Popen")
         self.popen = popen.start()
         self.addCleanup(popen.stop)
+        minimize = mock.patch.object(agent_tools, "_minimize")
+        self.minimize = minimize.start()
+        self.addCleanup(minimize.stop)
 
     def run_task(self, prompt: str, folder: str = FOLDER) -> str:
         """The task the new session gets (ORBIT_TASK), "" = opened without one."""
@@ -109,6 +113,23 @@ class OpenSession(unittest.TestCase):
         self.assertNotIn("ORBIT_TASK!", self.popen.call_args.args[0])
         self.popen.reset_mock()
         self.assertEqual(self.run_task("Josef (hlasem přes Orbit):"), "")
+        self.minimize.assert_not_called()
+
+    def test_task_is_minimized_after_it_shows(self):
+        # started normally (a minimized console never gets the user's Windows Terminal), then minimized
+        self.run_task("Spusť testy.")
+        self.assertIsNone(self.popen.call_args.kwargs.get("startupinfo"))
+        for _ in range(100):  # the thread
+            if self.minimize.called:
+                break
+            time.sleep(0.01)
+        self.minimize.assert_called_once_with(self.popen.return_value.pid, mock.ANY)  # and the window in front
+
+    def test_permission_question_stays_on_screen(self):
+        with mock.patch.object(agent_tools.sessions, "bypass_prompt_skipped", return_value=False):
+            self.run_task("Spusť testy.")
+        time.sleep(0.05)
+        self.minimize.assert_not_called()
 
     def test_hidden_text_is_refused(self):
         # what main._ask_confirm would have read out is only the part after "(hlasem přes Orbit):" or a link's text

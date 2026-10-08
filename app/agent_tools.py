@@ -10,12 +10,16 @@ its path or query is fine), never an address the model made up or read somewhere
 
 Its own process (Claude Code starts it): standard library and app modules without Qt only.
 """
+import ctypes
 import json
 import os
 import re
 import subprocess
 import sys
+import threading
+import time
 import unicodedata
+from ctypes import wintypes
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -69,6 +73,7 @@ TOOLS = [{
 }]
 
 _found: dict[str, str] = {}  # pages find_pages returned in this process: URL -> Chrome profile folder
+_console_lock = threading.Lock()
 
 
 def _shape(url: str) -> str:
@@ -121,6 +126,51 @@ def _task(prompt: str) -> str:
     return f"{prefix(name)} {task}" if task else ""  # whose words; and never a "-switch"
 
 
+def _console_window(pid: int) -> int:
+    """The visible window showing pid's console (Windows Terminal owns the hidden pseudo-console window, the classic
+    console is that window itself), 0 while there is none yet."""
+    k32, user32 = ctypes.windll.kernel32, ctypes.windll.user32
+    k32.GetConsoleWindow.restype = wintypes.HWND
+    user32.GetAncestor.restype = wintypes.HWND
+    with _console_lock:  # a process can be attached to one console only: two sessions opened at once take turns
+        k32.FreeConsole()
+        if not k32.AttachConsole(pid):
+            return 0
+        hwnd = k32.GetConsoleWindow()
+        k32.FreeConsole()
+    root = user32.GetAncestor(wintypes.HWND(hwnd), 3) if hwnd else None  # GA_ROOTOWNER
+    return int(root) if root and user32.IsWindowVisible(wintypes.HWND(root)) else 0
+
+
+def _minimize(pid: int, focused: int | None) -> None:
+    """Minimizes the new session's window as soon as it shows (Windows Terminal: ~0.1 s after the start) and keeps it
+    so, until it has stayed down and out of focus for 1.5 s: Windows Terminal shows its new window once more within
+    ~0.2 s and then activates it again, minimized, so the user's typing would go to the hidden session. The focus goes
+    back to the window the user was in (focused): SW_MINIMIZE activates the window below, focus_window that one."""
+    user32 = ctypes.windll.user32
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    start, hwnd, calm_since = time.monotonic(), 0, None
+    while time.monotonic() - start < 10:
+        hwnd = hwnd or _console_window(pid)
+        if hwnd:
+            handle = wintypes.HWND(hwnd)
+            if not user32.IsWindow(handle):
+                return
+            in_front = user32.GetForegroundWindow() == hwnd
+            if not user32.IsIconic(handle):
+                calm_since = None
+                user32.ShowWindow(handle, 6 if in_front else 7)  # SW_MINIMIZE / SW_SHOWMINNOACTIVE
+            elif in_front:
+                calm_since = None
+                if not (focused and sessions.focus_window(focused)):
+                    focused = None  # gone (or the desktop had the focus): no use trying again
+            elif calm_since is None:
+                calm_since = time.monotonic()
+            elif time.monotonic() - calm_since > 1.5:
+                return
+        time.sleep(0.01)
+
+
 def open_session(folder: str, prompt: str = "") -> str:
     # only one of the user's folders (agent.known_folder), the same check Orbit made before asking
     known = known_folder(folder)
@@ -144,17 +194,17 @@ def open_session(folder: str, prompt: str = "") -> str:
     # the outer quotes. The folder is the working directory, not part of the line.
     command = '"!ORBIT_CLAUDE!"' + (" --dangerously-skip-permissions" if bypass else "") + \
         (' "!ORBIT_TASK!"' if task else "")
-    # With a task it works in the background: only on the taskbar, never on screen. Started minimized
-    # (SW_SHOWMINNOACTIVE, it doesn't take the focus either), Windows keeps it in the classic console window instead
-    # of handing it to Windows Terminal – that one would show up first. Not when Claude Code will first ask whether
-    # running without permission prompts is all right: that question must be seen.
+    # With a task it works in the background: on the taskbar, minimized as soon as its window shows (_minimize). Not
+    # when Claude Code will first ask whether running without permission prompts is all right: that must be seen.
     background = bool(task) and (not bypass or sessions.bypass_prompt_skipped())
-    info = subprocess.STARTUPINFO(dwFlags=subprocess.STARTF_USESHOWWINDOW, wShowWindow=7) if background else None
-    subprocess.Popen(f'cmd.exe /s /v:on /k "{command}"', executable=CMD, cwd=path,
-                     env=dict(environment(), ORBIT_CLAUDE=exe, ORBIT_TASK=task),
-                     close_fds=True, startupinfo=info,
-                     creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP)
+    # Started normally, so it gets the same window as the user's own sessions (Windows Terminal, when that's the
+    # default terminal); a console started minimized Windows never hands over and keeps it in the classic window.
+    focused = ctypes.windll.user32.GetForegroundWindow() if background else None
+    proc = subprocess.Popen(f'cmd.exe /s /v:on /k "{command}"', executable=CMD, cwd=path,
+                            env=dict(environment(), ORBIT_CLAUDE=exe, ORBIT_TASK=task), close_fds=True,
+                            creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP)
     if background:
+        threading.Thread(target=_minimize, args=(proc.pid, focused), daemon=True).start()
         return f"Nová relace se zadáním běží ve složce {path}, minimalizovaná na liště."
     if task:
         return f"Nová relace se otevírá ve složce {path}. Claude Code se nejdřív zeptá na běh bez oprávnění."

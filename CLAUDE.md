@@ -530,7 +530,14 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   V panelu „→ název stránky · Chrome · otevřeno ✓“ a adresa. Ověřeno: věta → otevřená karta za ~4,5 s.
 - **Nová relace** (`open_session`): `claude.exe` z `claude_setup.find_exe`, `--dangerously-skip-permissions` jen
   když ho relace uživatele používají (`sessions.bypass_in_use`); bez zadání okno, se zadáním minimalizovaná, ale
-  ne když se Claude Code nejdřív zeptá na běh bez oprávnění (`skipDangerousModePermissionPrompt` chybí). Cesta ke
+  ne když se Claude Code nejdřív zeptá na běh bez oprávnění (`skipDangerousModePermissionPrompt` chybí).
+  **Minimalizuje se až po startu** (od 8. 10., `agent_tools._minimize`): konzoli spuštěnou minimalizovaně (SW 2, 6
+  i 7) Windows nikdy nepředá Windows Terminalu a nechá ji ve starém okně konzole (Pepa: „otevírá to v nějakým starým
+  CMD“). WT minimalizovaně ani na pozadí spustit nejde (`wt.exe` ani předání konzole SW_SHOWNOACTIVATE/SHOWNA
+  neposlouchá, přepínač nemá). Proto normální start (okno jako u jeho relací) a okno (`AttachConsole` → `GA_ROOTOWNER`)
+  se minimalizuje, jakmile se ukáže (~0,1 s). WT ho ještě 1–2× obnoví a po ~0,35 s ho aktivuje i minimalizované
+  (psaní by šlo do skryté relace), proto smyčka hlídá, dokud 1,5 s nezůstane dole a mimo fokus, a fokus vrací do okna,
+  kde uživatel byl (`sessions.focus_window`). Měřeno: okno vidět ~0,2 s, fokus pryč celkem ~0,1 s. Cesta ke
   `claude.exe` i zadání jdou do `cmd.exe /s /v:on /k` jen jako proměnné (`!ORBIT_CLAUDE!`, `!ORBIT_TASK!`),
   složka jako pracovní adresář: nic z nich nejde spustit jako příkaz (ověřeno s `& | > ^ % !VAR! "`). Zadání vždy
   začíná prefixem se jménem (MCP server ho dostane v `ORBIT_USER_NAME`), takže nikdy nezačne „-“ jako přepínač.
