@@ -5,6 +5,7 @@ window, no Claude), a no keeps it from being offered again, and what the session
     .venv\\Scripts\\python.exe -m unittest discover -s tests -p "test_ui*.py"
 """
 import atexit
+import json
 import logging
 import os
 import shutil
@@ -73,6 +74,34 @@ class Store(unittest.TestCase):
         self.assertNotIn("\u200b", prompt)
         self.assertNotIn("hlasem přes orbit", prompt.lower())
 
+    def test_inbox_from_the_tasks_session(self):
+        """The orbit-ukoly mod's messages: notes go to the task, "done" moves it, junk and the unknown are dropped,
+        a file still being written waits."""
+        box = tasks.inbox()
+        box.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(shutil.rmtree, box, True)
+        items = [task("Faktury"), task("Web")]
+        msgs = {"1-note": {"task": items[0].id, "action": "note", "text": "Září má 48 faktur​.", "at": 100.0},
+                "2-user": {"task": items[1].id, "action": "note", "text": "Volat Petrovi", "from": "user"},
+                "3-done": {"task": items[0].id, "action": "done", "text": "Odesláno účetní."},
+                "4-gone": {"task": "000000000000", "action": "done", "text": ""},
+                "5-bad": {"task": items[0].id, "action": "delete"}}
+        for name, data in msgs.items():
+            (box / f"{name}.json").write_text(json.dumps(data), encoding="utf-8")
+        (box / "6-half.json").write_text('{"task": ', encoding="utf-8")  # the mod is still writing it
+        applied = tasks.apply_inbox(items, tasks.read_inbox())
+        self.assertEqual([m["action"] for _, m in applied], ["note", "note", "done"])
+        self.assertEqual(items[0].status, "done")
+        self.assertEqual([n["text"] for n in items[0].notes],
+                         ["Claude: Září má 48 faktur.", "Claude: hotovo – Odesláno účetní."])
+        self.assertEqual(items[0].notes[0]["at"], 100.0)
+        self.assertEqual(items[1].notes[0]["text"], "Volat Petrovi")
+        self.assertEqual([f.name for f in box.iterdir()], ["6-half.json"])
+        old = time.time() - tasks.INBOX_UNREADABLE_S - 1
+        os.utime(box / "6-half.json", (old, old))
+        self.assertEqual(tasks.read_inbox(), [])
+        self.assertEqual(list(box.iterdir()), [])
+
     def test_a_long_task_goes_as_a_file(self):
         t = task("Dlouhý", context="slovo " * 2000)
         prompt = tasks.prompt_for(t)
@@ -86,12 +115,13 @@ class Offer(unittest.TestCase):
     """Dictation._check_tasks / _answer_task / _task_done on a stub."""
 
     def setUp(self):
-        self.spoken, self.notes, self.heard, self.started = [], [], [], []
+        self.spoken, self.notes, self.heard, self.started, self.timer = [], [], [], [], []
         self.items = [task("Plán", "planned"), task("Ceník Profod")]
         bridge = SimpleNamespace(task_done=SimpleNamespace(emit=lambda *a: self.started.append(a)))
         self.d = SimpleNamespace(
             tasks=self.items, claude=SimpleNamespace(connected=True), _confirm=None, cfg={"agent": True, "name": "Pepa"},
             confirm_timer=SimpleNamespace(start=lambda: None, stop=lambda: None), _feed={}, bridge=bridge,
+            tasks_timer=SimpleNamespace(start=lambda ms: self.timer.append(ms)),
             _feed_update=lambda **k: self.d._feed.update({x: v for x, v in k.items() if v}),
             _set_agent_state=lambda s: None, _agent_rest=lambda: "idle", notebook=None,
             _speak=lambda text, **k: self.spoken.append(text), _agent_heard=lambda text: self.heard.append(text),
@@ -124,16 +154,21 @@ class Offer(unittest.TestCase):
         self.assertEqual(start.call_args.args[0], FOLDER)
         self.assertTrue(start.call_args.args[1].startswith("Úkol: Ceník Profod."))
         self.assertEqual(start.call_args.args[2], "Pepa")
+        self.assertEqual(start.call_args.kwargs["task_id"], self.items[1].id)  # the session's mod shows the task
         main.Dictation._task_done(self.d, *self.started[0])
         self.assertTrue(self.items[1].started)
-        self.assertEqual(tasks.load()[1].started, self.items[1].started)
+        self.assertEqual(self.items[1].status, "done")  # its session runs: off the active ones
+        self.assertEqual((tasks.load()[1].started, tasks.load()[1].status), (self.items[1].started, "done"))
+        self.assertEqual(self.timer[-1], tasks.NEXT_SOON_MS)  # the next active task comes a minute later
         self.assertIsNone(self.ask())  # it ran: not offered again
 
     def test_no_is_not_offered_again(self):
         request = self.ask()
+        self.assertEqual(self.timer, [tasks.CHECK_EVERY_MS])  # the regular half hour from here
         self.d._confirm = None
         main.Dictation._answer_task(self.d, request, False, "ne")
         self.assertTrue(self.items[1].declined)
+        self.assertEqual(self.timer[-1], tasks.NEXT_SOON_MS)
         self.assertIsNone(self.ask())
         main.Dictation._check_tasks(self.d, self.items[1].id)  # "Začít teď" asks anyway
         self.assertIsNotNone(self.d._confirm)
@@ -150,6 +185,21 @@ class Offer(unittest.TestCase):
         main.Dictation._check_tasks(self.d)
         self.assertEqual(self.d._confirm["id"], "c1")
         self.assertEqual(self.spoken, [])
+        self.assertEqual(self.timer[-1], tasks.NEXT_SOON_MS)  # tried again a minute later
+
+    def test_unanswered_comes_back_sooner(self):
+        self.ask()
+        main.Dictation._drop_confirm(self.d, "Do dvou minut nepřišlo potvrzení.")  # (what the expiry does)
+        self.assertIsNone(self.d._confirm)
+        self.assertEqual(self.timer[-1], tasks.RETRY_MS)
+        self.assertFalse(self.items[1].declined)  # nobody said no: offered again
+        self.assertEqual(self.ask()["task"], self.items[1].id)
+
+    def test_started_before_goes_to_done(self):
+        items = [task("Běží", started=5.0), task("Čeká"), task("Hotový", "done", started=3.0)]
+        self.assertTrue(tasks.settle_started(items))
+        self.assertEqual([t.status for t in items], ["done", "active", "done"])
+        self.assertFalse(tasks.settle_started(items))
 
 
 class NotebookWindow(unittest.TestCase):
@@ -171,9 +221,10 @@ class NotebookWindow(unittest.TestCase):
         nb._shift(-1)  # B above A
         self.assertEqual([t.title for t in items if t.status == "active"], ["B", "A"])
         nb.refresh(items[2].id)
-        nb._move_to("active")  # C to the end of Aktivní, may be offered again
+        items[2].started = 7.0
+        nb._move_to("active")  # C to the end of Aktivní, may be offered (and started) again
         self.assertEqual([t.title for t in items if t.status == "active"], ["B", "A", "C"])
-        self.assertEqual(items[2].declined, 0.0)
+        self.assertEqual((items[2].declined, items[2].started), (0.0, 0.0))
         nb.note.setText("Volat ve čtvrtek")
         nb._add_note()
         self.assertEqual(items[2].notes[-1]["text"], "Volat ve čtvrtek")

@@ -10,10 +10,13 @@ from pynput._util.win32 import SystemHook
 log = logging.getLogger(__name__)
 
 WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP = 0x100, 0x101, 0x104, 0x105
+WM_LBUTTONDOWN, WM_RBUTTONDOWN = 0x201, 0x204
 WM_MBUTTONDOWN, WM_MBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP = 0x207, 0x208, 0x20B, 0x20C
 LLKHF_INJECTED, LLMHF_INJECTED = 0x10, 0x01
 VK_ESCAPE, VK_LCONTROL = 0x1B, 0xA2
 ALTGR_FAKE_CTRL_SCAN = 0x21D  # AltGr on Czech layout also sends a fake Left Ctrl with this scan code
+# Shift, Ctrl, Alt (generic and each side), the Windows keys: pressed alone they don't move the cursor
+_MODIFIER_KEYS = {0x10, 0x11, 0x12, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C}
 
 MOUSE_MIDDLE, MOUSE_X1, MOUSE_X2 = 4, 5, 6
 # A held key repeats its key-down every ~30–400 ms (Windows' repeat rate); a gap this long means it was let go
@@ -69,12 +72,21 @@ class PushToTalk:
     """Calls on_press/on_release (from the hook thread) while the bound key/button is held.
 
     capture(callback) makes the next key or mouse button press become the new binding instead.
+
+    on_input(), when given, is called (from the hook thread, so it must be quick) for every key or click of the
+    user's own other than the binding: a key that isn't a modifier, a mouse button (not on one of Orbit's own windows,
+    see own_point). After it the cursor may be anywhere, so what Orbit typed can't be taken back blindly (editing.py).
+    Clicks are seen only while the mouse hook runs: with a mouse binding always, otherwise from watch_clicks(True).
     """
 
-    def __init__(self, binding: dict, on_press, on_release):
+    def __init__(self, binding: dict, on_press, on_release, on_input=None, own_point=None):
         self._binding = dict(binding)
         self._on_press = on_press
         self._on_release = on_release
+        self._on_input = on_input
+        self._own_point = own_point  # own_point(x, y): a click there is on Orbit itself (doesn't count as input)
+        self._watch_clicks = False
+        self._ignored: dict | None = None  # another of Orbit's own bindings (the agent's): not the user's input
         self._held = False
         self._latched = False  # reset() while the key was down: its repeats don't start anything until it's let go
         self._last_down = 0.0  # when the held key last sent a key-down (Windows repeats them while it's held)
@@ -117,6 +129,18 @@ class PushToTalk:
             self._capture_cb = None
         self._sync_mouse_hook()
 
+    def ignore(self, binding: dict | None) -> None:
+        """Presses of this binding (the voice agent's button) aren't the user's input for on_input: the agent
+        doesn't move the cursor."""
+        self._ignored = dict(binding) if binding else None
+
+    def watch_clicks(self, on: bool) -> None:
+        """Clicks reach on_input only through the mouse hook, which sees every mouse move: so with a keyboard binding
+        it runs only while Orbit needs to know about them (there's typed text "Smaž to" could take back)."""
+        if on != self._watch_clicks:
+            self._watch_clicks = on
+            self._sync_mouse_hook()
+
     def released(self) -> bool:
         """Not capturing, and the captured key's release has been swallowed too (safe to stop the hook)."""
         with self._lock:
@@ -152,7 +176,8 @@ class PushToTalk:
     def _sync_mouse_hook(self) -> None:
         # A mouse hook sees every mouse move, so only install it when it is actually needed.
         with self._hook_lock:
-            need = self._capture_cb is not None or self._binding.get("kind") == "mouse"
+            need = self._capture_cb is not None or self._binding.get("kind") == "mouse" or (
+                self._watch_clicks and self._on_input is not None and self._kb is not None)
             if need and self._ms is None:
                 self._ms = mouse.Listener(win32_event_filter=self._ms_filter)
                 self._ms.start()
@@ -171,6 +196,8 @@ class PushToTalk:
             return False
         if self._handle(down, "key", vk):
             _suppress()
+        elif down and vk not in _MODIFIER_KEYS:
+            self._input("key", vk)
         return False
 
     def _ms_filter(self, msg, data):
@@ -181,10 +208,33 @@ class PushToTalk:
         elif msg in (WM_XBUTTONDOWN, WM_XBUTTONUP):
             code, down = MOUSE_X1 if (data.mouseData >> 16) == 1 else MOUSE_X2, msg == WM_XBUTTONDOWN
         else:
+            if msg in (WM_LBUTTONDOWN, WM_RBUTTONDOWN):
+                self._input("mouse", 0, data.pt.x, data.pt.y)
             return False
         if self._handle(down, "mouse", code):
             _suppress()
+        elif down:
+            self._input("mouse", code, data.pt.x, data.pt.y)
         return False
+
+    def _input(self, kind: str, code: int, x: int | None = None, y: int | None = None) -> None:
+        """The user's own key or click (see on_input). A click on Orbit's button or bubble moves no cursor, nor does
+        the agent's button."""
+        if self._on_input is None or self._capture_cb is not None:
+            return
+        ignored = self._ignored
+        if ignored and ignored.get("kind") == kind and ignored.get("code") == code:
+            return
+        if x is not None and self._own_point is not None:
+            try:
+                if self._own_point(x, y):
+                    return
+            except Exception:
+                log.exception("Nejde zjistit, kam se kliklo")
+        try:
+            self._on_input()
+        except Exception:
+            log.exception("Hlášení vstupu selhalo")
 
     def _handle(self, down: bool, kind: str, code: int) -> bool:
         """Returns True if the event should be swallowed."""

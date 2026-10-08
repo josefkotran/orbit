@@ -98,9 +98,8 @@
   addEventListener("wheel", function () { navHold = 0; }, { passive: true });
   document.addEventListener("touchstart", function () { navHold = 0; }, { passive: true });  // a touch listener also lets iOS Safari show :active
 
-  /* ---------- star field: stars fly towards you, faster when you scroll, warp over the main button;
-                 while the headline listens, they line up into a voice wave ---------- */
-  var space = { cv: $("#space"), stars: [], w: 0, h: 0, fh: 0, area: 0, dpr: 1, cam: [0, 0], warp: 0, warpTo: 0, intro: reduce ? 0 : 1, flash: 0, listen: 0,
+  /* ---------- star field: stars fly towards you, faster when you scroll, warp over the main button ---------- */
+  var space = { cv: $("#space"), stars: [], w: 0, h: 0, fh: 0, area: 0, dpr: 1, cam: [0, 0], warp: 0, warpTo: 0, intro: reduce ? 0 : 1, flash: 0,
     trail: reduce ? 0 : 0.24, hoverT: 0, q: [], qn: new Int32Array(100), cols: [], tintOf: null, lws: [0.7, 1.3, 2.2, 4] };
   space.ctx = space.cv.getContext("2d");
   for (var qi = 0; qi < 100; qi++) space.q.push([]);
@@ -136,14 +135,13 @@
     var look = ptr.mouse && ptr.seen, ce = perFrame(0.04, dt);  // only a mouse moves the camera, a finger never does
     cam[0] = lerp(cam[0], look ? (ptr.nx - 0.5) * 0.16 : 0, ce);
     cam[1] = lerp(cam[1], look ? (ptr.ny - 0.45) * 0.1 : 0, ce);
-    var band = space.listen, amp = 26 + voice.level * 150, bandY = h * 0.42;
     // z step per 60 Hz frame (velocity already is per 60 Hz frame): the frame length counts once, when the stars move
-    var keep = 1 - band * 0.85, sv = reduce ? 0 : Math.min(Math.abs(velocity) * 0.00006, 0.012) * keep;
-    var spd = reduce ? 0 : (0.00022 + space.warp * 0.022 + space.intro * space.intro * 0.04) * keep + sv;
+    var sv = reduce ? 0 : Math.min(Math.abs(velocity) * 0.00006, 0.012);
+    var spd = reduce ? 0 : 0.00022 + space.warp * 0.022 + space.intro * space.intro * 0.04 + sv;
     var step = ((spd - sv) * dc + sv * dt) / 16.7, grow = dt / 400;
     // the trail (its length in z, not dependent on dt) grows with the speed and eases; it changes at most 1.4x per 60 Hz
     // frame, also in a long frame, so dots stretch into lines gradually and the field never switches at once
-    var tz = lerp(space.trail, spd * 6 * clamp((spd - 0.0012) / 0.002, 0, 1) * clamp(1 - band * 20, 0, 1), perFrame(0.2, dt));
+    var tz = lerp(space.trail, spd * 6 * clamp((spd - 0.0012) / 0.002, 0, 1), perFrame(0.2, dt));
     var lim = Math.pow(1.4, Math.min(dt, 25) / 16.7);
     tz = clamp(tz, space.trail / lim, Math.max(space.trail, 0.0003) * lim);
     space.trail = tz = tz < 0.0003 ? 0 : tz;
@@ -156,18 +154,14 @@
       if (s.z <= 0.03) star(s, 1, 0);
       if (s.born < 1) s.born = Math.min(1, s.born + grow);
       // the camera shift is projected no closer than z 0.35, near stars don't shoot sideways when the mouse moves
-      var k = f / s.z, kc = f / Math.max(s.z, 0.35), x = cx + s.x * k - cam[0] * kc, y = cy + s.y * k - cam[1] * kc, wy = 0;
+      var k = f / s.z, kc = f / Math.max(s.z, 0.35), x = cx + s.x * k - cam[0] * kc, y = cy + s.y * k - cam[1] * kc;
       var near = 1 - s.z, a = clamp(near * 1.15 + 0.06, 0, 1) * (s.tint ? 1 : 0.9);
-      if (band > 0.01) {  // the voice wave: two travelling sines, its height follows the level
-        wy = lerp(y, bandY + Math.sin(x * 0.0105 + t * 0.0034) * amp + Math.sin(x * 0.027 - t * 0.0052) * amp * 0.35 + s.b * (8 + amp * 0.18), band * 0.92) - y;
-        y += wy; a = lerp(a, 0.35 + near * 0.65, band);
-      }
       if (x < -60 || x > w + 60 || y < -60 || y > h + 60) { star(s, 1, 0); continue; }
       a *= s.born * clamp((s.z - 0.03) / 0.06, 0, 1);  // fade in after a respawn, fade out just before passing you
-      var col = s.tint || band > 0.5 && i % 3 === 0 ? 10 : 0, r = near * near * 2.4 * s.s + 0.35 + band * 0.5, L = 0, x2 = x, y2 = y;
+      var col = s.tint ? 10 : 0, r = near * near * 2.4 * s.s + 0.35, L = 0, x2 = x, y2 = y;
       if (tz > 0) {
         var z2 = Math.min(1, s.z + tz), k2 = f / z2, kc2 = f / Math.max(z2, 0.35);
-        x2 = cx + s.x * k2 - cam[0] * kc2; y2 = cy + s.y * k2 - cam[1] * kc2 + wy;
+        x2 = cx + s.x * k2 - cam[0] * kc2; y2 = cy + s.y * k2 - cam[1] * kc2;
         L = Math.sqrt((x - x2) * (x - x2) + (y - y2) * (y - y2));
       }
       if (L < 1.5) {
@@ -242,7 +236,7 @@
       cursor.classList.toggle("is-hover", !!t && !label);
       cursor.classList.toggle("is-label", !!label);
       cursor.dataset.label = label || "";
-      if (label) cLabel.textContent = listening ? "Mluv" : label;
+      if (label) cLabel.textContent = label;
     });
     var up = function () { cursor.classList.remove("is-down"); };  // a link drag ends without pointerup
     addEventListener("pointerdown", function () { cursor.classList.add("is-down"); });
@@ -254,12 +248,11 @@
       cLast.seen = ptr.seen; cursor.style.opacity = ptr.seen ? 1 : 0;
       if (ptr.seen) { ring.x = ptr.x; ring.y = ptr.y; }  // back in the window: the ring starts at the pointer, it doesn't fly over
     }
-    if (ptr.x === cLast.x && ptr.y === cLast.y && Math.abs(ring.x - ptr.x) < 0.05 && Math.abs(ring.y - ptr.y) < 0.05 && !listening) return;
+    if (ptr.x === cLast.x && ptr.y === cLast.y && Math.abs(ring.x - ptr.x) < 0.05 && Math.abs(ring.y - ptr.y) < 0.05) return;
     cLast.x = ptr.x; cLast.y = ptr.y;
     ring.x = lerp(ring.x, ptr.x, 0.2); ring.y = lerp(ring.y, ptr.y, 0.2);
     cDot.style.transform = "translate3d(" + ptr.x + "px," + ptr.y + "px,0)";
     cRing.style.transform = "translate3d(" + ring.x + "px," + ring.y + "px,0)";
-    if (listening) cursor.style.setProperty("--lv", voice.level.toFixed(3));
   }
 
   /* ---------- magnetic buttons ---------- */
@@ -290,9 +283,9 @@
     el.addEventListener("pointerleave", function () { if (tilt) gsap.to(el, { rotateY: 0, rotateX: 0, duration: 0.9, ease: "power3.out" }); });
   });
 
-  /* ---------- kinetic type: Anybody's weight (and a little width) follows the cursor, a passing wave and the voice ---------- */
+  /* ---------- kinetic type: Anybody's weight (and a little width) follows the cursor and a passing wave ---------- */
   var KIN = {
-    hero: { base: [108, 640], near: [8, 190], radius: 0.16, wave: [5, 60], listen: [14, 230] },
+    hero: { base: [108, 640], near: [8, 190], radius: 0.16, wave: [5, 60] },
     h2: { base: [100, 600], near: [0, 150], radius: 0.11, wave: [0, 0] },
     mark: { base: [132, 700], near: [0, 140], radius: 0.16, wave: [0, 70] }
   };
@@ -314,7 +307,7 @@
       else if (wi < all.length - 1) vis.appendChild(document.createTextNode(" "));
     });
     el.classList.add("split");
-    var k = { el: el, cfg: cfg, chars: chars, visible: false, shown: reduce, listen: 0 };
+    var k = { el: el, cfg: cfg, chars: chars, visible: false, shown: reduce };
     chars.forEach(function (c) { apply(c); });
     kinetics.push(k);
   });
@@ -354,7 +347,6 @@
       for (var i = 0; i < chars.length; i++) {           // read everything first: one layout per frame
         var r = chars[i].el.getBoundingClientRect(); chars[i].cx = r.left + r.width / 2; chars[i].cy = r.top + r.height / 2;
       }
-      k.listen = lerp(k.listen, cfg.listen && listening ? 1 : 0, 0.12);
       for (i = 0; i < chars.length; i++) {
         var c = chars[i], tw = cfg.base[0], tg = cfg.base[1];
         var wave = Math.sin(t * 0.0016 - c.i * 0.55);
@@ -363,20 +355,15 @@
           var dx = ptr.x - c.cx, dy = (ptr.y - c.cy) * 1.6, infl = Math.exp(-(dx * dx + dy * dy) / (R * R));
           tw += cfg.near[0] * infl; tg += cfg.near[1] * infl;
         }
-        if (k.listen > 0.01) {
-          var jig = Math.sin(t * 0.021 + c.seed) * 0.5 + Math.sin(t * 0.0137 + c.seed * 2.3) * 0.5;
-          tw += k.listen * voice.level * cfg.listen[0] * jig; tg += k.listen * voice.level * cfg.listen[1] * (0.4 + 0.6 * Math.abs(jig));
-        }
         c.cur[0] = lerp(c.cur[0], tw, 0.16); c.cur[1] = lerp(c.cur[1], tg, 0.16);
         apply(c);
       }
     }
   }
 
-  /* ---------- hero: the text block sits right of "pusť.", measured; hold the headline (or Space) and it listens ---------- */
-  var hero = $("#heroTitle"), heroGrid = $("#heroGrid"), heroSide = $("#heroSide"), listening = false;
+  /* ---------- hero: the text block sits right of "pusť.", measured ---------- */
+  var hero = $("#heroTitle"), heroGrid = $("#heroGrid"), heroSide = $("#heroSide");
   var HERO_FONT = '600 100px "Anybody"', HERO_TEXT = "Drž, mluv, pusť.";
-  var holdT = 0, holdX = 0, holdY = 0, spaceT = 0;
   function placeHeroSide() {
     if (innerWidth <= 1100) { heroSide.style.removeProperty("--side-left"); return; }
     var words = hero.querySelectorAll(".w"), last = words[words.length - 1];
@@ -392,48 +379,6 @@
     heroSide.style.setProperty("--side-left", Math.round(right + fs * 0.42) + "px");
   }
   if (document.fonts && document.fonts.load) document.fonts.load(HERO_FONT, HERO_TEXT).then(placeHeroSide, placeHeroSide);
-  function setListening(on) {
-    if (listening === on) return;
-    listening = on; html.classList.toggle("listening", on);
-    cursor.classList.toggle("is-rec", on);
-    cLabel.textContent = on ? "Mluv" : cursor.dataset.label || "Podrž";
-  }
-  // a mouse listens at once, a finger has to rest a moment first: a swipe over the headline only scrolls
-  function cancelHold() { clearTimeout(holdT); holdT = 0; }
-  hero.addEventListener("pointerdown", function (e) {
-    e.preventDefault();
-    if (e.pointerType === "mouse") { setListening(true); return; }
-    cancelHold(); holdX = e.clientX; holdY = e.clientY;
-    holdT = setTimeout(function () { holdT = 0; setListening(true); }, 220);
-  });
-  addEventListener("pointermove", function (e) {
-    if (holdT && (e.clientX - holdX) * (e.clientX - holdX) + (e.clientY - holdY) * (e.clientY - holdY) > 64) cancelHold();
-  }, { passive: true });
-  addEventListener("pointerup", function () { cancelHold(); setListening(false); });
-  addEventListener("pointercancel", function () { cancelHold(); setListening(false); });
-  // Space near the top: held, the headline listens; a quick tap pages down as anywhere else
-  function letGo() { clearTimeout(spaceT); spaceT = 0; cancelHold(); setListening(false); }
-  addEventListener("keydown", function (e) {
-    if (e.code !== "Space" || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
-    var tag = (document.activeElement && document.activeElement.tagName) || "";
-    if (/^(INPUT|TEXTAREA|BUTTON|A|SUMMARY|SELECT|VIDEO)$/.test(tag)) return;
-    if (listening || spaceT) { e.preventDefault(); return; }  // swallows the key repeats
-    if (e.repeat || scrollPos() > innerHeight * 0.6) return;
-    e.preventDefault();
-    spaceT = setTimeout(function () { spaceT = 0; setListening(true); }, 180);
-  });
-  addEventListener("keyup", function (e) {
-    if (e.code !== "Space") return;
-    if (spaceT) {  // let go before it listened
-      clearTimeout(spaceT); spaceT = 0;
-      if (lenis) lenis.scrollTo(lenis.targetScroll + innerHeight * 0.85);
-      else scrollBy({ top: innerHeight * 0.85, behavior: reduce ? "auto" : "smooth" });
-    }
-    setListening(false);
-  });
-  addEventListener("blur", letGo);
-  document.addEventListener("visibilitychange", function () { if (document.hidden) letGo(); });
-  hero.addEventListener("contextmenu", function (e) { e.preventDefault(); });
 
   /* ---------- page load: arrive out of hyperspace, the headline assembles ---------- */
   var heroK = kinetics.filter(function (k) { return k.cfg === KIN.hero; })[0];
@@ -864,7 +809,7 @@
     if (!wave) return;
     var now = performance.now(), dt = demo.waveT ? Math.min(now - demo.waveT, 50) : 16.7;
     demo.waveT = now;
-    var on = demo.state === "recording", lv = speak(on || listening);
+    var on = demo.state === "recording", lv = speak(on);
     var tf = "scale(" + (1.06 + lv * 0.45).toFixed(3) + ")";
     if (tf !== demo.lvl) { demo.lvl = tf; level.style.transform = tf; }
     demo.waveAcc += dt;
@@ -1209,7 +1154,6 @@
     var v = clamp(dy / Math.max(raw, 1) * 16.7, -200, 200);
     velocity = lerp(velocity, v, 1 - Math.exp(-raw / (Math.abs(v) < Math.abs(velocity) ? 30 : 70)));  // eases in, stops sooner
     if (document.hidden) return;
-    space.listen = lerp(space.listen, listening ? 1 : 0, perFrame(listening ? 0.07 : 0.05, dt));
     drawKinetics(now);  // first: its layout read comes before anything writes styles this frame
     drawWave();
     drawSpace(Math.min(raw, 250), now);

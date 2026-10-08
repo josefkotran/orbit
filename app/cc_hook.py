@@ -172,6 +172,11 @@ def main() -> None:
     record = {k: data[k] for k in KEEP if k in data}
     if "prompt" in record:
         record["prompt"] = str(record["prompt"])[:1000]  # for Orbit's voice agent; pasted text can be huge
+    if isinstance(data.get("background_tasks"), list):  # Stop: work the turn left running (not "hotovo" yet)
+        record["background"] = [
+            {"type": str(t.get("type") or ""),
+             "what": str(t.get("description") or t.get("command") or t.get("name") or "")[:160]}
+            for t in data["background_tasks"][:12] if isinstance(t, dict)]
     pid = hwnd = 0
     try:  # the event counts even when its process or window can't be found
         parents, names = _processes()

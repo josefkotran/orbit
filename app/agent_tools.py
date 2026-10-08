@@ -26,7 +26,7 @@ from urllib.parse import urlsplit
 # a program by its bare name (claude, cmd) never from the current folder, whatever folder this was started in
 os.environ.setdefault("NoDefaultCurrentDirectoryInExePath", "1")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from app import browser, sessions  # noqa: E402
+from app import browser, paths, sessions  # noqa: E402
 from app.agent import is_screenshot, known_folder, prefix  # noqa: E402
 from app.claude_setup import environment, find_exe  # noqa: E402
 
@@ -211,11 +211,15 @@ def _user_environment() -> dict:
     return env or environment()
 
 
-def open_session(folder: str, prompt: str = "", screenshot: str = "", source: str = "") -> str:
+def open_session(folder: str, prompt: str = "", screenshot: str = "", source: str = "", task_id: str = "") -> str:
     """screenshot: the path of the screenshot Orbit named in its question (the hook puts it there; the agent's own
     true or anything else isn't a path in the Screenshots folder and is refused). The session gets the path in its
     first message and looks at the picture itself: Alt+V would need its window in front and keys sent into it.
-    source: where the task comes from when it isn't the voice agent (tasks.start_session), see _start."""
+    source: where the task comes from when it isn't the voice agent (tasks.start_session), see _start.
+    task_id: the notes task the session is for; it gets it and Orbit's data folder as ORBIT_TASK_ID and
+    ORBIT_TASK_DATA, which the orbit-ukoly mod reads (the task above the prompt, notes and "done" back to Orbit)."""
+    if task_id and not re.fullmatch(r"[0-9a-f]{6,32}", task_id):
+        raise ValueError("Neplatné číslo úkolu.")
     # only one of the user's folders (agent.known_folder), the same check Orbit made before asking
     known = known_folder(folder)
     if not known:
@@ -248,8 +252,10 @@ def open_session(folder: str, prompt: str = "", screenshot: str = "", source: st
     # Started normally, so it gets the same window as the user's own sessions (Windows Terminal, when that's the
     # default terminal); a console started minimized Windows never hands over and keeps it in the classic window.
     focused = ctypes.windll.user32.GetForegroundWindow() if background else None
-    proc = subprocess.Popen(f'cmd.exe /s /v:on /k "{command}"', executable=CMD, cwd=path,
-                            env=dict(_user_environment(), ORBIT_CLAUDE=exe, ORBIT_TASK=task), close_fds=True,
+    env = dict(_user_environment(), ORBIT_CLAUDE=exe, ORBIT_TASK=task)
+    if task_id:
+        env.update(ORBIT_TASK_ID=task_id, ORBIT_TASK_DATA=str(paths.data_dir()))
+    proc = subprocess.Popen(f'cmd.exe /s /v:on /k "{command}"', executable=CMD, cwd=path, env=env, close_fds=True,
                             creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP)
     shot = " Snímek obrazovky má v zadání." if screenshot else ""
     if background:

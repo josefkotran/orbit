@@ -31,7 +31,8 @@ zapnutý, **ukládání nahrávek zapnuté** (`recordings/`), spouštění s Win
 Průběžný přepis, učení slovníku a předčítání artefaktů má zapnuté (výslovně v configu; noví uživatelé mají učení,
 artefakty a agenta vypnuté). Od 8. 10. barevná okna relací zapnutá (`tint_sessions`, noví uživatelé vypnuté) a barvy
 složek `folder_colors`: hommel-portal (HHW) zelená, m-tex a mtex-portal oranžová, orbit modrá, ostatní automaticky;
-zprůhlednění tlačítka `fade_after_s` 3 s (výchozí). Slovník a opravy (`vocabulary`, `replacements`) doplňuje Claude, `learned_until`
+zprůhlednění tlačítka `fade_after_s` 3 s (výchozí). Od 8. 10. (večer) úpravy textu hlasem zapnuté (`voice_edit`, noví
+uživatelé vypnuté) a historie diktátů (`keep_history`, výchozí zapnutá). Slovník a opravy (`vocabulary`, `replacements`) doplňuje Claude, `learned_until`
 je čas posledního přepisu z logu, který už Claude viděl. `name` (jméno pro agenta) a `about` („O mně“ pro učení
 slovníku) přibyly 3. 10. a v jeho configu zatím nejsou, tedy prázdné: agent mu do té doby říká „uživatel“.
 Souhlasy `claude_hooks` / `claude_statusline` a `wizard_pending` (taky od 3. 10.) v jeho configu nebyly: první start
@@ -51,7 +52,11 @@ nové verze dá `claude_hooks` = true, protože jeho hooky v `~/.claude/settings
 | `app/whisper_server.py` | spouští `whisper-server.exe` jako podproces (grafika, nebo jen procesor), hlídá ho a po pádu spustí znovu, přepis přes HTTP, filtry halucinací, slovník, povely |
 | `app/recorder.py` | nahrávání přes sounddevice (MME, 16 kHz mono int16), detekce „zvuk opravdu teče“, prahy podle šumu mikrofonu, režim měřáku |
 | `app/hotkey.py` | globální push-to-talk přes pynput low-level hooky, zachytávání nové klávesy, ztracené puštění klávesy, české názvy kláves |
-| `app/inserter.py` | vložení textu: schránka + Ctrl+V (se zálohou schránky), nebo psaní přes `SendInput` Unicode; okno v popředí, okna správce |
+| `app/inserter.py` | vložení textu: schránka + Ctrl+V (se zálohou schránky), nebo psaní přes `SendInput` Unicode; okno v popředí, okna správce; mazání a označení napsaného (Backspace, Shift+←), čtení výběru (Ctrl+Insert), čekání na puštěný Ctrl/Shift |
+| `app/editing.py` | co Orbit napsal naposledy (`Trail`: kdy je bezpečné to vzít zpět) a povely nad tím: „Smaž to“, „Vyber to“, „Vlož to znovu“, „Nahraď X za Y“; hledání přeslechnutého slova, rozdíly pro opravy (jen stdlib) |
+| `app/history.py` | historie diktátů: `<data>/history.json`, posledních 200, kam text šel, nahrávka, oprava (bez Qt) |
+| `app/historyview.py` | okno Historie diktátů: vložit znovu, kopírovat, přehrát nahrávku, přepsat znovu, opravit, smazat |
+| `app/rewrite.py` | úpravy textu hlasem přes `claude -p` (Ctrl/Shift + klávesa diktování): pokyn + označený text nebo poslední diktát, Claude spuštěný už během mluvení |
 | `app/ui.py` | `FloatingButton` (mikrofon + panel limitů), `Bubble` (oznámení), `SettingsDialog` (nastavení), kreslení ikony; společné kusy nastavení a průvodce: `KeyAndMic`, `ClaudeBox`, `DownloadRow`, `scrolling` |
 | `app/onboarding.py` | průvodce prvním spuštěním (`Wizard`, 6 stránek) a dva pomocníci, které používá i nastavení: `ClaudeConnection` (stav, instalace, přihlášení) a `Downloads` (stahování na pozadí) |
 | `app/claude_setup.py` | Claude Code na tomhle PC (jen stdlib): kde je `claude.exe`, verze, `claude auth status --json`, oficiální instalátor a `claude auth login` ve viditelném okně |
@@ -61,8 +66,8 @@ nové verze dá `claude_hooks` = true, protože jeho hooky v `~/.claude/settings
 | `app/claude_settings.py` | Orbitovy záznamy v `settings.json` Claude Code: hooky a stavový řádek, jen té své instalace (podle cesty ke skriptu), atomický zápis, záloha |
 | `app/cc_status.py` | stavový řádek Claude Code (jen stdlib, rychlý): zapíše limity a kontext relace do `<data>/sessions/status/<id>.json`, ukáže původní stavový řádek uživatele (nebo vlastní řádek) |
 | `app/cleanup.py` | `Orbit.pyw --cleanup`: odebere hooky, stavový řádek (vrátí původní) a položku v Run této instalace, vždy skončí 0 |
-| `app/claude_cli.py` | společné volání `claude -p` (bez nástrojů, na předplatném) pro učení slovníku a souhrny artefaktů; `claude.exe` a prostředí bere z `claude_setup` |
-| `app/learning.py` | učení slovníku: přepisy z logu → `claude -p` → nová slova a opravy |
+| `app/claude_cli.py` | společné volání `claude -p` (bez nástrojů, na předplatném) pro učení slovníku, souhrny artefaktů a úpravy textu (`Prepared`: proces spuštěný dřív, než je známé zadání); `claude.exe` a prostředí bere z `claude_setup` |
+| `app/learning.py` | učení slovníku: přepisy z logu + opravy uživatele (`<data>/corrections.json`) → `claude -p` → nová slova a opravy |
 | `app/artifacts.py` | předčítání artefaktů: záznam od hooku → text stránky → souhrn 7 vět od Clauda |
 | `app/sessions.py` | přehled relací Claude Code: stav z hook souborů, kontext ze stavového řádku (jinak odhad z přepisu), režim oprávnění, přepnutí okna |
 | `app/tasks.py` | vlastní úkoly uživatele (poznámky): `tasks.json` v datové složce, co nabídnout ke spuštění, zadání pro relaci, spuštění relace v samostatném procesu (bez Qt) |
@@ -84,10 +89,11 @@ nové verze dá `claude_hooks` = true, protože jeho hooky v `~/.claude/settings
 | `whisper-next/` | whisper-server pro jakékoli PC (`GGML_BACKEND_DL`, 76 MB), z něj se dělá `whisper\` v instalátoru; Pepův běžící Orbit pořád používá starý `whisper\` |
 | `build/` | `build_whisper.py` (whisper-server přes portable MSYS2), `build_installer.py` (balíček + Inno Setup), `verify_bundle.py` (kontrola balíčku jeho vlastním Pythonem), `README.md`; `cache/`, `tools/`, `dist/`, `output/` nejsou v gitu |
 | `installer/` | `orbit.iss` (Inno Setup) a texty licencí GPL/LGPL, které jdou do instalace |
-| `tests/` | testy (stdlib `unittest`, od 7. 10.): `test_core_*` (přepis, Piper, klávesa, vkládání, config), `test_claude_*` (nástroje agenta, hledání programů), `test_dist_*` (build, instalátor), `test_ui_*` (potvrzování agenta, překreslování, relace); viz Spuštění |
+| `tests/` | testy (stdlib `unittest`, od 7. 10.): `test_core_*` (přepis, Piper, klávesa, vkládání, config, povely a opravy, historie), `test_claude_*` (nástroje agenta, hledání programů), `test_dist_*` (build, instalátor), `test_ui_*` (potvrzování agenta, překreslování, relace, „Smaž to“ a úpravy na falešném textovém poli); viz Spuštění |
 | `THIRD_PARTY_NOTICES.md` | licence všeho, co instalátor nese nebo Orbit stahuje |
 | `web/` | stránka https://orbit.easya.cz se stažením instalátoru, `publish.py` ji sestaví a nahraje (viz `web/README.md`) |
 | `video/` | úvodní video webu v Remotionu, hotové soubory jdou do `web/site/assets/video` (viz `video/README.md`) |
+| `mods/` | mody pro Claude Code: `orbit-mozek` (panel `/mozek`) a `orbit-ukoly` (úkol z Poznámek v jeho relaci), viz `mods/README.md`; `.claude-plugin/marketplace.json` v kořeni z repozitáře dělá marketplace `orbit` |
 
 Závislosti: PySide6, sounddevice, numpy, pynput, requests, piper-tts s onnxruntime (`requirements.txt`; Piper je
 volitelný, Orbit bez něj jen nenabízí hlasy Piperu). Venv je `.venv` (vznikl ještě ve staré
@@ -335,6 +341,13 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   přišlo `idle_prompt` po zadání. Novinka se oznamuje jen jednou (`Session.announced`), krátké „busy“ (`/compact`)
   tak neopakuje staré „Hotovo“. Bez událostí stav z `status` seznamu. Mrtvý `claude.exe` (nebo jiný proces se
   stejným PID) = soubory smaže.
+- **Práce na pozadí není „hotovo“** (od 8. 10., Pepa: relace pustila podagenty a příkazy na pozadí, tah skončil
+  a Orbit psal „hotovo“, i když pracovala dál). Stop hook Claude Code nese `background_tasks` (běžící podagenti,
+  příkazy na pozadí, monitory, workflowy; přesně k rozlišení „hotovo“ a „čeká na práci na pozadí“), hook z nich
+  ukládá `background` (`type`, `what`). Stop s nějakou = stav „pracuje“, žádné oznámení ani předčítání, pravidlo
+  „seznam relací hlásí idle = přerušeno“ se nepoužije; tooltip řádku „Na pozadí běží: příkaz, 2× podagent“ + popisy,
+  agent to má v přehledu. Práce na pozadí se relaci ohlásí a ta dělá další tah; teprve Stop bez práce na pozadí
+  ohlásí „Hotovo“. Pozor: příkaz, který běží napořád (dev server spuštěný na pozadí), drží relaci ve stavu „pracuje“.
 - **Režim oprávnění relace** (`Session.mode`, `mode_class`): z hooku (`permission_mode`), jinak z přepisu
   (`"permissionMode"` u záznamů uživatele). Třída jako u Claude Code: „bypass“ = `bypassPermissions`, nebo `plan`
   u relace, která někdy běžela v bypass (`bypass_seen`); jinak „prompting“. `sessions.bypass_in_use()` = rozhodne
@@ -605,7 +618,10 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   složka (seznam `agent.project_folders`), kontext, poznámky s časem (Enter přidá, pravý klik smaže), „Začít teď“,
   „Smazat úkol“. Všechno se ukládá hned (psaní po 0,5 s) do `<data>/tasks.json` (atomicky; nečitelný soubor se
   zkopíruje do `tasks.json.bad-*`). Pořadí v souboru = pořadí v sekci.
-- Kontrola (`Dictation._check_tasks`, `tasks_timer` každých 30 min od startu Orbitu): první aktivní úkol se složkou,
+- Kontrola (`Dictation._check_tasks`, `tasks_timer`: 2 min po startu Orbitu, pak každých 30 min; po založení nebo
+  odmítnutí úkolu další za minutu, nezodpovězená otázka znovu za 10 min, `tasks.FIRST_CHECK_MS`/`NEXT_SOON_MS`/
+  `RETRY_MS`; dřív jen po 30 min od startu, takže restart Orbitu i nezodpovězená otázka odsunuly úkol o půl hodiny
+  a Pepa si 8. 10. stěžoval, že se aktivní úkol vůbec nezačal dělat): první aktivní úkol se složkou,
   který ještě neběžel a nebyl odmítnut (`tasks.next_to_offer`). Otázka jako u agenta: řádek v panelu „→ Úkol: …“,
   bublina („Klikni sem a začnu“) a hlas („Aktivní úkol: … Otevřu pro něj novou relaci ve složce … Mám?“). Odpověď
   kliknutím na bublinu nebo „jo“ přes tlačítko agenta (`_confirm` s `kind: "task"`, stejné `CONFIRM_SEEN_S`
@@ -615,14 +631,51 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   source="úkol z poznámek Orbitu")` ve vlastním procesu (minimalizace se připojuje ke konzoli, Orbitův proces nesmí),
   čeká i na minimalizaci, výsledek JSONem (~2 s). První zpráva: „Pepa (úkol z poznámek Orbitu): Úkol: … Kontext: …
   Poznámky: 9:30 … | …“ (`tasks.prompt_for`: odkaz v Markdownu jako „text (adresa)“, bez neviditelných znaků;
-  nad 6000 znaků jde celé zadání do `<data>/tasks/<id>.md` a zpráva na něj odkáže). Úspěch = `started`, úkol
-  zůstává v Aktivních, do Hotovo ho přesouvá uživatel. Ověřeno s falešným `claude.exe` (kopie `timeout.exe`)
-  v dočasné složce Claude Code: okno ve WT, minimalizované, správné zadání; špatná složka = česká chyba.
+  nad 6000 znaků jde celé zadání do `<data>/tasks/<id>.md` a zpráva na něj odkáže). Úspěch = `started` a úkol jde
+  **rovnou do Hotovo** (Pepa 8. 10.: když na něm už pracuje relace, má z Aktivních zmizet; starší spuštěné přesune
+  `tasks.settle_started` při startu Orbitu). Přesun zpět do Aktivních vynuluje `started` i `declined`: nabídne se
+  znovu. „Hotovo“ v `tasks.json` tak neznamená dokončeno, to si mod `orbit-ukoly` drží sám (`isReported`). Ověřeno
+  s falešným `claude.exe` (kopie `timeout.exe`) v dočasné složce Claude Code: okno ve WT, minimalizované, správné
+  zadání; špatná složka = česká chyba.
+- **Zprávy od relace úkolu** (od 8. 10.): relace dostane v prostředí `ORBIT_TASK_ID` a `ORBIT_TASK_DATA` (datová
+  složka; `agent_tools.open_session(task_id=…)`, jen hex id). Mod `orbit-ukoly` z ní píše do `<data>/tasks/inbox/`
+  po jednom JSONu na zprávu, Orbit je každé 3 s převezme (`Dictation._check_inbox` → `tasks.read_inbox`/`apply_inbox`):
+  poznámka (od Clauda s „Claude:“ na začátku, max 2000 znaků, bez neviditelných znaků), „done“ = Hotovo a bublina
+  „Hotovo: …“ (klik otevře Poznámky). Neúplný soubor (mod zrovna píše) počká 10 s, pak se zahodí; zpráva k úkolu,
+  který už není, se zahodí. `tasks.json` dál zapisuje jen Orbit (drží úkoly v paměti a celý soubor přepisuje).
 - **Všude, kde se Orbit ukazuje** (Pepa 8. 10.: „aby byla zmíněná a zahrnutá konzistentně“): v menu Orbitu je
   „Poznámky…“ (bez panelu by na sešit jinak nebylo kde kliknout), průvodce je zmiňuje na stránce Claude i v „Hotovo“,
   instalátor v popisu zástupce a v otázce na smazání dat (`tasks.json` je v datové složce), `verify_bundle.py`
   otevře okno Poznámek a zkusí uložit a načíst úkol. Web, README a video viz jejich sekce. Texty pro všechny bez
   rodu („Spuštění bylo odmítnuto“, ne „jsi odmítl“). Když se funkce změní, opravit i tyhle popisy.
+
+### Mody pro Claude Code (od 8. 10., `mods/`)
+- Pepa slyšel o modech Claude Code (doplňky v TypeScriptu, které běží uvnitř Claude Code: panely, řádek nad promptem,
+  příkazy, nástroje, přístup k proudu odpovědi; od 2.1.287, API je v ranném přístupu) a vybral dva nápady:
+  „mozek relace“ a úkoly z Poznámek přímo v relaci. Návod a typy: skill `plugin-authoring` (typy jsou ve složce
+  skillu, po načtení modu i v `mods/<mod>/.claude-plugin/types/`, ty nejsou v gitu).
+- **`orbit-mozek`**: `/mozek` otevře panel (u Pepy v režimu `"tui": "fullscreen"` vedle konverzace): fáze tahu
+  (přemýšlí/píše/nástroje), konec myšlení a psaného textu z proudu `turn.step`, nástroje tahu s časy (`tool.call`),
+  podagenti, „aktivita“ (výstupní tokeny po krocích) a kontext jako `/context` z `$.session.usage({ breakdown:
+  'summary' })` (odhad bez požadavků na API, nejvýš jednou za 2,5 s) s limity 5 h a týden. Proud se do vykreslení
+  propisuje nejvýš po 120 ms (`flush`), běžící čas tiká jen během tahu. Nic neposílá ven.
+- **`orbit-ukoly`**: v relaci s `ORBIT_TASK_ID` řádek nad promptem (úkol, složka, počet poznámek, tlačítka Poznámka,
+  Hotovo, Skrýt), sekce systémového promptu „pracuješ na úkolu…“ (`prompt.compose`, ne když je úkol hotový) a nástroje
+  `mcp__orbit-ukoly__task_note` a `task_done` (`isDeferred: false`). Úkol čte z `tasks.json` (znovu po 15 s), píše jen
+  do schránky (viz Poznámky a úkoly). `/ukol` vypíše aktivní úkoly, `/ukol 2` relaci připojí (pamatuje si to v
+  `$.store` podle id relace, takže to platí i po obnovení), `/ukol odpojit`. Datovou složku bez proměnné hledá:
+  poslední známá, `ORBIT_DATA_DIR`, `%LOCALAPPDATA%\Orbit`, `~\orbit`. Na mobilu není `Input`, tlačítko Poznámka tam
+  chybí.
+- Instalace u Pepy (8. 10.): `claude plugin marketplace add C:\Users\josef\orbit` (marketplace `orbit`, čte se přímo
+  ze složky, po úpravě stačí `/reload-plugins`) a `claude plugin install orbit-mozek@orbit` + `orbit-ukoly@orbit`
+  pro uživatele; v `settings.json` jsou `enabledPlugins` a `extraKnownMarketplaces`. Ostatní:
+  `/plugin install orbit-mozek --marketplace josefkotran/orbit` (až bude `mods/` na GitHubu).
+- Kontrola: `claude plugin validate mods/<mod>` a `claude plugin test mods/<mod>` (testy v `tests/*.test.ts` běží
+  proti enginu: vše, co engine dělá sám, odpovídá test; volání na `$` vrací `{ value }`, cesty přicházejí se
+  zpětnými lomítky). Typy: po načtení modu `video\node_modules\.bin\tsc -p mods/<mod>` (engine k modu zapíše
+  `tsconfig.json` a `.claude-plugin/types/`, obojí mimo git). Nástroje, které mod registruje až za běhu, typy enginu
+  neznají, proto matcher `tool.call` jako regulární výraz (`/^mcp__orbit-ukoly__task_note$/`), ne jméno.
+- Agent Orbitu (`--setting-sources ""`) a učení slovníku (`--safe-mode`) mody nenačítají.
 
 ### Hlasové povely pro terminál
 - „Nový řádek“ = zalomení, „nový odstavec“ = prázdný řádek. Od 8. 10. i samotné „odstavec“, ale jen jako samostatný
@@ -635,6 +688,61 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 - Enter i Esc jdou jen do okna, které bylo v popředí při vložení (od 7. 10., `Inserter.press(…, on_skipped)`): když
   se během zpoždění přepne jinam, klávesa se nepošle a přijde bublina „Okno se mezitím změnilo, povel „Odešli“ jsem
   neprovedl.“ (nebo „Stop“).
+
+### Vrátit, opravit a upravit diktát (od 8. 10. večer, `editing.py`, `history.py`, `rewrite.py`)
+- Pepa nechal udělat rešerši podobných nástrojů (Wispr Flow, Aqua Voice, Talon, Dragon, Win+H…, report
+  `reports/Diktovací nástroje a podněty pro Orbit.md`, není v gitu) a vybral z ní čtyři věci: diktát vrátit nebo
+  opravit hlasem, historii diktátů, úpravy textu hlasem a učení slovníku ze skutečných oprav.
+- **„Smaž to“, „Vyber to“, „Vlož to znovu“** jsou povely, jen když jsou celým diktátem (jako „Stop.“, i „Vymaž to“,
+  „Odstranit to“, „Vyškrtni to“ jako ve Win+H; `editing.command`), pod přepínačem Hlasové povely. „Smaž to“ = Backspace
+  přes poslední napsaný diktát, další „Smaž to“ ten před ním (až 10 za sebou), „Vyber to“ = Shift+← přes něj (pak
+  „Smaž to“ = jeden Backspace, nový diktát ho přepíše), „Vlož to znovu“ = poslední diktát z historie do okna vpředu.
+- **Kdy je to bezpečné** (`editing.Trail`, pravidlo Talonu pro „scratch that“): jen ve stejném okně a jen když od
+  vložení nepřišla žádná uživatelova klávesa ani klik, jinak by Backspace mazal jeho text. Hlásí to hook diktovací
+  klávesy (`PushToTalk(on_input=…)`): každá klávesa kromě samotných Ctrl/Shift/Alt/Win a vlastní vazby, každé tlačítko
+  myši kromě kliku na Orbitova okna (`inserter.own_point`) a tlačítka agenta (`PushToTalk.ignore`). Orbitovy klávesy
+  jsou injected a nepočítají se. Myší hook u vazby na klávesu běží jen od vložení do prvního kliku
+  (`watch_clicks`), protože vidí každý pohyb myši. „Odešli“/„Stop“ trail smaže (text odešel). Klávesy se posílají až
+  po puštění Ctrl/Shift (`Inserter.when_keys_up`, max 3 s): s drženým Ctrl by Backspace mazal celá slova.
+- **Terminál**: Claude Code sbalí vložení nad 800 znaků nebo nad 3 řádky do jednoho bloku `[Pasted text #1]`
+  (code.claude.com/docs/en/terminal-config) a Backspace by pak smazal blok najednou a zbytek by snědl text před ním.
+  V terminálu (`inserter.is_terminal`: WT, konzole, mintty…) proto Orbit maže a přepisuje jen kratší diktáty
+  (`editing.terminal_safe`), „Vyber to“ tam neumí. Ověřeno na falešném poli, ne v živém Claude Code.
+- **Historie diktátů** (`keep_history`, výchozí zapnutá, jen v počítači): `<data>/history.json`, posledních 200:
+  text, Whisperův surový text, program (`inserter.app_name`), vloženo/ve schránce, délka, nahrávka (`recordings/<stem>`,
+  když se ukládají), pokyn a původní text u úprav, uživatelova oprava. Vypnutí soubor smaže, v paměti zůstane poslední
+  (kvůli „Vlož to znovu“). Okno z menu „Historie diktátů…“ (`historyview.HistoryWindow`): Vložit (okno se schová,
+  Windows vrátí předchozí okno a text jde tam), Kopírovat, Přehrát nahrávku, Přepsat znovu (s dnešním slovníkem),
+  Uložit opravu, Smazat, Vymazat historii. V menu i „Vložit / Kopírovat poslední diktát“. Text, který skončil ve
+  schránce (okno se změnilo), má bublinu „Nebo klikni sem a vložím ho, kam teď píšeš“.
+- **Úpravy textu hlasem** (`voice_edit`, noví uživatelé vypnuté, posílá text Claudovi): **Ctrl nebo Shift držený se
+  začátkem diktátu** (`inserter.edit_held`, kontrola při stisku a znovu s prvním zvukem; diktovací klávesa sama se
+  nepočítá) = to, co se řekne, je pokyn. Tlačítko má místo mikrofonu tužku (E70F), pořád červenou při poslechu.
+  Gesto Ctrl + klávesa navrhl Pepa sám v nápadech. Během přepisu pokynu Orbit (po puštění Ctrl/Shift) zkusí přečíst
+  výběr přes **Ctrl+Insert** (`Inserter.copy_selection`: kopíruje všude, na rozdíl od Ctrl+C nikdy nepřeruší program,
+  schránka se hned vrátí a značky „ne do historie“ zůstanou; v terminálech a JetBrains IDE se nezkouší, VS Code
+  „řádek bez výběru“ pozná podle `vscode-editor-data`). Pak: pokyn „Smaž to/Vyber to“ jako bez Ctrl; **„Nahraď X za
+  Y“** (i „oprav/přepiš/změň X na Y“, „místo X napiš Y“) udělá Orbit sám, když X najde (`editing.find`: celá slova,
+  bez diakritiky, podobnost ≥ 0,75, všechny stejné výskyty, velké písmeno na začátku věty); jinak **Claude**
+  (`rewrite.Rewriter`: `claude -p --safe-mode --model sonnet --effort low`, JSON `{text, problem}`), spuštěný už při
+  stisku (`claude_cli.Prepared`), takže po puštění trvá 3–6 s (měřeno 8. 10.). Claude dostane označený text, jinak
+  poslední diktát (když je ještě bezpečně před kurzorem), jinak nic a podle pokynu píše nový text („napiš krátkou
+  odpověď…“), nebo vrátí `problem` („Přelož to.“ bez textu). Text je pro něj data (ověřeno: pokyn uvnitř textu
+  neposlechl), tvary bez rodu („nestihnu přijít“).
+- Výsledek: přes výběr vždy **vložením** (Ctrl+V nahradí výběr, a když výběr není v poli, nic se nestane, kdežto
+  psaná písmena by mohla být zkratky stránky), přes poslední diktát Backspace od prvního rozdílu a dopsání zbytku, bez
+  textu na kurzor. Když se mezitím změnilo okno nebo přišla klávesa či klik, jde výsledek do schránky. Bublina „Klikni
+  sem a vrátím původní text“ (`_revert_edit`, jen dokud je text bezpečně před kurzorem, jinak původní do schránky).
+- **Opravy pro učení slovníku** (`learning.add_correction`, `<data>/corrections.json`, posledních 200): z „Nahraď X
+  za Y“ (i když ho udělal Claude: `editing.word_changes` malých změn), z opravy v historii (jen u diktátů, ne u
+  výsledků úprav) a slabší z diktátu řečeného do 60 s po „Smaž to“ do stejného okna, když se podobá smazanému
+  (`REDICTATE_SIMILAR` 0,5; jen pro učení, bez bubliny). Bublina „Opraveno: X → Y. Klikni sem a budu to tak opravovat
+  vždycky“ přidá opravu do `replacements` (jen změnu velikosti písmen do slovníku). Učení slovníku se spustí i po 3
+  nových opravách (`CORRECTIONS_EVERY`) a Claude je dostane jako nejspolehlivější důkaz („said again“ slaběji).
+- Ověřeno 8. 10.: v testovacím okně jiného procesu psaní, Backspace přesně o diktát, Shift+← výběr, Ctrl+Insert
+  přečte výběr a vrátí schránku, bez výběru `None`; skutečný `claude -p` u pěti pokynů. 38 nových testů
+  (`test_core_editing`, `test_ui_editing` na falešném poli). Neověřeno: skutečný hook s fyzickou klávesou a klikem
+  (hooky injected vstup nevidí) a chování v živém Claude Code.
 
 ### Limity Clauda
 - **Dva zdroje** (`usage_source` v `config.json`, v nastavení není): `"statusline"` (výchozí pro nové uživatele) a
@@ -965,7 +1073,7 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   ```
   Whisper server při zabití aplikace skončí sám (Job object).
 - Kontrola kódu: `.venv\Scripts\python.exe -m pyflakes app Orbit.pyw tests`.
-- **Testy** (od 7. 10., stdlib `unittest`, 106 testů, ~35 s): `.venv\Scripts\python.exe -m unittest discover -s tests`
+- **Testy** (od 7. 10., stdlib `unittest`, 149 testů, ~40 s): `.venv\Scripts\python.exe -m unittest discover -s tests`
   (jen část: `-p "test_core*.py"`, `test_claude*`, `test_dist*`, `test_ui*`; `test_ui_*` zkouší metody `Dictation`
   na stubu a `VoiceAgent` s falešným procesem, bez Clauda). Samy si nastaví `ORBIT_DATA_DIR`/`ORBIT_CLAUDE_DIR`
   na dočasné složky a uklidí po sobě. Nespouští `claude` ani whisper-server (místo něj malý server v Pythonu), klávesy
@@ -1025,10 +1133,15 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   jiné písmo, hodně pohybu, hover efektů a JavaScriptu. Teď: nadpisy **Anybody** (variabilní šířka 50–150, tloušťka
   100–900, jen od 48 px), text **Mona Sans**; barvy aplikace (akcent `#5B9DFF`, přepínatelný na fialovou/tyrkysovou
   tečkami v menu jako v Orbitu) na `#04060C`, žádná zlatá. Efekty: hvězdné pole na canvasu (letí podle rychlosti
-  scrollu, nad hlavním tlačítkem hyperprostor, při podržení nadpisu se seřadí do hlasové vlny), písmena nadpisu
-  reagují na kurzor a „hlas“, vlastní kurzor se štítky, magnetická tlačítka, pás povelů tlačený scrollem, diktát
-  odvíjený scrollem (připnutý, obří obrysové hodiny), věta o soukromí rozsvěcovaná po slovech, tok paketů ve schématu,
-  panel Clauda hrající scénu ke každé funkci, pravítko instalace. Vše respektuje `prefers-reduced-motion`.
+  scrollu, nad hlavním tlačítkem hyperprostor), písmena nadpisu reagují na kurzor, vlastní kurzor se štítky,
+  magnetická tlačítka, pás povelů tlačený scrollem, diktát odvíjený scrollem (připnutý, obří obrysové hodiny), věta
+  o soukromí rozsvěcovaná po slovech, tok paketů ve schématu, panel Clauda hrající scénu ke každé funkci, pravítko
+  instalace. Vše respektuje `prefers-reduced-motion`.
+- **Žádné „poslouchání“ v úvodu** (8. 10., Pepa: „proč bych mluvil, když ta stránka mě neposlouchá a nemá přístup
+  k mikrofonu, to je zavádějící“): podržení nadpisu (myš, prst, mezerník) dřív přepnulo kurzor na „Mluv“, hvězdy
+  seřadilo do hlasové vlny a písmena nadpisu se chvěla, pod nadpisem byla nápověda „Podrž nadpis nebo mezerník…“.
+  Celé je to pryč, i s kódem. Ukázka diktování v sekci Diktování zůstala, ta je výslovně „jen ukázka“. Nic, co
+  vypadá, že stránka poslouchá, nevracet.
 - Posudek nezávislého agenta „art director“ pomohl: odhalení písmen přes vlasový řez vypadalo rozbitě (teď jen
   průhlednost + rozmazání), všechny sekce měly stejnou šablonu a tři mřížky stejných karet (teď každá jinak), Anybody
   v malých velikostech působilo jako e-sportovní písmo. Kontrola: Playwright v `scratchpad`, snímky desktop + 390 px.
@@ -1119,17 +1232,22 @@ z Git Credential Manageru (`git credential fill`, `GCM_INTERACTIVE=never`), prot
 **Přispěvatel má být jen účet `josefkotran`** (Pepa, 7. 10.): autor commitů `Josef Kotran
 <235639876+josefkotran@users.noreply.github.com>` (nastavené v `git config` repozitáře; `josef.kotran@seznam.cz` patří
 jinému jeho účtu `joseKot`) a **commity bez řádku `Co-Authored-By`** ani jiné zmínky o Claudovi jako autorovi. Historie
-se kvůli tomu 7. 10. přepsala (záloha lokálně ve větvi `backup/before-author-rewrite`).
+se kvůli tomu 7. 10. přepsala (záloha lokálně ve větvi `backup/before-author-rewrite`). Postranní seznam
+Contributors na úvodní stránce repozitáře pak ještě 8. 10. ukazoval i `claude` a `joseKot` (vlastní mezipaměť, API
+`/contributors` i `/stats/contributors` už měly jen josefkotran). Pomohlo přepnout přes API výchozí větev na dočasnou
+kopii `main` a zpět a kopii smazat; seznam se do 2 minut přepočítal. Kontrola: stránku vykreslit (Playwright), seznam
+se načítá dodatečně, v HTML není.
 `whisper-server.exe` má 59 MB, GitHub jen varuje (limit 100 MB);
 ve `whisper-next/` je největší `ggml-vulkan.dll` (56 MB). Výstupy buildu (`build/cache`, `tools`, `dist`, `output`)
 v gitu nejsou.
 
 ## Nápady na další práci (Pepa zatím nevybral)
 
-1. Historie posledních ~10 diktátů v menu, kliknutím znovu vložit. (Bublina u nahrávky bez řeči a „Přepsat znovu
-   poslední diktát“ po selhání přepisu už jsou.)
-2. Volitelná úprava textu Claudem (podržet klávesu s Ctrl, vyčistit „ten, to“ nebo udělat e-mail). Text by odcházel
-   na internet, proto jen volitelně.
-3. Hlasový povel „smaž to“, který vrátí poslední diktát.
-4. Doladění na jeho hlas z `recordings/`.
-5. Vlastní ikona pro Orbit (teď je to pořád ikona mikrofonu).
+Historie diktátů, úpravy textu s Ctrl a „Smaž to“ jsou od 8. 10. hotové (viz Vrátit, opravit a upravit diktát).
+Další náměty jsou v reportu `reports/Diktovací nástroje a podněty pro Orbit.md` (seřazené podle přínosu).
+
+1. Doladění na jeho hlas z `recordings/` (LoRA i na enkodér, podle studie stačí málo minut opravených nahrávek).
+2. Vlastní ikona pro Orbit (teď je to pořád ikona mikrofonu).
+3. Z reportu: Esc během držení klávesy zahodí nahrávku, ztlumení hudby při diktování, klávesa pro „Odešli“ podle
+   aplikace, whisper.cpp 1.9.5 (úprava Vulkanu pro RDNA4) a Silero VAD změřit na nahrávkách, agent čte odpověď od
+   první hotové věty.

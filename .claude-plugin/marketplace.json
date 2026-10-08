@@ -1,0 +1,19 @@
+{
+  "name": "orbit",
+  "description": "Mody Orbitu pro Claude Code: Mozek relace a úkoly z Poznámek Orbitu.",
+  "owner": {
+    "name": "Josef Kotran"
+  },
+  "plugins": [
+    {
+      "name": "orbit-mozek",
+      "source": "./mods/orbit-mozek",
+      "description": "Mozek relace (/mozek): o čem Claude přemýšlí, co dělají nástroje a podagenti a jak je plný kontext."
+    },
+    {
+      "name": "orbit-ukoly",
+      "source": "./mods/orbit-ukoly",
+      "description": "Úkol z Poznámek Orbitu v relaci, která na něm pracuje: nad promptem s tlačítky Poznámka a Hotovo a nástroje pro Clauda (/ukol)."
+    }
+  ]
+}

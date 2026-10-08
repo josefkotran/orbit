@@ -106,17 +106,20 @@ class SessionRepaintTest(unittest.TestCase):
 class SaveAfterTextTest(unittest.TestCase):
     def test_recording_is_saved_after_the_text_goes(self):
         order = []
-        bridge = SimpleNamespace(text_ready=SimpleNamespace(emit=lambda *a: order.append("text")),
+        bridge = SimpleNamespace(dictated=SimpleNamespace(emit=lambda take: order.append(("text", take.stem))),
                                  agent_heard=SimpleNamespace(emit=lambda *a: order.append("agent")),
                                  transcribe_failed=SimpleNamespace(emit=lambda *a: order.append("failed")))
-        d = SimpleNamespace(bridge=bridge, _save_recording=lambda audio, text: order.append(("save", text)))
-        take = SimpleNamespace(error="", texts=["Ahoj."], raw=["Ahoj."], agent=False, audio=[np.zeros(160, np.int16)],
-                               released_at=0.0, target=5, confirm_id=None)
+        d = SimpleNamespace(bridge=bridge, _recording_stem=lambda: "20261008-120000",
+                            _save_recording=lambda audio, text, stem: order.append(("save", text, stem)))
+        take = main.Take("")
+        take.texts, take.raw, take.audio, take.target = ["Ahoj."], ["Ahoj."], [np.zeros(160, np.int16)], 5
         main.Dictation._finish_take(d, take, [], True, True, False)
-        self.assertEqual(order, ["text", ("save", "Ahoj.")])
+        # the history entry knows its recording before the file is written
+        self.assertEqual(order, [("text", "20261008-120000"), ("save", "Ahoj.", "20261008-120000")])
         order.clear()
+        take.stem = ""
         main.Dictation._finish_take(d, take, [], True, False, False)  # not kept
-        self.assertEqual(order, ["text"])
+        self.assertEqual(order, [("text", "")])
 
 
 if __name__ == "__main__":

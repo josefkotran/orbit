@@ -93,9 +93,6 @@ h3{font-family:var(--text-font);font-weight:600;font-stretch:112%;font-size:clam
 .cursor.is-label .cursor-label{opacity:1;transform:none}
 .cursor.is-label .cursor-dot{opacity:0}
 .cursor.is-down .cursor-ring{width:30px;height:30px;margin:-15px 0 0 -15px}
-.cursor.is-rec .cursor-ring{width:84px;height:84px;margin:-42px 0 0 -42px;background:var(--rec);border-color:var(--rec);box-shadow:0 0 0 calc(var(--lv,0) * 26px) rgba(255,77,90,.25)}
-.cursor.is-rec .cursor-label{opacity:1;transform:none;color:#fff}
-.cursor.is-rec .cursor-dot{opacity:0}
 @media (forced-colors:active){.cursor{display:none!important}.has-cursor,.has-cursor *{cursor:auto!important}}
 
 /* ---------- nav ---------- */
@@ -155,15 +152,7 @@ h3{font-family:var(--text-font);font-weight:600;font-stretch:112%;font-size:clam
 .hero-side .lede{font-size:clamp(17px,1.35vw,19.5px)}
 .hero-cta{display:flex;flex-wrap:wrap;align-items:center;gap:14px 20px}
 .hero-cta .fine{max-width:44ch}
-/* the hint sits under the headline it talks about, in the empty space left of the text */
-.hint{position:absolute;left:0;top:calc(var(--h1) * 1.85 + 20px);max-width:calc(var(--h1) * 3.2);font-size:14px;line-height:1.9;color:var(--dim)}
-.hint .rec{position:absolute;left:-17px;top:.72em;width:8px;height:8px;border-radius:50%;background:var(--rec);opacity:0;transition:opacity .2s}
-.listening .hint .rec{opacity:1;animation:blinkrec 1.2s infinite}
-@keyframes blinkrec{50%{opacity:.25}}
-@media (prefers-reduced-motion:reduce){.listening .hint .rec{animation:none}}
-.hint .key{display:inline-block;margin:0 3px;font:600 12.5px/1 var(--text-font);font-stretch:112%;color:var(--soft);padding:6px 9px;border-radius:7px;border:1px solid var(--line-2);border-bottom-width:2px}
-@media (hover:none){.hint .kb{display:none}}
-@media (max-width:1100px){.hero-side{position:static;margin:clamp(26px,4vw,40px) 0 0}.hint{position:relative;top:auto;max-width:none;margin-top:22px}.hero h1{white-space:normal}.hint .rec{position:static;display:none;margin-right:8px}.listening .hint .rec{display:inline-block}}
+@media (max-width:1100px){.hero-side{position:static;margin:clamp(26px,4vw,40px) 0 0}.hero h1{white-space:normal}}
 
 .stage-wrap{position:relative;margin:clamp(56px,7vw,96px) auto 0;max-width:1180px;perspective:1600px}
 @media (min-width:1101px){.stage-wrap{margin-top:clamp(28px,3vw,44px)}}

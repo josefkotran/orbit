@@ -210,7 +210,7 @@ class Notebook(QDialog):
                 t = self._task(section.child(j).data(0, ID))
                 if t and t not in order:
                     if status == "active" and t.status != "active":
-                        t.declined = 0.0  # moved to the active ones again: may be offered again
+                        t.declined = t.started = 0.0  # moved to the active ones again: may be offered again
                     t.status = status
                     order.append(t)
         order += [t for t in self.tasks if t not in order]  # (never lost, whatever a drag did)
@@ -237,7 +237,7 @@ class Notebook(QDialog):
         if not t or t.status == status:
             return
         if status == "active":
-            t.declined = 0.0
+            t.declined = t.started = 0.0  # back among the active ones: offered (and started) again
         t.status = status
         self.tasks.remove(t)
         firsts = [i for i, x in enumerate(self.tasks) if x.status == status]
@@ -304,8 +304,8 @@ class Notebook(QDialog):
         if not t:
             self.info.setText("Vyber úkol vlevo, nebo založ nový.")
         elif t.started:
-            self.info.setText(f"Relace pro tenhle úkol je založená ({tasks.when(t.started)}). Až bude hotový, "
-                              "přesuň ho do Hotovo.")
+            self.info.setText(f"Pro tenhle úkol běží relace založená {tasks.when(t.started)}, proto je v Hotovo. "
+                              "Když ho přesuneš do Aktivních, Orbit ho nabídne znovu.")
         elif t.status == "active" and not t.folder:
             self.info.setText("Bez složky ho nespustím: vyber, kde má relace pracovat.")
         elif t.status == "active" and t.declined:

@@ -322,14 +322,14 @@ class MainBitsTest(unittest.TestCase):
         presses, notes = [], []
         fake = SimpleNamespace(insert=lambda text, mode: True,
                                press=lambda key, after_text="", on_skipped=None: presses.append(on_skipped))
-        d = SimpleNamespace(pending=1, refresh=lambda: None, inserter=fake,
-                            cfg={"trailing_space": False, "insert_mode": "type"},
+        d = SimpleNamespace(pending=1, refresh=lambda: None, inserter=fake, trail=main.editing.Trail(),
+                            cfg={"trailing_space": False, "insert_mode": "type"}, _remember=lambda *a, **k: None,
                             _notify=lambda msg, **k: notes.append(msg), _maybe_learn=lambda: None)
         old = main.inserter.foreground, main.inserter.same_window, main.inserter.runs_as_admin
         main.inserter.foreground, main.inserter.same_window = lambda: 5, lambda a, b: a == b
         main.inserter.runs_as_admin = lambda w: False
         try:
-            main.Dictation._insert_text(d, "Ahoj", "send", target=5)
+            main.Dictation._put_text(d, "Ahoj", "send", target=5)
         finally:
             main.inserter.foreground, main.inserter.same_window, main.inserter.runs_as_admin = old
         self.assertEqual(len(presses), 1)

@@ -104,7 +104,8 @@ def stylesheet() -> str:
     hover = QColor(ACCENT).lighter(112).name()
     chevron = _chevron_path()
     arrow = f"QComboBox::down-arrow {{ image: url({chevron}); width: 12px; height: 12px; }}" if chevron else ""
-    d = lambda sel: ", ".join(f"QDialog#{name} {sel}".rstrip() for name in ("settings", "wizard", "notebook"))  # all three
+    d = lambda sel: ", ".join(f"QDialog#{name} {sel}".rstrip()  # Orbit's windows
+                              for name in ("settings", "wizard", "notebook", "history"))
     return f"""
     {d("")} {{ background: {BG}; }}
     {d("QLabel")} {{ color: {TEXT}; font-family: "{TEXT_FONT}"; font-size: 13px; }}

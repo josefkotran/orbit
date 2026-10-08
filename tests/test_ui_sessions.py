@@ -1,5 +1,5 @@
 """sessions._title_lines reads a transcript backwards: the same title as a forward read of the whole file, also with
-lines across block borders.
+lines across block borders. A turn that leaves work in the background is no "hotovo" yet.
 
     .venv\\Scripts\\python.exe -m unittest discover -s tests -p "test_ui*.py"
 """
@@ -10,8 +10,10 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(os.environ.get("ORBIT_TEST_ROOT") or Path(__file__).resolve().parent.parent)  # another copy: before/after
 if "app.config" not in sys.modules:  # nothing a test does may touch the real data folder or Claude Code
@@ -63,6 +65,45 @@ class TitleTest(unittest.TestCase):
         path.write_bytes('{"type":"ai-title","aiTitle":"Starý"}\n'.encode() + b'{"type":"user"}\n' * 300 +
                          b'{"type":"ai-title","aiTitle":\n')
         self.assertEqual(sessions._topic(sessions._title_lines(str(path))), "Starý")
+
+
+class BackgroundWork(unittest.TestCase):
+    """A turn that ends with work left running in the background (Claude Code's Stop hook lists it, cc_hook keeps it
+    as "background"): the session still works and no "hotovo" is told; the Stop after which nothing is left is."""
+
+    SID = "bg-test"
+
+    def setUp(self):
+        sessions.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(lambda: [f.unlink() for f in sessions.SESSIONS_DIR.glob(f"{self.SID}.*.json")])
+        # Claude Code's own list says idle (its turn ended) later than the Stop: not an interrupted turn
+        reg = {self.SID: {"status": "idle", "statusUpdatedAt": (time.time() + 5) * 1000, "cwd": "C:/proj/web"}}
+        for name, value in (("_running", lambda: (reg, set())), ("_alive", lambda *a: True),
+                            ("_terminal_by_title", lambda topic: 0)):
+            patch = mock.patch.object(sessions, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def hook(self, event: str, at: float, **fields) -> None:
+        record = dict(session_id=self.SID, hook_event_name=event, cwd="C:/proj/web", time=at, pid=0, hwnd=0, **fields)
+        (sessions.SESSIONS_DIR / f"{self.SID}.{event}.json").write_text(json.dumps(record), encoding="utf-8")
+
+    def test_done_only_when_nothing_runs_in_the_background(self):
+        tracker, now = sessions.SessionTracker(), time.time()
+        self.hook("UserPromptSubmit", now - 60, prompt="Otestuj to")
+        tracker.poll()  # the first look tells nothing
+        self.hook("Stop", now - 10, last_assistant_message="Testy běží na pozadí, dám vědět.",
+                  background=[{"type": "shell", "what": "npm test"}, {"type": "subagent", "what": "Prozkoumej API"},
+                              {"type": "subagent", "what": "Najdi chyby"}])
+        self.assertEqual(tracker.poll(), [])
+        s = tracker.sessions[self.SID]
+        self.assertEqual(s.state, "working")
+        self.assertIn("Na pozadí běží: příkaz, 2× podagent", s.tooltip())
+        self.assertIn("· npm test", s.tooltip())
+        self.hook("Stop", now - 2, last_assistant_message="Testy prošly.")  # its work reported back, a new turn
+        changes = tracker.poll()
+        self.assertEqual([(c[0].id, c[1]) for c in changes], [(self.SID, "done")])
+        self.assertEqual((s.state, s.background, s.message), ("done", [], "Testy prošly."))
 
 
 if __name__ == "__main__":

@@ -34,7 +34,12 @@ DEFAULTS = {
     "replacements": [],  # [wrong, right] phrase fixes applied to every transcript
     "learn_vocabulary": False,  # let Claude extend vocabulary/replacements from the transcripts in the log
     "learned_until": None,  # log timestamp of the last transcript Claude has seen
-    "voice_commands": True,  # "nový řádek" / "nový odstavec"
+    "voice_commands": True,  # "nový řádek" / "nový odstavec", "Odešli", "Stop", "Smaž to", "Vyber to", "Vlož to znovu"
+    # Ctrl or Shift held with the dictation key: what's said is an instruction for the selected text or the last
+    # dictation ("Nahraď X za Y" right here, "zkrať to" through Claude: rewrite.py). Off for new users: text goes to
+    # Claude.
+    "voice_edit": False,
+    "keep_history": True,  # the last dictations in <data>/history.json (the history window, "Vlož to znovu")
     "live_transcribe": True,  # transcribe finished parts at pauses while still recording
     "keep_recordings": False,  # save the last recordings to recordings/ (for tuning)
     "insert_mode": "paste",  # "paste" (clipboard + Ctrl+V) or "type" (Unicode keystrokes)

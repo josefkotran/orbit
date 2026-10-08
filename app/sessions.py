@@ -13,7 +13,7 @@ import logging
 import re
 import time
 from ctypes import wintypes
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -28,6 +28,8 @@ WAITING_TYPES = ("permission_prompt", "elicitation_dialog")
 # idle shows as done: the user wants to tell at a glance only whether a session works or is finished (8 Oct)
 STATE_LABELS = {"working": "pracuje", "waiting": "čeká na tebe", "done": "hotovo", "idle": "hotovo",
                 "error": "chyba"}
+# what Claude Code calls the work a turn left running in the background (Stop's background_tasks), in Czech
+BACKGROUND_KINDS = {"shell": "příkaz", "subagent": "podagent", "monitor": "hlídání", "workflow": "workflow"}
 STALE_S = 12 * 3600  # sessions whose process can't be checked disappear after this long without an event
 STATUS_FRESH_S = 600  # the status line's context counts while it isn't this much older than the transcript
 LOOP_EXPIRES_S = 7 * 86400  # Claude Code deletes a loop's recurring job after this long
@@ -284,6 +286,9 @@ class Session:
     mode: str = ""  # permission mode: default, acceptEdits, plan, auto, dontAsk, bypassPermissions ("" = not known)
     bypass_seen: bool = False  # it has run in bypassPermissions (so it was started with bypass allowed)
     loop: Loop | None = None  # a /loop running in it
+    # work the last turn left running (subagents, background shells, monitors, workflows): [{"type", "what"}]; while
+    # there is some, the session works on even though its turn ended (Claude Code reports it to the Stop hook)
+    background: list = field(default_factory=list)
 
     @property
     def folder(self) -> str:
@@ -307,10 +312,21 @@ class Session:
             return "bypass"
         return "prompting" if self.mode else ""
 
+    def background_text(self) -> str:
+        """"2× podagent, příkaz": what runs in the background, by kind."""
+        kinds: dict[str, int] = {}
+        for task in self.background:
+            kind = BACKGROUND_KINDS.get(task.get("type", ""), task.get("type") or "úloha")
+            kinds[kind] = kinds.get(kind, 0) + 1
+        return ", ".join(f"{n}× {kind}" if n > 1 else kind for kind, n in kinds.items())
+
     def tooltip(self) -> str:
         lines = [f"{self.topic} ({self.folder})" if self.topic else self.folder,
                  STATE_LABELS[self.state] + (f": {summary(self.message, 1)}" if self.message and
                                              self.state in ("waiting", "error") else "")]
+        if self.background:
+            lines.append(f"Na pozadí běží: {self.background_text()}")
+            lines += [f"  · {task['what']}" for task in self.background[:4] if task.get("what")]
         if self.context is not None:
             used = f"{self.context_tokens // 1000} tis. z {_size_text(self.context_size)} tokenů" \
                 if self.context_size else ""
@@ -382,7 +398,7 @@ class SessionTracker:
                 if reg.get("status") == "busy" and s.state in ("idle", "done") \
                         and reg.get("statusUpdatedAt", 0) / 1000 > s.since:
                     s.state = "working"  # a session whose hooks don't run (started before they were installed)
-                elif reg.get("status") == "idle" and s.state == "working" \
+                elif reg.get("status") == "idle" and s.state == "working" and not s.background \
                         and reg.get("statusUpdatedAt", 0) / 1000 > s.since + 2:
                     s.state = "idle"  # interrupted (Esc, "Stop."): Claude Code runs no Stop hook then
             else:  # no hook event yet: Claude Code's own busy/idle
@@ -424,6 +440,7 @@ class SessionTracker:
             return
         event, rec = max(relevant.items(), key=lambda item: item[1].get("time", 0))
         s.since = rec.get("time", 0)
+        s.background = []
         if event == "UserPromptSubmit":
             s.state, s.message = "working", ""
             note = events.get("Notification", {})
@@ -439,6 +456,12 @@ class SessionTracker:
             s.message = rec.get("last_assistant_message") or rec.get("message") or ""
             s.state = "error" if event == "StopFailure" else \
                 "done" if time.time() - s.since < DONE_FRESH_S else "idle"
+            background = rec.get("background")
+            if event == "Stop" and isinstance(background, list) and background:
+                # the turn is over, its work isn't: it goes on (and reports back in a turn of its own, whose Stop
+                # says what's left); "hotovo" is told once nothing runs in the background
+                s.background = [t for t in background if isinstance(t, dict)]
+                s.state = "working"
         else:
             s.state = "idle"
 

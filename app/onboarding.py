@@ -522,7 +522,8 @@ class Wizard(QDialog):
 
     def _show_howto(self) -> None:
         key = hotkey.in_sentence(hotkey.binding_name(self.keymic.binding))
-        lines = [f"•  Drž {key} a mluv. Až pustíš, text se vloží tam, kde máš kurzor.",
+        lines = [f"•  Drž {key} a mluv. Až pustíš, text se vloží tam, kde máš kurzor. Když se nepovede, řekni "
+                 "jen „Smaž to“. Poslední diktáty najdeš v menu Orbitu (Historie diktátů).",
                  "•  Totéž umí plovoucí tlačítko s mikrofonem: drž ho a mluv. Přetažením ho přesuneš, pravým "
                  "tlačítkem otevřeš menu.",
                  "•  Ikona Orbitu u hodin: klik otevře nastavení. V menu najdeš i tenhle průvodce.",

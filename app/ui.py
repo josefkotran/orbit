@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QF
                                QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QToolTip,
                                QVBoxLayout, QWidget)
 
-from . import colors, config, downloads, hotkey, theme, vocab, voice
+from . import colors, config, downloads, history, hotkey, theme, vocab, voice
 from .claude_usage import Usage, countdown, reset_text
 from .config import MODEL_LABELS
 from .sessions import STATE_LABELS, Session
@@ -20,6 +20,7 @@ from .version import VERSION
 
 MIC_GLYPH = ""  # "Microphone" in Segoe Fluent Icons / Segoe MDL2 Assets
 REFRESH_GLYPH = chr(0xE72C)  # "Refresh" in Segoe Fluent Icons / Segoe MDL2 Assets
+EDIT_GLYPH = chr(0xE70F)  # "Edit" (a pencil): the dictation is an instruction for editing text
 LOOP_GLYPH = chr(0xE8EE)  # "RepeatAll": a session running a /loop
 SPEAKER_GLYPH = chr(0xE767)  # "Volume"
 MUTE_GLYPH = chr(0xE74F)  # "Mute"
@@ -61,16 +62,17 @@ def _screwdriver(p: QPainter, center: QPointF, angle: float) -> None:
     p.restore()
 
 
-def paint_mic(p: QPainter, rect: QRectF, state: str) -> None:
+def paint_mic(p: QPainter, rect: QRectF, state: str, editing: bool = False) -> None:
+    """editing: a pencil instead of the microphone (still red while it listens: that's the privacy signal)."""
     bg, fg = COLORS[state]
     p.setPen(QPen(QColor(0, 0, 0, 60), max(1.0, rect.width() / 40)))
     p.setBrush(theme.tint(bg) if state in ("idle", "loading") else QColor(bg))
     p.drawEllipse(rect)
     font = QFont(theme.icon_font())
-    font.setPixelSize(int(rect.height() * 0.46))
+    font.setPixelSize(int(rect.height() * (0.42 if editing else 0.46)))
     p.setFont(font)
     p.setPen(QColor(fg))
-    p.drawText(rect, Qt.AlignCenter, MIC_GLYPH)
+    p.drawText(rect, Qt.AlignCenter, EDIT_GLYPH if editing else MIC_GLYPH)
 
 
 def color_icon(hex_: str, size: int = 16) -> QIcon:
@@ -86,12 +88,12 @@ def color_icon(hex_: str, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
-def mic_icon(state: str, size: int = 64) -> QIcon:
+def mic_icon(state: str, size: int = 64, editing: bool = False) -> QIcon:
     pm = QPixmap(size, size)
     pm.fill(Qt.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.Antialiasing)
-    paint_mic(p, QRectF(1, 1, size - 2, size - 2), state)
+    paint_mic(p, QRectF(1, 1, size - 2, size - 2), state, editing)
     p.end()
     return QIcon(pm)
 
@@ -187,6 +189,7 @@ class FloatingButton(QWidget):
         self._level_source = level_source
         self._level = 0.0
         self._state = "loading"
+        self._editing = False  # the dictation is an instruction for editing text: a pencil instead of the mic
         self._phase = 0.0
         self._button_tip = ""
         self._press_global: QPoint | None = None
@@ -388,9 +391,9 @@ class FloatingButton(QWidget):
         left = c.x() - r - self.DIAMETER - self.GAP
         return QRect(left, c.y() - r, c.x() + r - left, 2 * r), panel
 
-    def set_state(self, state: str) -> None:
-        if state != self._state:
-            self._state = state
+    def set_state(self, state: str, editing: bool = False) -> None:
+        if state != self._state or editing != self._editing:
+            self._state, self._editing = state, editing
             self.update()
             self._wake()
         self._sync_timer()
@@ -592,7 +595,7 @@ class FloatingButton(QWidget):
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(229, 72, 77, 90))
             p.drawEllipse(c, ring, ring)
-        paint_mic(p, QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r), self._state)
+        paint_mic(p, QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r), self._state, self._editing)
         if self._state in ("busy", "loading"):
             pen = QPen(QColor(COLORS[self._state][1]), 3)
             pen.setCapStyle(Qt.RoundCap)
@@ -1853,12 +1856,20 @@ class SettingsDialog(QDialog):
         self.live = _OptionRow("Přepisovat už během mluvení", "Dlouhý diktát je hotový skoro hned po puštění, "
                                "občas o chlup méně přesně.", cfg["live_transcribe"])
         self.commands = _OptionRow("Hlasové povely", "„Nový řádek“, „(nový) odstavec“. Věta „Odešli.“ na konci "
-                                   "zmáčkne Enter, samotné „Stop.“ zmáčkne Esc.", cfg["voice_commands"])
-        self.keep = _OptionRow("Ukládat nahrávky", "Posledních 30 do složky recordings, pro ladění přesnosti.",
-                               cfg["keep_recordings"])
+                                   "zmáčkne Enter, samotné „Stop.“ zmáčkne Esc. Samotné „Smaž to“, „Vyber to“ a "
+                                   "„Vlož to znovu“ pracují s posledním diktátem.", cfg["voice_commands"])
+        self.edit_mode = _OptionRow("Úpravy textu hlasem", "Drž Ctrl nebo Shift a k tomu klávesu diktování, pak řekni "
+                               "pokyn: „nahraď komgit za Comgate“ udělá Orbit sám, „zkrať to“ nebo „udělej z toho "
+                               "e-mail“ Claude (dostane označený text, jinak poslední diktát).", cfg["voice_edit"])
+        self.keep_history = _OptionRow("Historie diktátů", f"Posledních {history.MAX_ITEMS} jen v tomhle počítači, "
+                                       "v menu Orbitu. Odtud je vložíš znovu nebo opravíš.", cfg["keep_history"])
+        self.keep = _OptionRow("Ukládat nahrávky", "Posledních 30 do složky recordings, pro ladění přesnosti "
+                               "a přehrání v historii.", cfg["keep_recordings"])
         self.keep.setToolTip(str(config.RECORDINGS_DIR))
         transcript.addWidget(self.live)
         transcript.addWidget(self.commands)
+        transcript.addWidget(self.edit_mode)
+        transcript.addWidget(self.keep_history)
         transcript.addWidget(self.keep)
         transcript.addStretch(1)
 
@@ -2148,6 +2159,8 @@ class SettingsDialog(QDialog):
             "replacements": replacements,
             "live_transcribe": self.live.isChecked(),
             "voice_commands": self.commands.isChecked(),
+            "voice_edit": self.edit_mode.isChecked(),
+            "keep_history": self.keep_history.isChecked(),
             "keep_recordings": self.keep.isChecked(),
             "trailing_space": self.trailing.isChecked(),
             "sounds": self.sounds.isChecked(),

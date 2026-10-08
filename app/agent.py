@@ -251,6 +251,8 @@ def context(sessions: list[Session], heard: str, name: str = "") -> str:
         parts.append(f"stav: {STATE_LABELS[s.state]}{since}")
         if s.context is not None:
             parts.append(f"kontext {s.context * 100:.0f} %")
+        if s.background:
+            parts.append(f"na pozadí ještě běží: {s.background_text()}")
         if s.loop:
             parts.append(s.loop.describe().rstrip("."))
         if s.prompt:

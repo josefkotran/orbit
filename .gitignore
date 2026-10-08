@@ -23,3 +23,11 @@ build/cache/
 build/tools/
 build/dist/
 build/output/
+
+# what Claude Code lays beside a mod it loaded (its API types, a tsconfig extending them)
+mods/*/.claude-plugin/types/
+mods/*/tsconfig.json
+
+# research for Pepa from another session (competitors): not part of the app, the repo is public
+reports/
+research_notes/

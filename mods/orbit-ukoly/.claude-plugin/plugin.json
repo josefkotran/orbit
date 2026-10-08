@@ -1,0 +1,9 @@
+{
+  "name": "orbit-ukoly",
+  "version": "0.1.0",
+  "description": "Úkol z Poznámek Orbitu v relaci, která na něm pracuje: nad promptem s tlačítky Poznámka a Hotovo, a nástroje, kterými Claude zapíše poznámku nebo úkol dokončí (/ukol).",
+  "author": { "name": "Josef Kotran" },
+  "homepage": "https://orbit.easya.cz",
+  "license": "GPL-3.0-or-later",
+  "types": "./types/index.d.ts"
+}

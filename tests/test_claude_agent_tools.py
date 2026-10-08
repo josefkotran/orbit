@@ -124,6 +124,18 @@ class OpenSession(unittest.TestCase):
         agent_tools.open_session(FOLDER, "Úkol: Ceník.", source="úkol z poznámek Orbitu")
         self.assertEqual(self.popen.call_args.kwargs["env"]["ORBIT_TASK"],
                          "Josef (úkol z poznámek Orbitu): Úkol: Ceník.")
+        self.assertNotIn("ORBIT_TASK_ID", self.popen.call_args.kwargs["env"])
+
+    def test_the_session_of_a_task_knows_it(self):
+        # the orbit-ukoly mod in that session shows the task and writes back to Orbit's data folder
+        agent_tools.open_session(FOLDER, "Úkol: Ceník.", source="úkol z poznámek Orbitu", task_id="a1b2c3d4e5f6")
+        env = self.popen.call_args.kwargs["env"]
+        self.assertEqual(env["ORBIT_TASK_ID"], "a1b2c3d4e5f6")
+        self.assertEqual(env["ORBIT_TASK_DATA"], os.environ["ORBIT_DATA_DIR"])
+        self.popen.reset_mock()
+        with self.assertRaises(ValueError):
+            agent_tools.open_session(FOLDER, "Úkol: Ceník.", task_id="../x")
+        self.popen.assert_not_called()
 
     def test_screenshot_only_from_the_screenshots_folder(self):
         shots = Path(_TMP) / "Snímky obrazovky"
