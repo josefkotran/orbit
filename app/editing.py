@@ -36,16 +36,24 @@ class Command:
     candidates: list[tuple[str, str]] = field(default_factory=list)  # REPLACE: every way the words can be split
 
 
-def _plain(text: str) -> str:
-    """Lower case, without punctuation and with single spaces: how a command is recognized."""
-    text = re.sub(r"[^\w\s]", " ", text.lower())
-    return " ".join(text.split())
+# The short commands, matched on the dictation folded (lower case, no diacritics, no spaces or punctuation): Whisper
+# hears a two-word command said on its own in many ways. Pepa's "Smaž to" on 8 Oct came out as "Smaž to!", "Smaš to.",
+# "Smáš to!", "Smažu to.", "Smažuto." and "S máštou!". The verb is fixed, what's around it isn't: "Máš to?" ("masto")
+# or "Vrať to." stay text, and so does anything after the command ("Smaž to. Odešli." is a prompt for Claude Code).
+COMMAND_MAX_WORDS = 5
+_OBJECT = r"(?:to|tu|tou|tohle|tentext)(?:posledni(?:diktat)?)?"
+_DELETE_RE = re.compile(rf"^(?:prosim)?(?:(?:(?:s|z|vy)ma[zs]|maz)(?:u|e|te|at|eme|me)?{_OBJECT}"
+                        rf"|odstran(?:it|im|te)?{_OBJECT}|vyskrtn(?:i|u|out|ete)?{_OBJECT}"
+                        r"|(?:s|vy)ma[zs](?:at)?poslednidiktat)(?:prosim)?$")
+_SELECT_RE = re.compile(rf"^(?:prosim)?(?:vyber|vyberu|vybrat|oznac|oznacit|oznacim){_OBJECT}(?:prosim)?$")
+_PASTE_RE = re.compile(r"^(?:prosim)?(?:vloz|vlozit|vlozim|vlozmi)(?:to|mito)?(?:znovu|jestejednou|jestejednouznovu"
+                       r"|posledni|poslednidiktat)(?:prosim)?$")
 
 
-_DELETE_RE = re.compile(r"^(?:smaž|smaš|smažte|smazat|vymaž|vymaš|vymazat|odstraň|odstranit|vyškrtni|vyškrtnout)"
-                        r"(?: to| tohle| ten text| poslední diktát| to poslední)$")
-_SELECT_RE = re.compile(r"^(?:vyber|vybrat|označ|označit)(?: to| tohle| ten text| poslední diktát| to poslední)$")
-_PASTE_RE = re.compile(r"^(?:vlož|vložit|vlož mi)(?: to)? (?:znovu|ještě jednou|ještě jednou znovu|poslední diktát)$")
+def _said(text: str) -> str:
+    """The dictation as a command is matched: folded, its words run together ("S máštou!" -> "smastou")."""
+    words = _WORD_RE.findall(text)
+    return "".join(_fold(w) for w in words) if len(words) <= COMMAND_MAX_WORDS else ""
 # "Nahraď comgit za Comgate", "oprav komgit na Comgate", "místo komgit napiš Comgate"
 _REPLACE_RE = re.compile(r"^\s*(?:nahraď|nahraďte|nahradit|oprav|opravte|opravit|přepiš|přepsat|změň|změnit)\s+(.+)$",
                          re.IGNORECASE | re.DOTALL)
@@ -62,12 +70,12 @@ def _trim(part: str) -> str:
 def command(text: str, edit: bool = False) -> Command | None:
     """The command a whole dictation is, or None (it's text). REPLACE only in edit mode: "Oprav to na…" or
     "Nahraď import za…" is just as likely a prompt for Claude Code."""
-    plain = _plain(text)
-    if _DELETE_RE.match(plain):
+    said = _said(text)
+    if said and _DELETE_RE.match(said):
         return Command(DELETE)
-    if _SELECT_RE.match(plain):
+    if said and _SELECT_RE.match(said):
         return Command(SELECT)
-    if _PASTE_RE.match(plain):
+    if said and _PASTE_RE.match(said):
         return Command(PASTE_AGAIN)
     if not edit:
         return None

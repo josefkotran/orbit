@@ -86,8 +86,17 @@ class Prepared:
         return _result(stdout, stderr, self._proc.returncode)
 
     def cancel(self) -> None:
-        if self._proc.poll() is None:
+        """Ends it and lets go of its pipes (Orbit runs all day: every edit not needed would leave three)."""
+        proc = self._proc
+        if proc.poll() is None:
             try:
-                self._proc.kill()
+                proc.kill()
+                proc.wait(timeout=2)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        for pipe in (proc.stdin, proc.stdout, proc.stderr):
+            try:
+                if pipe:
+                    pipe.close()
             except OSError:
                 pass

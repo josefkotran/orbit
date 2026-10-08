@@ -31,16 +31,22 @@ from app import claude_cli, editing, history, hotkey, learning, rewrite  # noqa:
 
 class Commands(unittest.TestCase):
     def test_whole_dictation_commands(self):
-        for said in ("Smaž to.", "smaž to", "Vymaž to!", "Odstranit to.", "Vyškrtni to.", "Smaž to poslední."):
-            self.assertEqual(editing.command(said).kind, editing.DELETE, said)
-        for said in ("Vyber to.", "Označ to.", "Vybrat to."):
-            self.assertEqual(editing.command(said).kind, editing.SELECT, said)
-        for said in ("Vlož to znovu.", "Vlož znovu.", "Vlož to ještě jednou.", "Vlož poslední diktát."):
-            self.assertEqual(editing.command(said).kind, editing.PASTE_AGAIN, said)
+        # how Whisper wrote Pepa's "Smaž to" on 8 Oct, and the other ways of saying it
+        for said in ("Smaž to!", "Smaš to.", "Smáš to!", "Smažu to.", "Smažuto.", "S máštou!", "smaž to", "Vymaž to!",
+                     "Zmaž to.", "Smažte to.", "Odstranit to.", "Odstraň to.", "Vyškrtni to.", "Smaž to poslední.",
+                     "Smaž poslední diktát.", "Smaž to, prosím."):
+            self.assertEqual(getattr(editing.command(said), "kind", None), editing.DELETE, said)
+        for said in ("Vyber to.", "Vyberu to.", "Označ to.", "Vybrat to.", "Vyberto."):
+            self.assertEqual(getattr(editing.command(said), "kind", None), editing.SELECT, said)
+        for said in ("Vlož to znovu.", "Vložím to znovu.", "Vlož znovu.", "Vlož to ještě jednou.",
+                     "Vlož poslední diktát."):
+            self.assertEqual(getattr(editing.command(said), "kind", None), editing.PASTE_AGAIN, said)
 
     def test_text_stays_text(self):
         for said in ("Smaž ten soubor.", "Tak to smaž to.", "Smaž to a napiš znovu.", "Vyber to nejlepší.",
-                     "Vlož to do tabulky.", "Nahraď komgit za Comgate.", "Oprav to na modrou."):
+                     "Vlož to do tabulky.", "Nahraď komgit za Comgate.", "Oprav to na modrou.", "Smaž to. Odešli.",
+                     "Máš to?", "Mám to.", "Vrať to.", "Zobraz to znovu.", "Zkus to znovu.", "Smažu ten soubor.",
+                     "Smát se.", "Vyber si.", "Ulož to.", "Stop."):
             self.assertIsNone(editing.command(said), said)
 
     def test_replace_only_in_edit_mode(self):

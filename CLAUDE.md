@@ -694,7 +694,11 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   `reports/Diktovací nástroje a podněty pro Orbit.md`, není v gitu) a vybral z ní čtyři věci: diktát vrátit nebo
   opravit hlasem, historii diktátů, úpravy textu hlasem a učení slovníku ze skutečných oprav.
 - **„Smaž to“, „Vyber to“, „Vlož to znovu“** jsou povely, jen když jsou celým diktátem (jako „Stop.“, i „Vymaž to“,
-  „Odstranit to“, „Vyškrtni to“ jako ve Win+H; `editing.command`), pod přepínačem Hlasové povely. „Smaž to“ = Backspace
+  „Odstranit to“, „Vyškrtni to“ jako ve Win+H; `editing.command`), pod přepínačem Hlasové povely. Krátký povel Whisper
+  píše pokaždé jinak (Pepovo „Smaž to“ 8. 10.: „Smáš to!“, „Smažu to.“, „Smažuto.“, „S máštou!“, „Smaš to.“; první
+  verze s přesným zněním je vkládala jako text), proto se porovnává bez diakritiky a mezer s pevným slovesem a volným
+  tvarem (`_DELETE_RE` na `_said`). Čistá podobnost nešla: „Vrať to.“ vycházelo jako „Vyber to“ a „Smaž to. Odešli.“
+  (prompt pro Clauda) jako mazání. Daň: samotné „Smažu to.“ je povel, ne text. „Smaž to“ = Backspace
   přes poslední napsaný diktát, další „Smaž to“ ten před ním (až 10 za sebou), „Vyber to“ = Shift+← přes něj (pak
   „Smaž to“ = jeden Backspace, nový diktát ho přepíše), „Vlož to znovu“ = poslední diktát z historie do okna vpředu.
 - **Kdy je to bezpečné** (`editing.Trail`, pravidlo Talonu pro „scratch that“): jen ve stejném okně a jen když od

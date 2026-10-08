@@ -10,6 +10,11 @@ config.json.*
 tasks.json
 tasks.json.*
 /tasks/
+history.json
+history.json.*
+corrections.json
+corrections.json.*
+statusline-previous.json
 *.log
 portable
 
