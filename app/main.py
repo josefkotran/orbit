@@ -17,12 +17,14 @@ from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication
 from PySide6.QtTextToSpeech import QTextToSpeech
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
-from . import (agent, artifacts, claude_cli, claude_settings, claude_usage, config, downloads, hotkey, inserter,
-               learning, paths, sessions, theme, vocab, voice, winutil)
+from . import (agent, artifacts, claude_cli, claude_settings, claude_usage, colors, config, downloads, hotkey,
+               inserter, learning, paths, sessions, tasks, theme, vocab, voice, winutil)
 from .inserter import Inserter
+from .notebook import Notebook
 from .onboarding import CANCELLED, ClaudeConnection, Downloads, Wizard
 from .recorder import Recorder, input_devices, is_bluetooth_handsfree, is_silent
-from .ui import Bubble, FloatingButton, SettingsDialog, export_vocabulary, import_vocabulary, message_box, mic_icon
+from .ui import (Bubble, FloatingButton, SettingsDialog, color_icon, export_vocabulary, import_vocabulary,
+                 message_box, mic_icon)
 from .version import VERSION
 from .whisper_server import (SAMPLE_RATE, WhisperServer, apply_replacements, apply_voice_commands, build_prompt,
                              clean_text, terminal_command, to_wav)
@@ -92,6 +94,7 @@ class Bridge(QObject):
     speech_over = Signal()  # hands-free listening: Pepa stopped talking
     agent_heard = Signal(str, object)  # text, the confirmation it may answer (Take.confirm_id)
     agent_event = Signal(str, object)  # see agent.VoiceAgent
+    task_done = Signal(str, bool, str)  # a task's session: task id, opened, the message (tasks.start_session)
 
 
 class Dictation:
@@ -156,6 +159,9 @@ class Dictation:
         self.button.cancelled.connect(self.cancel_recording)
         self.button.moved.connect(self._button_moved)
         self.button.menu_requested.connect(self._show_menu)
+        self.button.folder_menu_requested.connect(self._show_folder_menu)
+        self.button.set_folder_colors(self.cfg["folder_colors"])
+        self._tinted: dict[int, str | None] = {}  # claude.exe PID -> the background its terminal got (colors.py)
         self.bubble: Bubble | None = None
         self.button.session_clicked.connect(self._focus_session)
         self.button.mute_toggled.connect(self._toggle_mute)
@@ -201,9 +207,19 @@ class Dictation:
             lambda: threading.Thread(target=self.agent.stop_if_idle, daemon=True).start())
         self.agent_idle_timer.start()
         self.button.agent_clicked.connect(self._agent_clicked)
+        # the user's own tasks (notebook.py): every half hour the first active one is offered as a new session
+        self.tasks = tasks.load()
+        self.notebook: Notebook | None = None
+        self.tasks_timer = QTimer(interval=tasks.CHECK_EVERY_MS)
+        self.tasks_timer.timeout.connect(self._check_tasks)
+        self.tasks_timer.start()
+        self.bridge.task_done.connect(self._task_done)
+        self.button.notes_clicked.connect(self.open_notebook)
+        self.button.set_notes_count(sum(t.status == "active" for t in self.tasks))
         self.button.connect_clicked.connect(lambda: self.open_wizard("claude"))
         self.button.statusline_clicked.connect(self._enable_statusline)
         self.button.set_usage_visible(self.cfg["show_usage"])
+        self.button.set_fade_after(self.cfg["fade_after_s"])
         self._place_button()
         self._watch_screens()
 
@@ -213,6 +229,7 @@ class Dictation:
         self.menu.addSeparator()
         self.menu.addAction("Nastavení…", self.open_settings)
         self.menu.addAction("Průvodce nastavením…", self.open_wizard)
+        self.menu.addAction("Poznámky…", self.open_notebook)
         self.toggle_action = QAction("Zobrazovat plovoucí tlačítko", self.menu, checkable=True)
         self.toggle_action.setChecked(self.cfg["show_button"])
         self.toggle_action.toggled.connect(self._set_button_visible)
@@ -854,6 +871,10 @@ class Dictation:
         if not (on and self.cfg["show_sessions"]):
             self.button.set_sessions([])
             self.button.set_attention(False)
+            # no overview, no colours: the windows Orbit tinted get their own background back
+            tinted, self._tinted = [(pid, None) for pid, bg in self._tinted.items() if bg], {}
+            if tinted:
+                colors.tint_sessions(tinted)
 
     def _poll_sessions(self):
         for pub in artifacts.take_new():
@@ -870,8 +891,63 @@ class Dictation:
         current = sorted(self.tracker.sessions.values(), key=lambda s: (s.folder.lower(), s.started))
         self.button.set_sessions(current)
         self.button.set_attention(any(s.state == "waiting" for s in current))
+        self._tint_sessions(current)
         for s, state in changes:
             self._session_changed(s, state)
+
+    def _tint_sessions(self, current: list[sessions.Session]):
+        """Each session's terminal background in its folder's colour (tint_sessions), once per session and colour;
+        switched off, the ones Orbit tinted get their own background back. A new session gets it within a second."""
+        pairs = []
+        for s in current:
+            if not s.pid:
+                continue
+            color = colors.color_for(s.cwd or s.folder, self.cfg["folder_colors"])
+            want = colors.shade(color) if self.cfg["tint_sessions"] else None
+            if want != self._tinted.get(s.pid):
+                pairs.append((s.pid, want))
+                self._tinted[s.pid] = want
+        alive = {s.pid for s in current}
+        self._tinted = {pid: bg for pid, bg in self._tinted.items() if pid in alive}
+        if pairs:
+            try:
+                colors.tint_sessions(pairs)
+            except OSError:
+                log.exception("Obarvení oken relací selhalo")
+
+    def _show_folder_menu(self, folder: str, pos: QPoint):
+        """A right click on a session in the panel: its folder's colour (the panel and, with tint_sessions, its
+        terminals), then Orbit's own menu."""
+        name, label = colors.key(folder), Path(folder).name or folder
+        current = self.cfg["folder_colors"].get(name)
+        menu = QMenu()
+        title = menu.addAction(f"Barva složky {label}")
+        title.setEnabled(False)
+        for color, (czech, hex_) in colors.COLORS.items():
+            action = menu.addAction(color_icon(hex_), czech)
+            action.setCheckable(True)
+            action.setChecked(color == current)
+            action.triggered.connect(lambda _=False, c=color: self._set_folder_color(name, c))
+        others = {k: v for k, v in self.cfg["folder_colors"].items() if k != name}
+        auto = menu.addAction(f"Automaticky ({colors.COLORS[colors.color_for(name, others)][0]})")
+        auto.setCheckable(True)
+        auto.setChecked(current not in colors.COLORS)
+        auto.triggered.connect(lambda: self._set_folder_color(name, None))
+        menu.addSeparator()
+        self.menu.setTitle("Orbit")
+        menu.addMenu(self.menu)
+        self._folder_menu = menu  # (kept while it's open)
+        menu.popup(pos)
+
+    def _set_folder_color(self, name: str, color: str | None):
+        chosen = {k: v for k, v in self.cfg["folder_colors"].items() if k != name}
+        if color:
+            chosen[name] = color
+        self.cfg["folder_colors"] = chosen
+        config.save(self.cfg)
+        log.info("Barva složky %s: %s", name, color or "automaticky")
+        self.button.set_folder_colors(chosen)
+        self._poll_sessions()  # its sessions' windows (and the automatic colours of the others) right away
 
     def _session_changed(self, s: sessions.Session, state: str):
         log.info("Relace ve složce %s: %s (tah %.0f s)", s.folder, state, s.turn_s)  # (the topic is content)
@@ -1127,6 +1203,11 @@ class Dictation:
         """What Pepa said to the agent: an answer to "Mám to poslat?" (only when the question was already in the
         panel when the recording started, confirm_id), or something for the agent."""
         text = text.strip()
+        if self._confirm and text and self._confirm.get("kind") == "task" and confirm_id != self._confirm["id"]:
+            # said before Orbit asked about a task: meant for the agent; the task waits for the next check
+            self._drop_confirm("")
+            if send := self._feed.get("send"):
+                self._feed_update(send=dict(send, status="expired"))
         if self._confirm:
             if not text:
                 self._set_agent_state(self._agent_rest())
@@ -1193,12 +1274,12 @@ class Dictation:
             if self._agent_state == "thinking":
                 self._set_agent_state(self._agent_rest())
         elif kind in ("exit", "reset"):
-            if self._confirm:
+            if self._confirm and self._confirm.get("kind") != "task":  # (a task's question isn't the agent's)
                 self._confirm = None
                 self.confirm_timer.stop()
                 if send := self._feed.get("send"):
                     self._feed_update(send=dict(send, status="expired"))
-            if kind == "exit" and self._agent_state in ("thinking", "confirm"):
+            if kind == "exit" and self._agent_state in ("thinking", "confirm") and not self._confirm:
                 self._feed_update(reply="Agent se ukončil, zkus to prosím znovu.")
                 self._set_agent_state(self._agent_rest())
 
@@ -1236,24 +1317,37 @@ class Dictation:
         """The agent wants to send a message to a session or open a new one: show it, read all of it out and wait
         for Pepa's yes. What can't be read out whole, or a folder that isn't one of his, goes back to the agent."""
         if self._confirm:  # a second one while the first waits: the first is off
-            self.agent.resolve(self._confirm["id"], False, "Mezitím přišel jiný požadavek, tohle neproběhlo.")
-            self._confirm = None
-            self.confirm_timer.stop()
+            self._drop_confirm("Mezitím přišel jiný požadavek, tohle neproběhlo.")
         if data["tool"] == "open":
             known, prompt = agent.known_folder(data["folder"]), agent.without_prefix(data["prompt"], self.agent.name)
             refused = self._unreadable(prompt) if known else \
                 f"Složka {data['folder']} není v seznamu složek pro nové relace. Vezmi celou cestu ze seznamu."
             label = agent.folder_label(known) if known else Path(data["folder"]).name
-            log.info("Agent chce otevřít relaci v %s (zadání %d znaků)", data["folder"], len(prompt))
+            # the user's newest screenshot, when the agent wants one attached: Orbit picks it and names it in the
+            # question, the agent never gives a path
+            shot = agent.latest_screenshot() if (data.get("input") or {}).get("screenshot") else None
+            if known and not refused and (data.get("input") or {}).get("screenshot") and not shot:
+                refused = (f"Ve složce se snímky obrazovky ({agent.screenshots_folder()}) žádný není, relaci jsem "
+                           "neotevřel. Řekni to uživateli: Výstřižky ho tam uloží, když mají zapnuté automatické "
+                           "ukládání snímků.")
+            log.info("Agent chce otevřít relaci v %s (zadání %d znaků%s)", data["folder"], len(prompt),
+                     ", se snímkem obrazovky" if shot else "")
             log.debug("Zadání: %r", prompt)
+            attached = f"snímek obrazovky z {agent.when(shot)}" if shot else ""
             send = {"tool": "open", "name": "nová relace", "folder": label, "status": "confirm",
-                    "message": prompt or "jen otevřít, bez zadání", "session_id": ""}
+                    "message": (prompt or "jen otevřít, bez zadání") + (f"\n+ {attached}" if shot else ""),
+                    "session_id": ""}
             speech = f"Otevřu novou relaci ve složce {label}" + (
-                f" se zadáním: {self._readable(prompt)}" if prompt else ".") + " Mám?"
+                f" se zadáním: {self._readable(prompt)}" if prompt else ".") + \
+                (f" A přiložím poslední {attached}." if shot else "") + " Mám?"
             mode = ""
-            # what goes out: the known folder and exactly the task that was read aloud (agent_tools adds no more)
+            # what goes out: the known folder, exactly the task that was read aloud and the screenshot it named
+            # (agent_tools adds only that path)
             updated = dict(data.get("input") or {}, folder=known or data["folder"],
                            prompt=agent.with_prefix(prompt, self.agent.name))
+            updated.pop("screenshot", None)
+            if shot:
+                updated["screenshot"] = str(shot)
         else:
             to = data["to"].split(" [")[0].strip()
             s = next((s for s in self.tracker.sessions.values() if s.peer == to), None)
@@ -1293,6 +1387,9 @@ class Dictation:
         request, self._confirm = self._confirm, None
         self.confirm_timer.stop()
         verdict = agent.confirmation(text)
+        if request.get("kind") == "task":
+            self._answer_task(request, verdict, text)
+            return
         if verdict:
             self.agent.resolve(request["id"], True, mode=request.get("mode", ""),
                                updated_input=request.get("updated"))
@@ -1313,11 +1410,127 @@ class Dictation:
     def _confirm_expired(self):
         if not self._confirm:
             return
-        request, self._confirm = self._confirm, None
-        self.agent.resolve(request["id"], False, "Do dvou minut nepřišlo potvrzení, zpráva neodešla. Nic neříkej.")
+        self._drop_confirm("Do dvou minut nepřišlo potvrzení, zpráva neodešla. Nic neříkej.")
         if send := self._feed.get("send"):
             self._feed_update(send=dict(send, status="expired"))
         self._set_agent_state(self._agent_rest())
+
+    def _drop_confirm(self, reason: str):
+        """The question waiting for the user's yes is off: the agent's tool gets a no with the reason; a task's
+        question just goes (the task waits for the next check)."""
+        request, self._confirm = self._confirm, None
+        self.confirm_timer.stop()
+        if request and request.get("kind") != "task":
+            self.agent.resolve(request["id"], False, reason)
+
+    # -- the user's own tasks (notebook) -------------------------------------------------------
+
+    def open_notebook(self):
+        if self.notebook and self.notebook.isVisible():
+            self.notebook.showNormal()
+            self.notebook.raise_()
+            self.notebook.activateWindow()
+            return
+        self.notebook = Notebook(self.tasks, agent.project_folders(), self.cfg["folder_colors"], self._next_check)
+        self.notebook.changed.connect(self._tasks_changed)
+        self.notebook.start_requested.connect(lambda task_id: self._check_tasks(task_id))
+        self.notebook.show()
+
+    def _next_check(self) -> str:
+        """When the active tasks are looked at next ("10:30")."""
+        if not self.tasks_timer.isActive():
+            return ""
+        at = time.localtime(time.time() + self.tasks_timer.remainingTime() / 1000)
+        return f"{at.tm_hour}:{at.tm_min:02d}"
+
+    def _tasks_changed(self):
+        self.button.set_notes_count(sum(t.status == "active" for t in self.tasks))
+
+    def _check_tasks(self, task_id: str = ""):
+        """Every half hour (or "Začít teď", task_id): the first active task that hasn't run yet gets offered as a new
+        session in its folder, after the user's yes (by voice through the agent, or a click on the bubble)."""
+        asked = bool(task_id)
+        task = next((t for t in self.tasks if t.id == task_id), None) if asked else tasks.next_to_offer(self.tasks)
+        if not task:
+            return
+        if not self.claude.connected:
+            if asked:
+                self._notify("Úkol spustím, až bude Claude připojený (Nastavení › Claude).", error=True)
+            return
+        folder = agent.known_folder(task.folder)
+        if not folder:
+            if asked:
+                self._notify(f"Složka {task.folder or '(žádná)'} není v seznamu složek Claude Code, úkol nemá kde "
+                             "běžet. Vyber v poznámkách jinou.", error=True)
+            return
+        if self._confirm:  # another question waits for the user: this one comes next time
+            if asked:
+                self._notify("Nejdřív odpověz na otázku, která čeká, pak úkol začni znovu.")
+            return
+        label = agent.folder_label(folder)
+        title = task.title or "bez názvu"
+        log.info("Úkol ve složce %s: nabízím spuštění", label)
+        self._confirm = {"id": f"task-{task.id}-{time.monotonic()}", "kind": "task", "task": task.id,
+                         "shown": time.monotonic()}
+        self.confirm_timer.start()
+        self._feed_update(you="", reply="", send={"tool": "task", "name": f"Úkol: {title}", "folder": label,
+                                                  "message": "nová relace se zadáním úkolu", "status": "confirm",
+                                                  "session_id": ""})
+        self._set_agent_state("confirm")
+        answer = " Klikni sem a začnu" + (", nebo řekni agentovi „jo“." if self.cfg["agent"] else ".")
+        confirm_id = self._confirm["id"]
+        self._notify(f"Otevřu pro něj novou relaci ve složce {label}.{answer}", kind="waiting", title=f"Úkol: {title}",
+                     on_click=lambda: self._task_clicked(confirm_id))
+        self._speak(f"{'Úkol' if asked else 'Aktivní úkol'}: {title}. Otevřu pro něj novou relaci ve složce {label}. "
+                    "Mám?", wait=True, kind="confirm")
+
+    def _task_clicked(self, confirm_id: str):
+        """A click on the task's bubble: yes, while that question still waits."""
+        if self._confirm and self._confirm["id"] == confirm_id:
+            request, self._confirm = self._confirm, None
+            self.confirm_timer.stop()
+            self._answer_task(request, True, "")
+
+    def _answer_task(self, request: dict, verdict: bool | None, text: str):
+        task = next((t for t in self.tasks if t.id == request["task"]), None)
+        if verdict and task:
+            log.info("Úkol: spouštím")
+            self._feed_update(send=dict(self._feed.get("send") or {}, status="opening"))
+            self._set_agent_state(self._agent_rest())
+            prompt, name = tasks.prompt_for(task), self.cfg["name"]
+            threading.Thread(target=lambda: self.bridge.task_done.emit(
+                task.id, *tasks.start_session(task.folder, prompt, name)), daemon=True).start()
+            return
+        if verdict is False and task:
+            task.declined = time.time()  # not offered again by itself
+            self._save_tasks()
+            log.info("Úkol: odmítnut")
+        if send := self._feed.get("send"):
+            self._feed_update(send=dict(send, status="cancelled" if verdict is False else "expired"))
+        self._set_agent_state(self._agent_rest())
+        if verdict is None and text:  # no answer to it ("a co m-tex?"): meant for the agent
+            self._agent_heard(text)
+
+    def _task_done(self, task_id: str, ok: bool, text: str):
+        task = next((t for t in self.tasks if t.id == task_id), None)
+        log.info("Úkol: relace %s", "otevřena" if ok else "nejde otevřít")
+        if ok and task:
+            task.started = time.time()
+            self._save_tasks()
+        if send := self._feed.get("send"):
+            self._feed_update(send=dict(send, status="opened" if ok else "failed"))
+        if not ok:
+            self._notify(text, error=True, title="Úkol se nespustil")
+
+    def _save_tasks(self):
+        try:
+            tasks.save(self.tasks)
+        except OSError as e:
+            log.exception("Úkoly nejde uložit")
+            self._notify(f"Úkoly nejde uložit: {e}", error=True)
+        if self.notebook and self.notebook.isVisible():
+            self.notebook.refresh()
+        self._tasks_changed()
 
     def _agent_rest(self) -> str:
         """What the agent's chip shows when it isn't listening or speaking."""
@@ -1730,6 +1943,7 @@ class Dictation:
         self.recorder.configure(self.cfg["mic"])
         self.recorder.split = self.cfg["live_transcribe"]
         self._set_button_visible(self.cfg["show_button"])
+        self.button.set_fade_after(self.cfg["fade_after_s"])
         self._apply_usage_setting()
         self._apply_sessions_setting()
         self._apply_agent_setting()

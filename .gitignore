@@ -7,6 +7,9 @@ recordings/
 sessions/
 config.json
 config.json.*
+tasks.json
+tasks.json.*
+/tasks/
 *.log
 portable
 

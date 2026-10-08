@@ -66,9 +66,9 @@ Modely (1,6–3,1 GB) si Orbit stáhne sám.
    - Projde všechny DLL/PYD/EXE a ověří, že každou importovanou knihovnu má balíček nebo čisté Windows.
    - Pak spustí `build\verify_bundle.py` přímo pythonem z balíčku. Ten běží s minimálním `PATH`,
      `QT_QPA_PLATFORM=offscreen` a `ORBIT_DATA_DIR`/`ORBIT_CLAUDE_DIR` v `%TEMP%`.
-   - `verify_bundle.py` naimportuje všechny moduly `app\` a balíčky a vytvoří okno nastavení mimo obrazovku
-     (screenshot uloží do `%TEMP%\orbit-verify-*`). Zkontroluje hlas `winrt` a pošle ukázkovou událost hooku
-     `cc_hook.py`.
+   - `verify_bundle.py` naimportuje všechny moduly `app\` a balíčky a vytvoří okno nastavení i okno Poznámek
+     mimo obrazovku (screenshoty uloží do `%TEMP%\orbit-verify-*`; u Poznámek nejdřív uloží a znovu načte ukázkový
+     úkol v dočasném `tasks.json`). Zkontroluje hlas `winrt` a pošle ukázkovou událost hooku `cc_hook.py`.
    - S Piperem a staženým hlasem (`models\piper` checkoutu, jinak `%LOCALAPPDATA%\Orbit\models\piper`) zkusí
      předčítání z balíčku ve složce `Jiří Nový` (junction, hlas zkopírovaný do tempu, text „.“, nic není slyšet):
      espeak-ng v 1.0.0 cestu s diakritikou neotevřel a ukončil proces. Bez hlasu se kontrola přeskočí.
@@ -145,8 +145,8 @@ Python a Qt podepsané už jsou (PSF, The Qt Company).
 - Aktualizace přes starou verzi nejdřív smaže `runtime\Lib`, `assets\`, `whisper\` a `app\`, ať po staré verzi
   nezůstanou soubory. Zbytek `runtime\` (python.exe, stdlib) nechá, protože ho Claude Code může kdykoli spustit pro
   Orbitovy hooky a stavový řádek: soubory se přepisují po jednom a ten, který běžící hook drží, se přejmenuje na
-  `*.orbit-old` (`MoveAsideIfInUse`), smaže ho další aktualizace nebo odinstalace. Spuštěním zatím neověřeno, před
-  vydáním vyzkoušet testovací variantou `.iss` (viz CLAUDE.md).
+  `*.orbit-old` (`MoveAsideIfInUse`), smaže ho další aktualizace nebo odinstalace. Ověřeno 8. 10. na 1.1.0 testovací
+  variantou `.iss` s `python.exe` spouštěným každých 100 ms (podrobnosti a jedno úskalí s Restart Managerem v CLAUDE.md).
 - **Odinstalace:**
   - Nejdřív spustí `runtime\python.exe -s Orbit.pyw --cleanup`. To odebere hooky, status line a klíč Run *této*
     instalace, jiná kopie Orbitu je zachovaná.

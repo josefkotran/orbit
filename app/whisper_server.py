@@ -330,7 +330,10 @@ def apply_replacements(text: str, replacements: list[list[str]]) -> str:
     return text
 
 
-_COMMAND_RE = re.compile(r"\s*\b(nov(?:ý|á)\s+(?:řádek|řádka|odstavec))\b[\s,.;:!?]*", re.IGNORECASE)
+# "Odstavec" alone too, but only as a phrase of its own between punctuation ("Ahoj Andrej, odstavec, přeposílám"):
+# "přepiš ten odstavec" stays text.
+_COMMAND_RE = re.compile(r"\s*\bnov(?:ý|á)\s+(?:řádek|řádka|odstavec)\b[\s,.;:!?]*"
+                         r"|(?:^|(?<=[,.;:!?…]))\s*odstavec\s*(?:[,.;:!?…][\s,.;:!?…]*|$)", re.IGNORECASE)
 
 
 # Terminal commands: only as a sentence of their own, so "… tak mu to odešli" stays text.
@@ -348,8 +351,9 @@ def terminal_command(text: str) -> tuple[str, str]:
 
 
 def apply_voice_commands(text: str) -> str:
-    """'nový řádek' -> line break, 'nový odstavec' -> empty line; the next word gets a capital letter."""
-    text = _COMMAND_RE.sub(lambda m: "\n\n" if "odstavec" in m.group(1).lower() else "\n", text)
+    """'nový řádek' -> line break, 'nový odstavec' (or 'odstavec' alone) -> empty line; the next word gets a capital
+    letter."""
+    text = _COMMAND_RE.sub(lambda m: "\n\n" if "odstavec" in m.group(0).lower() else "\n", text)
     return re.sub(r"\n(\w)", lambda m: "\n" + m.group(1).upper(), text)
 
 

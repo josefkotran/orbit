@@ -1,5 +1,6 @@
-"""Small things off Orbit's hot paths: the session panel repaints only when its rows change, and a kept recording
-is written after the text is on its way to the window.
+"""Small things off Orbit's hot paths: the session panel repaints only when its rows change (the turning screwdrivers
+of working sessions only their own squares), and a kept recording is written after the text is on its way to the
+window.
 
     .venv\\Scripts\\python.exe -m unittest discover -s tests -p "test_ui*.py"
 """
@@ -7,6 +8,7 @@ import atexit
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -23,9 +25,25 @@ if "app.config" not in sys.modules:  # nothing a test does may touch the real da
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np  # noqa: E402
+from PySide6.QtGui import QRegion  # noqa: E402
+from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from app import main, ui  # noqa: E402
 from app.sessions import Session  # noqa: E402
+
+
+class FakeTimer:
+    def __init__(self):
+        self.on = False
+
+    def isActive(self):
+        return self.on
+
+    def start(self):
+        self.on = True
+
+    def stop(self):
+        self.on = False
 
 
 class SessionRepaintTest(unittest.TestCase):
@@ -33,7 +51,7 @@ class SessionRepaintTest(unittest.TestCase):
         calls = []
         button = SimpleNamespace(_sessions=[], _session_rows=[], _sessions_look=ui.FloatingButton._sessions_look,
                                  _relayout=lambda: calls.append("relayout"), _auto_align=lambda: None,
-                                 update=lambda: calls.append("update"))
+                                 update=lambda: calls.append("update"), _work_timer=FakeTimer())
 
         def poll(state="working", context=0.31, message=""):
             return [Session(id="a", cwd="C:/m-tex", topic="Katalog", state=state, context_pct=context * 100,
@@ -54,6 +72,35 @@ class SessionRepaintTest(unittest.TestCase):
         calls.clear()
         ui.FloatingButton.set_sessions(button, poll(state="done", context=0.32))
         self.assertEqual(calls, ["update"])
+        self.assertFalse(button._work_timer.on)  # nothing works: no screwdriver turns
+
+    def test_screwdrivers_turn_in_their_squares_only(self):
+        app = QApplication.instance()
+        if app is not None and not isinstance(app, QApplication):  # another test's QGuiApplication: a widget
+            # needs a QApplication, so this one runs in a process of its own
+            test = f"{__name__}.SessionRepaintTest.test_screwdrivers_turn_in_their_squares_only"
+            run = subprocess.run([sys.executable, "-m", "unittest", test], cwd=Path(__file__).parent,
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
+            self.assertEqual(run.returncode, 0, run.stderr[-2000:])
+            return
+        app or QApplication([])
+        button = ui.FloatingButton(lambda: 0.0)
+        button.set_claude(True)
+        button.set_usage_visible(True)
+        button.set_sessions([Session(id="a", cwd="C:/m-tex", topic="Katalog", state="working"),
+                             Session(id="b", cwd="C:/orbit", topic="Barvy", state="idle")])
+        self.assertTrue(button._work_timer.isActive())
+        button.grab()  # a full paint: where the screwdriver is
+        self.assertEqual(len(button._work_icons), 1)
+        square = QRegion(button._work_icons[0].toAlignedRect())
+        self.assertTrue(button._only_work_icons(square))
+        self.assertFalse(button._only_work_icons(square + QRegion(0, 0, 40, 40)))
+        before = button._work_angle()
+        button._work_tick()
+        self.assertNotEqual(button._work_angle(), before)
+        self.assertEqual(ui.STATE_LABELS["idle"], "hotovo")  # only "pracuje" and "hotovo" (and what needs the user)
+        button.set_sessions([Session(id="b", cwd="C:/orbit", topic="Barvy", state="done")])
+        self.assertFalse(button._work_timer.isActive())
 
 
 class SaveAfterTextTest(unittest.TestCase):

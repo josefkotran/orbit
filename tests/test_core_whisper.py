@@ -126,6 +126,25 @@ class CleanText(unittest.TestCase):
         self.assertEqual(ws.clean_text(" Dobrý\tden,\nPepo. "), "Dobrý den, Pepo.")
 
 
+class VoiceCommands(unittest.TestCase):
+    def test_new_line_and_paragraph(self):
+        commands = ws.apply_voice_commands
+        self.assertEqual(commands("Ahoj, nový řádek, jak se máš?"), "Ahoj,\nJak se máš?")
+        self.assertEqual(commands("Ahoj Andreji. Nový odstavec. Posílám to."), "Ahoj Andreji.\n\nPosílám to.")
+
+    def test_paragraph_alone_between_punctuation(self):
+        commands = ws.apply_voice_commands
+        # Pepa's dictation into Outlook, 8 Oct
+        self.assertEqual(commands("Ahoj Andrej, odstavec, přeposílám, odstavec, s pozdravem, Pepa."),
+                         "Ahoj Andrej,\n\nPřeposílám,\n\nS pozdravem, Pepa.")
+        self.assertEqual(commands("Díky. Odstavec. Pepa"), "Díky.\n\nPepa")
+        self.assertEqual(commands("Odstavec, a ještě jedna věc."), "\n\nA ještě jedna věc.")
+        self.assertEqual(commands("Ahoj Andrej, odstavec"), "Ahoj Andrej,\n\n")
+        for text in ("Přepiš ten odstavec.", "Druhý odstavec smaž, je navíc.", "Tenhle odstavec, prosím, zkrať.",
+                     "Když řeknu sem odstavec, tak by se to mělo oddělit.", "Odstavce jsou dva."):
+            self.assertEqual(commands(text), text)
+
+
 class FakeLaunch(unittest.TestCase):
     """_launch with a Python stand-in for whisper-server.exe (only Popen is replaced)."""
 

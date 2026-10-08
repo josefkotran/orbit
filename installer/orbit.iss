@@ -64,10 +64,10 @@ Name: "en"; MessagesFile: "compiler:Default.isl"
 [CustomMessages]
 cs.LaunchOrbit=Spustit Orbit
 en.LaunchOrbit=Start Orbit
-cs.ShortcutComment=Diktování česky a přehled Clauda
-en.ShortcutComment=Czech dictation and a Claude overview
-cs.DeleteUserData=Smazat i data Orbitu?%n%n%1%n%nJe tam nastavení, slovník, nahrávky a stažené modely (i několik GB). Když je necháš, Orbit na ně po nové instalaci naváže.
-en.DeleteUserData=Also delete Orbit's data?%n%n%1%n%nIt holds the settings, vocabulary, recordings and downloaded models (up to several GB). Keep it and a new install picks up where you left off.
+cs.ShortcutComment=Diktování česky, přehled Clauda a poznámky
+en.ShortcutComment=Czech dictation, a Claude overview and notes
+cs.DeleteUserData=Smazat i data Orbitu?%n%n%1%n%nJe tam nastavení, slovník, poznámky, nahrávky a stažené modely (i několik GB). Když je necháš, Orbit na ně po nové instalaci naváže.
+en.DeleteUserData=Also delete Orbit's data?%n%n%1%n%nIt holds the settings, vocabulary, notes, recordings and downloaded models (up to several GB). Keep it and a new install picks up where you left off.
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked

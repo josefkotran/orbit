@@ -929,9 +929,9 @@
 
   /* ---------- Claude Code panel: each feature plays its own little scene ---------- */
   var W = {
-    panel: $("#wPanel"), agent: $("#wAgent"), note: $("#wNote"), noteText: $("#wNoteText"),
+    panel: $("#wPanel"), agent: $("#wAgent"), notes: $("#wNotes"), note: $("#wNote"), noteText: $("#wNoteText"),
     bar1: $("#wBar1"), bar2: $("#wBar2"), pct1: $("#wPct1"), pct2: $("#wPct2"),
-    s1: $("#s1"), s2: $("#s2"), s3: $("#s3"), status: $("#fStatus"), you: $("#fYou"), reply: $("#fReply"),
+    s1: $("#s1"), s2: $("#s2"), s3: $("#s3"), s4: $("#s4"), status: $("#fStatus"), you: $("#fYou"), reply: $("#fReply"),
     target: $("#fTarget"), tName: $("#fTName"), tFolder: $("#fTFolder"), tStatus: $("#fTStatus"), msg: $("#fMsg"), url: $("#fUrl"),
     bubble: $("#bubble"), bIcon: $("#bIcon"), bTitle: $("#bTitle"), bNote: $("#bNote"), bText: $("#bText"), speaker: $("#wSpeaker"),
     slot: $(".w-slot")
@@ -953,12 +953,14 @@
     o = o || {};
     W.status.textContent = o.status || ""; W.status.style.color = o.statusColor || "#9AA1AD";
     W.you.textContent = o.you || ""; W.reply.textContent = o.reply || "";
+    W.you.hidden = W.reply.hidden = !!o.tName && !o.you && !o.reply;  // Orbit's own question (a task): no exchange above it
     W.target.hidden = !o.tName; W.tName.textContent = o.tName || ""; W.tFolder.textContent = o.tFolder || "";
     W.tStatus.textContent = o.tStatus || ""; W.tStatus.style.color = o.tColor || "#9AA1AD";
     W.msg.hidden = !o.msg; W.msg.textContent = o.msg || ""; W.url.hidden = !o.url; W.url.textContent = o.url || "";
     W.agent.className = "w-agent" + (o.chip ? " " + o.chip : "");
   }
   function bubble(o) {
+    W.bubble.classList.remove("press");
     if (!o) { W.bubble.classList.remove("on"); W.speaker.classList.remove("reading"); W.slot.classList.remove("busy"); return; }
     W.bIcon.textContent = o.icon; W.bIcon.style.background = o.color; W.bTitle.textContent = o.title;
     W.bNote.textContent = o.note; W.bNote.style.color = o.color; W.bText.textContent = o.text;
@@ -967,15 +969,15 @@
   var IDLE_FEED = { you: "Ty: Co dělá relace s\u00a0ceníkem?", reply: "Doplňuje ceny do tabulky, zbývají jí dvě kategorie." };
   function baseline(keepFeed) {
     limits(42, 18); W.noteText.textContent = "2\u00a0h 14\u00a0min"; W.note.classList.remove("warn");
-    [W.s1, W.s2, W.s3].forEach(function (r) { clearTimeout(r.flashT); r.classList.remove("flash"); });  // a scene left mid-flash
-    session(W.s1, "working"); session(W.s2, "waiting"); session(W.s3, "working");
+    [W.s1, W.s2, W.s3, W.s4].forEach(function (r) { clearTimeout(r.flashT); r.classList.remove("flash"); });  // a scene left mid-flash
+    session(W.s1, "working"); session(W.s2, "waiting"); session(W.s3, "working"); W.s4.hidden = true;
     feed(keepFeed ? IDLE_FEED : null); bubble(null);
   }
   function typeInto(tl, el, text, at, dur) {
     var o = { n: 0 };
     tl.to(o, { n: text.length, duration: dur || text.length * 0.028, ease: "none", onUpdate: function () { el.textContent = text.slice(0, Math.round(o.n)); } }, at);
   }
-  var ZONES = { limity: ["limits"], relace: ["sessions"], bubliny: ["sessions"], artefakty: [], agent: ["agent", "sessions"], chrome: ["agent"] };
+  var ZONES = { limity: ["limits"], relace: ["sessions"], bubliny: ["sessions"], artefakty: [], agent: ["agent", "sessions"], chrome: ["agent"], poznamky: ["agent", "sessions"] };
   var SCENES = {
     limity: function (tl) {
       tl.call(function () { limits(0, 0); });
@@ -1031,9 +1033,22 @@
       }, null, 3.9);
       tl.call(function () { W.tStatus.textContent = "otevřeno ✓"; W.tStatus.style.color = "#3DD68C"; }, null, 4.9);
       tl.to({}, { duration: 2.6 });
+    },
+    // the notebook's active task: Orbit offers it (panel, bubble, voice), a click on the bubble opens its session
+    poznamky: function (tl) {
+      tl.call(function () {
+        feed({ status: "Mám? Řekni „jo“", statusColor: "#F5A524", chip: "confirm", tName: "→ Úkol: Faktury za září", tFolder: "faktury",
+               tStatus: "čeká na tvoje „jo“", tColor: "#F5A524", msg: "nová relace se zadáním úkolu" });
+        bubble({ icon: "?", color: "#F5A524", title: "Úkol: Faktury za září", note: "čeká na tebe", text: "Otevřu pro něj novou relaci ve složce faktury. Klikni sem a začnu, nebo řekni agentovi „jo“.", read: true });
+      }, null, 0.9);
+      tl.call(function () { W.speaker.classList.remove("reading"); }, null, 3.9);
+      tl.call(function () { W.bubble.classList.add("press"); }, null, 4.7);
+      tl.call(function () { bubble(null); W.agent.className = "w-agent"; W.status.textContent = ""; W.tStatus.textContent = "otevírám…"; W.tStatus.style.color = "#9AA1AD"; }, null, 4.95);
+      tl.call(function () { W.tStatus.textContent = "otevřeno ✓"; W.tStatus.style.color = "#3DD68C"; W.s4.hidden = false; session(W.s4, "working", true); }, null, 6);
+      tl.to({}, { duration: 2.6 });
     }
   };
-  var SNAP = { limity: 3, relace: 5, bubliny: 3, artefakty: 3, agent: 6, chrome: 5 };  // reduced motion: one still frame (s)
+  var SNAP = { limity: 3, relace: 5, bubliny: 3, artefakty: 3, agent: 6, chrome: 5, poznamky: 3 };  // reduced motion: one still frame (s)
   var feats = $$(".feat"), featWrap = $("#features"), sceneTl = null, activeScene = null, hoverScene = null, scrollScene = "limity";
   function playScene(name) {
     if (name === activeScene) return;
@@ -1042,8 +1057,9 @@
     featWrap.classList.toggle("has-active", !!name);
     $$(".w-zone", W.panel).forEach(function (z) { z.classList.toggle("lit", (ZONES[name] || []).indexOf(z.dataset.zone) >= 0); });
     W.panel.classList.toggle("focus", !!(ZONES[name] || []).length);
+    W.notes.classList.toggle("lit", name === "poznamky");
     if (sceneTl) sceneTl.kill();
-    var agentScene = name === "agent" || name === "chrome";
+    var agentScene = name === "agent" || name === "chrome" || name === "poznamky";
     baseline(!agentScene);
     sceneTl = gsap.timeline({ repeat: -1, repeatDelay: 0.6, onRepeat: function () { baseline(!agentScene); } });
     SCENES[name](sceneTl);

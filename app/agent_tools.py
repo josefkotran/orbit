@@ -27,7 +27,7 @@ from urllib.parse import urlsplit
 os.environ.setdefault("NoDefaultCurrentDirectoryInExePath", "1")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app import browser, sessions  # noqa: E402
-from app.agent import known_folder, prefix  # noqa: E402
+from app.agent import is_screenshot, known_folder, prefix  # noqa: E402
 from app.claude_setup import environment, find_exe  # noqa: E402
 
 CMD = os.path.join(os.environ.get("SystemRoot") or r"C:\Windows", "System32", "cmd.exe")
@@ -42,6 +42,9 @@ TOOLS = [{
             "folder": {"type": "string", "description": "Celá cesta ke složce, např. C:/Users/jana/projekty/web"},
             "prompt": {"type": "string", "description": "První zadání pro novou relaci (slova uživatele), "
                                                         "nebo prázdné, když ji chce jen otevřít."},
+            "screenshot": {"type": "boolean", "description": "true, když uživatel chce k zadání přiložit svůj "
+                                                             "poslední snímek obrazovky (screenshot). Orbit ho najde "
+                                                             "sám."},
         },
         "required": ["folder"],
     },
@@ -102,7 +105,14 @@ def open_page(url: str, title: str = "") -> str:
     return browser.open_page(url, title, profile)
 
 
-def _task(prompt: str) -> str:
+def _start(source: str = "") -> str:
+    """How the first message starts: "<name> (hlasem přes Orbit):", or "<name> (<source>):" for a task from Orbit's
+    notebook (tasks.SOURCE; only Orbit itself passes a source, the MCP tool never does)."""
+    name = os.environ.get("ORBIT_USER_NAME", "")
+    return f"{name or 'Uživatel'} ({source}):" if source else prefix(name)
+
+
+def _task(prompt: str, source: str = "") -> str:
     """The new session's first message on one line, "<name> (hlasem přes Orbit): <the user's words>" ("" = none).
     Before the user's "jo" Orbit reads the words out without a "… (hlasem přes Orbit):" start and a Markdown link
     as its text only (main._ask_confirm), so what could hide there is refused: what was heard must be all that runs."""
@@ -123,7 +133,7 @@ def _task(prompt: str) -> str:
                          "Napiš ho znovu prostým textem.")
     # without " (it would end the quoted argument below) and a trailing \ (it would escape the quote)
     task = task.replace('"', "”").rstrip("\\")
-    return f"{prefix(name)} {task}" if task else ""  # whose words; and never a "-switch"
+    return f"{_start(source)} {task}" if task else ""  # whose words; and never a "-switch"
 
 
 def _console_window(pid: int) -> int:
@@ -171,7 +181,41 @@ def _minimize(pid: int, focused: int | None) -> None:
         time.sleep(0.01)
 
 
-def open_session(folder: str, prompt: str = "") -> str:
+def _user_environment() -> dict:
+    """The environment a program started from the desktop gets (Windows' and the user's variables from the registry),
+    for a new session instead of this process's own: the agent's Claude Code gives the tools it runs NO_COLOR=1,
+    CLAUDE_PROJECT_DIR (its own empty folder), GCM_INTERACTIVE=never, GIT_TERMINAL_PROMPT=0, GIT_EDITOR=true…, and a
+    session that inherited them had no colours and git couldn't ask for a login. Without ANTHROPIC_API_KEY, like every
+    Claude Code Orbit starts (claude_setup.environment, also used when Windows won't build the block)."""
+    k32, advapi, userenv = ctypes.WinDLL("kernel32"), ctypes.WinDLL("advapi32"), ctypes.WinDLL("userenv")
+    k32.GetCurrentProcess.restype = wintypes.HANDLE
+    token, block, env = wintypes.HANDLE(), ctypes.c_void_p(), {}
+    if not advapi.OpenProcessToken(wintypes.HANDLE(k32.GetCurrentProcess()), 0x000A, ctypes.byref(token)):
+        return environment()  # (TOKEN_QUERY | TOKEN_DUPLICATE)
+    try:
+        if not userenv.CreateEnvironmentBlock(ctypes.byref(block), token, False):
+            return environment()
+        try:
+            pos = block.value
+            while entry := ctypes.wstring_at(pos):  # "NAME=value\0…\0\0"
+                name, _, value = entry.partition("=")
+                if name and name.upper() != "ANTHROPIC_API_KEY":
+                    env[name] = value
+                pos += (len(entry) + 1) * ctypes.sizeof(ctypes.c_wchar)
+        finally:
+            userenv.DestroyEnvironmentBlock(block)
+    finally:
+        k32.CloseHandle(token)
+    if os.environ.get("ORBIT_CLAUDE_DIR"):  # tests: the same fake Claude Code folder as Orbit
+        env["CLAUDE_CONFIG_DIR"] = os.environ["ORBIT_CLAUDE_DIR"]
+    return env or environment()
+
+
+def open_session(folder: str, prompt: str = "", screenshot: str = "", source: str = "") -> str:
+    """screenshot: the path of the screenshot Orbit named in its question (the hook puts it there; the agent's own
+    true or anything else isn't a path in the Screenshots folder and is refused). The session gets the path in its
+    first message and looks at the picture itself: Alt+V would need its window in front and keys sent into it.
+    source: where the task comes from when it isn't the voice agent (tasks.start_session), see _start."""
     # only one of the user's folders (agent.known_folder), the same check Orbit made before asking
     known = known_folder(folder)
     if not known:
@@ -181,7 +225,11 @@ def open_session(folder: str, prompt: str = "") -> str:
     path = Path(known)
     if not path.is_dir():
         raise ValueError(f"Složka {folder} neexistuje.")
-    task = _task(prompt)
+    if screenshot and not is_screenshot(screenshot):
+        raise ValueError("Snímek obrazovky jsem nenašel, relaci jsem neotevřel. Zkus to znovu.")
+    task = _task(prompt, source)
+    if screenshot:
+        task = f"{task or _start(source)} Přiložený snímek obrazovky: {screenshot}"
     exe = find_exe()
     if not exe:
         raise ValueError("Claude Code tu není nainstalovaný.")
@@ -201,13 +249,14 @@ def open_session(folder: str, prompt: str = "") -> str:
     # default terminal); a console started minimized Windows never hands over and keeps it in the classic window.
     focused = ctypes.windll.user32.GetForegroundWindow() if background else None
     proc = subprocess.Popen(f'cmd.exe /s /v:on /k "{command}"', executable=CMD, cwd=path,
-                            env=dict(environment(), ORBIT_CLAUDE=exe, ORBIT_TASK=task), close_fds=True,
+                            env=dict(_user_environment(), ORBIT_CLAUDE=exe, ORBIT_TASK=task), close_fds=True,
                             creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP)
+    shot = " Snímek obrazovky má v zadání." if screenshot else ""
     if background:
         threading.Thread(target=_minimize, args=(proc.pid, focused), daemon=True).start()
-        return f"Nová relace se zadáním běží ve složce {path}, minimalizovaná na liště."
+        return f"Nová relace se zadáním běží ve složce {path}, minimalizovaná na liště.{shot}"
     if task:
-        return f"Nová relace se otevírá ve složce {path}. Claude Code se nejdřív zeptá na běh bez oprávnění."
+        return f"Nová relace se otevírá ve složce {path}. Claude Code se nejdřív zeptá na běh bez oprávnění.{shot}"
     return f"Nová relace se otevírá ve složce {path} v novém okně terminálu."
 
 
@@ -235,7 +284,9 @@ def handle(request: dict) -> dict | None:
         name = params.get("name")
         try:
             if name == "open_session":
-                text = open_session(str(args.get("folder", "")), str(args.get("prompt", "")))
+                shot = args.get("screenshot")  # a path from Orbit's hook; the agent's own true counts as none
+                text = open_session(str(args.get("folder", "")), str(args.get("prompt", "")),
+                                    shot if isinstance(shot, str) else "")
             elif name == "find_pages":
                 text = find_pages(str(args.get("query", "")))
             elif name == "open_page":

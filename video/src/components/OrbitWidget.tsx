@@ -73,7 +73,7 @@ type Props = {
   level?: number;
   phase?: number;
   accent?: string;
-  /** Panel (and colour dots + agent chip) shown at all, and how visible. */
+  /** Panel (and colour dots, agent and notebook chips) shown at all, and how visible. */
   panel?: boolean;
   panelOpacity?: number;
   /** Override for the panel height while it grows (logical px). */
@@ -85,6 +85,8 @@ type Props = {
   feed?: Feed | null;
   agent?: AgentState;
   agentLevel?: number;
+  /** Tasks in Aktivní: the number on the notebook chip at the panel's left end (0 = none). */
+  notes?: number;
   reading?: boolean;
   muted?: boolean;
   theme?: "blue" | "violet" | "teal";
@@ -197,6 +199,47 @@ export const AgentChip: React.FC<{ state: AgentState; level: number; phase: numb
   );
 };
 
+/** The user's notebook (app/ui.py _paint_notes_chip): an empty spiral notebook in a chip like the agent's, with the
+ * number of active tasks on an accent badge. */
+export const NotesChip: React.FC<{ active: number; accent: string }> = ({ active, accent }) => {
+  const r = D.AGENT_D / 2;
+  const pad = 8;
+  const size = D.AGENT_D + 2 * pad;
+  const cover = { left: -5, top: -7.5, w: 12, h: 15 };
+  const ink = "#C9D1DC";
+  const badge = { x: r * 0.62, y: -r * 0.62 };
+  return (
+    <svg width={size} height={size} viewBox={`${-r - pad} ${-r - pad} ${size} ${size}`} style={{ overflow: "visible" }}>
+      <circle r={r - 0.5} fill="#181B22" stroke="rgba(255,255,255,.11)" strokeWidth={1} />
+      <rect x={cover.left} y={cover.top} width={cover.w} height={cover.h} rx={2} fill="#22304A" stroke={ink} strokeWidth={1.4} />
+      {[0, 1, 2, 3].map((i) => {
+        // Qt drawArc(QRectF(left - 2.2, y - 1.1, 3.4, 2.2), 30°, 300°): a ring round the spine, open towards the cover
+        const y = cover.top + 2.5 + i * 3.3;
+        return (
+          <path key={i} d={arc(1.7, 1.1, 30, 300)} transform={`translate(${cover.left - 0.5} ${y})`} fill="none" stroke={ink} strokeWidth={1.2} />
+        );
+      })}
+      {active ? (
+        <>
+          <circle cx={badge.x} cy={badge.y} r={6.5} fill={accent} />
+          <text
+            x={badge.x}
+            y={badge.y}
+            textAnchor="middle"
+            dominantBaseline="central"
+            fontFamily={UI}
+            fontSize={9}
+            fontWeight={700}
+            fill="#0B1424"
+          >
+            {active < 10 ? String(active) : "9+"}
+          </text>
+        </>
+      ) : null}
+    </svg>
+  );
+};
+
 /** Qt's lighter()/darker() approximated in HSV value. */
 function shade(hex: string, factor: number) {
   const n = parseInt(hex.slice(1), 16);
@@ -222,6 +265,7 @@ export const OrbitWidget: React.FC<Props> = ({
   feed = null,
   agent = "idle",
   agentLevel = 0,
+  notes = 0,
   reading = false,
   muted = false,
   theme = "blue",
@@ -378,7 +422,7 @@ export const OrbitWidget: React.FC<Props> = ({
     });
   }
 
-  // colour dots and the agent chip, just above the panel's right end
+  // colour dots and the agent chip, just above the panel's right end; the notebook chip above its left end
   const dotsY = D.STRIP_H - (4 + D.AGENT_D / 2);
   const firstDot = D.PANEL_W - D.PILL_H / 2 - D.DOT_STEP * 2;
   const themes: { name: "blue" | "violet" | "teal"; color: string }[] = [
@@ -387,6 +431,7 @@ export const OrbitWidget: React.FC<Props> = ({
     { name: "teal", color: C.teal },
   ];
   const agentX = firstDot - D.PILL_H / 2 - 8 - D.AGENT_D / 2;
+  const notesX = 2 + D.AGENT_D / 2; // the notebook: same strip, at the panel's left end (above "Claude")
 
   return (
     <div style={{ position: "relative", width: W, height: H, fontFamily: UI, fontSize: 11, color: TEXT }}>
@@ -442,6 +487,9 @@ export const OrbitWidget: React.FC<Props> = ({
           })}
           <div style={{ position: "absolute", left: agentX - D.AGENT_D / 2 - 8, top: dotsY - D.AGENT_D / 2 - 8 }}>
             <AgentChip state={agent} level={agentLevel} phase={phase} accent={accent} />
+          </div>
+          <div style={{ position: "absolute", left: notesX - D.AGENT_D / 2 - 8, top: dotsY - D.AGENT_D / 2 - 8 }}>
+            <NotesChip active={notes} accent={accent} />
           </div>
         </div>
       ) : null}

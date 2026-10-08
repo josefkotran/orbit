@@ -1,8 +1,8 @@
 """Smoke test of a built bundle, run by build_installer.py with the bundle's own runtime\\python.exe:
     runtime\\python.exe build\\verify_bundle.py <bundle> <temp folder> [<folder with a Piper voice>]
 
-Imports every module of app/ and the packages Orbit needs, builds the settings dialog offscreen
-(QT_QPA_PLATFORM=offscreen, a screenshot goes to the temp folder), feeds a sample event to the
+Imports every module of app/ and the packages Orbit needs, builds the settings dialog and the notes window
+offscreen (QT_QPA_PLATFORM=offscreen, screenshots go to the temp folder), feeds a sample event to the
 Claude Code hook and, with a downloaded Piper voice, reads a sentence aloud from a folder with diacritics.
 The caller points ORBIT_DATA_DIR and ORBIT_CLAUDE_DIR into the temp folder.
 Prints what failed and exits with 1 if anything did.
@@ -110,6 +110,27 @@ def settings_dialog():
     return shot
 
 
+def notebook_window():
+    """The notes: a task saved to tasks.json in the (temporary) data folder, read back, and the Poznámky window."""
+    from PySide6.QtWidgets import QApplication
+    from app import notebook, tasks, theme
+
+    qapp = QApplication.instance() or QApplication([])
+    theme.apply(qapp)
+    task =tasks.new("Ukázkový úkol", "active")
+    task.context = "Kontext úkolu"
+    task.notes.append({"at": time.time(), "text": "První poznámka"})
+    tasks.save([task])
+    if [(t.title, t.status, len(t.notes)) for t in tasks.load()] != [("Ukázkový úkol", "active", 1)]:
+        raise RuntimeError(f"tasks.json se nenačetl stejně: {tasks.path()}")
+    win = notebook.Notebook(tasks.load(), [str(temp)], {}, lambda: "10:30")
+    win.adjustSize()
+    shot = temp / "notebook.png"
+    win.grab().save(str(shot))
+    win.deleteLater()
+    return shot
+
+
 def tts_engines():
     from PySide6.QtTextToSpeech import QTextToSpeech
     engines = QTextToSpeech.availableEngines()
@@ -162,6 +183,7 @@ def piper_nonascii():
 
 
 check("dialog nastavení (offscreen)", settings_dialog)
+check("okno Poznámek (offscreen)", notebook_window)
 check("hlasy QTextToSpeech", tts_engines)
 check("hook Claude Code (cc_hook.py)", hook)
 if piper and voices:

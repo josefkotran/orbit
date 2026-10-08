@@ -291,6 +291,7 @@ export const Claude: React.FC = () => {
           feed={feedAt(f)}
           agent={st === "idle" ? "idle" : st}
           agentLevel={agentLevel}
+          notes={2}
           phase={f * 0.12}
           reading={f >= T.read + 4 && f < T.end}
         />

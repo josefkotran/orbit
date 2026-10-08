@@ -6,12 +6,12 @@ from pathlib import Path
 from PySide6.QtCore import (QEasingCurve, QEvent, QPoint, QPointF, QPropertyAnimation, QRect, QRectF, QSize,
                             QStandardPaths, Qt, QTimer, QUrl, Signal)
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontMetricsF, QGuiApplication, QIcon, QPainter,
-                           QPainterPath, QPen, QPixmap, QPolygonF, QRadialGradient, QTextLayout)
+                           QPainterPath, QPen, QPixmap, QPolygonF, QRadialGradient, QRegion, QTextLayout)
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QToolTip,
                                QVBoxLayout, QWidget)
 
-from . import config, downloads, hotkey, theme, vocab, voice
+from . import colors, config, downloads, hotkey, theme, vocab, voice
 from .claude_usage import Usage, countdown, reset_text
 from .config import MODEL_LABELS
 from .sessions import STATE_LABELS, Session
@@ -37,9 +37,28 @@ SESSION_COLORS = {  # Claude Code session state -> status dot
     "working": QColor("#5B9DFF"),
     "waiting": QColor("#F5A524"),
     "done": QColor("#3DD68C"),
-    "idle": QColor("#5B6272"),
+    "idle": QColor("#3DD68C"),  # shown as done too
     "error": QColor("#E5484D"),
 }
+CHECK_GLYPH = ""  # "hotovo" in the panel; "pracuje" gets a turning screwdriver (_screwdriver)
+
+
+def _screwdriver(p: QPainter, center: QPointF, angle: float) -> None:
+    """A small screwdriver (tip up before turning by angle degrees) with the working colour on its handle."""
+    p.save()
+    p.translate(center)
+    p.rotate(angle)
+    metal = QColor("#C9D1DC")
+    p.setPen(QPen(metal, 1.3, Qt.SolidLine, Qt.RoundCap))
+    p.drawLine(QPointF(0, -6.5), QPointF(0, 0))  # shaft
+    p.setPen(QPen(metal, 2.2, Qt.SolidLine, Qt.FlatCap))
+    p.drawLine(QPointF(0, -6.6), QPointF(0, -5.6))  # blade
+    p.setPen(Qt.NoPen)
+    p.setBrush(SESSION_COLORS["working"])
+    p.drawRoundedRect(QRectF(-2.2, -0.5, 4.4, 7), 1.6, 1.6)  # handle
+    p.setBrush(QColor(0, 0, 0, 70))
+    p.drawRect(QRectF(-0.4, 0.8, 0.8, 4.6))  # its groove
+    p.restore()
 
 
 def paint_mic(p: QPainter, rect: QRectF, state: str) -> None:
@@ -52,6 +71,19 @@ def paint_mic(p: QPainter, rect: QRectF, state: str) -> None:
     p.setFont(font)
     p.setPen(QColor(fg))
     p.drawText(rect, Qt.AlignCenter, MIC_GLYPH)
+
+
+def color_icon(hex_: str, size: int = 16) -> QIcon:
+    """A coloured dot for a menu item (the folder colours)."""
+    pm = QPixmap(size, size)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setPen(Qt.NoPen)
+    p.setBrush(QColor(hex_))
+    p.drawEllipse(QRectF(2, 2, size - 4, size - 4))
+    p.end()
+    return QIcon(pm)
 
 
 def mic_icon(state: str, size: int = 64) -> QIcon:
@@ -111,10 +143,12 @@ class FloatingButton(QWidget):
     cancelled = Signal()
     moved = Signal(QPoint)  # new top-left of the button area, in screen coordinates
     menu_requested = Signal(QPoint)
+    folder_menu_requested = Signal(str, QPoint)  # a right click on a session: its folder
     session_clicked = Signal(str)
     mute_toggled = Signal()
     theme_chosen = Signal(str)
     agent_clicked = Signal()
+    notes_clicked = Signal()  # the notebook above the panel's left end: the user's tasks
     connect_clicked = Signal()  # "Připojit Clauda" in the panel
     statusline_clicked = Signal()  # "Zapnout" in the panel: the yes to Orbit's status line in Claude Code
 
@@ -140,7 +174,7 @@ class FloatingButton(QWidget):
         "failed": ("nepovedlo se", "#E5484D"), "cancelled": ("zrušeno", None), "changed": ("upravuje", None),
         "expired": ("nepotvrzeno", None), "held": ("čeká na schválení v relaci", "#F5A524")}
     STALE_AFTER_S = 600
-    IDLE_FADE_MS = 3000  # nothing happening for this long -> almost fully transparent
+    IDLE_FADE_MS = 3000  # nothing happening for this long -> almost fully transparent (set_fade_after: the setting)
     FADED_OPACITY = 0.3
 
     def __init__(self, level_source):
@@ -178,6 +212,8 @@ class FloatingButton(QWidget):
         self._forecast: datetime | None = None
         self._sessions: list[Session] = []
         self._session_rows: list[tuple[QRectF, Session]] = []
+        self._folder_colors: dict = {}  # config folder_colors: the user's colour per folder
+        self._notes_active = 0  # tasks in Aktivní (the notebook's number)
         self._attention = False  # a session waits for Pepa – don't fade out
         self._held = False  # a bubble points at the button – don't fade out either
         self._align = "right"  # which circle edge the panel lines up with
@@ -189,9 +225,16 @@ class FloatingButton(QWidget):
         self._timer = QTimer(self, interval=33)
         self._timer.timeout.connect(self._tick)
         self._timer.start()
+        # the screwdrivers of working sessions turn: only their small squares are repainted (paintEvent), the whole
+        # panel would cost ~20 ms a frame
+        self._work_phase = 0.0
+        self._work_icons: list[QRectF] = []  # where they were painted last
+        self._work_timer = QTimer(self, interval=80)
+        self._work_timer.timeout.connect(self._work_tick)
         self._clock = QTimer(self, interval=30_000)  # keeps the reset countdown current
         self._clock.timeout.connect(self.update)
         self._clock.start()
+        self._fade_off = False  # the settings say never
         self._fade_timer = QTimer(self, singleShot=True, interval=self.IDLE_FADE_MS)
         self._fade_timer.timeout.connect(self._fade_out)
         self._fade = QPropertyAnimation(self, b"windowOpacity", self)
@@ -316,6 +359,21 @@ class FloatingButton(QWidget):
         c = self._agent_center()
         return c is not None and math.hypot(pos.x() - c.x(), pos.y() - c.y()) <= self.AGENT_D / 2 + 2
 
+    def _notes_center(self) -> QPointF | None:
+        """The notebook's chip: in the same strip as the colour dots, at the panel's left end (above "Claude")."""
+        dots = self._dots()
+        return QPointF(self._panel.left() + 2 + self.AGENT_D / 2, dots[0][1].y()) if dots else None
+
+    def _on_notes(self, pos: QPointF) -> bool:
+        c = self._notes_center()
+        return c is not None and math.hypot(pos.x() - c.x(), pos.y() - c.y()) <= self.AGENT_D / 2 + 2
+
+    def set_notes_count(self, active: int) -> None:
+        """How many tasks are in Aktivní (a small number on the notebook)."""
+        if active != self._notes_active:
+            self._notes_active = active
+            self.update()
+
     # -- state ------------------------------------------------------------------------------
 
     def showEvent(self, event):
@@ -389,6 +447,22 @@ class FloatingButton(QWidget):
             self.update()
         else:  # clicks and tooltips get the current sessions (the rows stay where they were painted)
             self._session_rows = [(rect, new) for (rect, _), new in zip(self._session_rows, sessions)]
+        working = any(s.state == "working" for s in sessions)
+        if working != self._work_timer.isActive():
+            self._work_timer.start() if working else self._work_timer.stop()
+
+    def _work_angle(self) -> float:
+        """The screwdriver's tilt: it turns back and forth like screwing."""
+        return -45 + 24 * math.sin(self._work_phase)
+
+    def _work_tick(self) -> None:
+        self._work_phase = (self._work_phase + 0.55) % (2 * math.pi)
+        for rect in self._work_icons:
+            self.update(rect.toAlignedRect())
+
+    def set_folder_colors(self, chosen: dict) -> None:
+        self._folder_colors = dict(chosen)
+        self.update()
 
     def set_attention(self, on: bool) -> None:
         if on != self._attention:
@@ -455,8 +529,14 @@ class FloatingButton(QWidget):
         """Something happened worth a look – full opacity for a moment."""
         self._wake()
 
+    def set_fade_after(self, seconds: int) -> None:
+        """How long idle before it fades out (the settings); 0 = never."""
+        self._fade_off = seconds <= 0
+        self._fade_timer.setInterval(max(1, seconds) * 1000)
+        self._wake()
+
     def _wake(self) -> None:
-        """Fully visible now; when idle, fade out again after IDLE_FADE_MS."""
+        """Fully visible now; when idle, fade out again after the set time."""
         self._animate_opacity(1.0, 150)
         if self._can_fade():
             self._fade_timer.start()
@@ -465,7 +545,7 @@ class FloatingButton(QWidget):
 
     def _can_fade(self) -> bool:
         return self._state == "idle" and self._agent_state == "idle" and not (
-            self._hovered or self._attention or self._held or self._reading)
+            self._fade_off or self._hovered or self._attention or self._held or self._reading)
 
     def _fade_out(self) -> None:
         if QApplication.activePopupWidget():  # our context menu is open
@@ -494,12 +574,17 @@ class FloatingButton(QWidget):
     # -- painting ---------------------------------------------------------------------------
 
     def paintEvent(self, event):
+        if self._work_icons and self._has_panel and self._only_work_icons(event.region()):
+            self._paint_work_icons()
+            return
+        self._work_icons = []
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         if self._has_panel:
             self._paint_panel(p)
             self._paint_dots(p)
             self._paint_agent_chip(p)
+            self._paint_notes_chip(p)
         c = self._button_center()
         r = self.DIAMETER / 2
         if self._state == "recording":
@@ -558,6 +643,39 @@ class FloatingButton(QWidget):
                 p.setPen(QPen(QColor("#E6E8EC"), 1.5))
                 p.setBrush(Qt.NoBrush)
                 p.drawEllipse(c, r + 2.5, r + 2.5)
+
+    def _paint_notes_chip(self, p: QPainter) -> None:
+        """The user's notebook (their own tasks): an empty spiral notebook in a chip like the agent's, with the
+        number of active tasks."""
+        c = self._notes_center()
+        if c is None:
+            return
+        r = self.AGENT_D / 2
+        p.setPen(QPen(QColor(255, 255, 255, 28), 1))
+        p.setBrush(theme.tint("#181B22"))
+        p.drawEllipse(c, r - 0.5, r - 0.5)
+        ink = QColor("#C9D1DC")
+        cover = QRectF(c.x() - 5, c.y() - 7.5, 12, 15)
+        p.setPen(QPen(ink, 1.4))
+        p.setBrush(theme.tint("#22304A"))
+        p.drawRoundedRect(cover, 2, 2)
+        p.setPen(QPen(ink, 1.2))
+        p.setBrush(Qt.NoBrush)
+        for i in range(4):  # the spiral binding on its left edge
+            y = cover.top() + 2.5 + i * 3.3
+            p.drawArc(QRectF(cover.left() - 2.2, y - 1.1, 3.4, 2.2), 30 * 16, 300 * 16)
+        if self._notes_active:
+            badge = QPointF(c.x() + r * 0.62, c.y() - r * 0.62)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(theme.ACCENT))
+            p.drawEllipse(badge, 6.5, 6.5)
+            font = QFont("Segoe UI")
+            font.setPixelSize(9)
+            font.setBold(True)
+            p.setFont(font)
+            p.setPen(QColor(theme.ON_ACCENT))
+            p.drawText(QRectF(badge.x() - 6.5, badge.y() - 6.5, 13, 13), Qt.AlignCenter,
+                       str(self._notes_active) if self._notes_active < 10 else "9+")
 
     def _paint_agent_chip(self, p: QPainter) -> None:
         """The voice agent: a small planet with a ring and a moon. Red while it listens, the moon circles while it
@@ -622,10 +740,34 @@ class FloatingButton(QWidget):
                 "sem) a mluv, poslouchá, dokud se neodmlčíš.\nZeptej se, co dělají relace, nebo mu řekni, co má kam "
                 "napsat. Než něco pošle, přečte ti to a počká na tvoje „jo“.")
 
-    def _paint_panel(self, p: QPainter) -> None:
-        rect = self._panel
+    def _only_work_icons(self, region: QRegion) -> bool:
+        """Is this repaint just the turning screwdrivers (_work_tick), nothing else?"""
+        icons = QRegion()
+        for rect in self._work_icons:
+            icons += QRegion(rect.toAlignedRect())
+        return region.subtracted(icons).isEmpty()
+
+    def _paint_work_icons(self) -> None:
+        """Only the screwdrivers: the panel's background under each (set, not blended: the square may still hold the
+        last frame) and the screwdriver turned a bit further."""
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        for rect in self._work_icons:
+            p.setCompositionMode(QPainter.CompositionMode_Source)
+            p.fillRect(rect.toAlignedRect(), self._panel_bg())
+            p.setCompositionMode(QPainter.CompositionMode_SourceOver)
+            _screwdriver(p, rect.center(), self._work_angle())
+        p.end()
+
+    @staticmethod
+    def _panel_bg() -> QColor:
         bg = theme.tint("#181B22")
         bg.setAlpha(235)
+        return bg
+
+    def _paint_panel(self, p: QPainter) -> None:
+        rect = self._panel
+        bg = self._panel_bg()
         p.setPen(QPen(QColor(255, 255, 255, 28), 1))
         p.setBrush(bg)
         p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 10, 10)
@@ -748,12 +890,17 @@ class FloatingButton(QWidget):
         metrics, bold_metrics = QFontMetricsF(font), QFontMetricsF(bold)
         icon_font = QFont(theme.icon_font())
         icon_font.setPixelSize(10)
+        check_font = QFont(icon_font)
+        check_font.setPixelSize(11)
         folder_w = min(110.0, max(metrics.horizontalAdvance(s.folder) for s in self._sessions)) if any(
             s.topic for s in self._sessions) else 0.0  # no topics: the names already are the folders
         for s in self._sessions:
             row = QRectF(x, y, right - x, self.ROW_H)
             self._session_rows.append((row.adjusted(-6, 0, 6, 0), s))
+            hue = QColor(colors.accent(colors.color_for(s.cwd or s.folder, self._folder_colors)))
             p.setPen(Qt.NoPen)
+            p.setBrush(hue)  # its folder's colour, as its terminal's background (colors.py)
+            p.drawRoundedRect(QRectF(row.left() - 6, row.top() + 6, 2.5, row.height() - 12), 1.25, 1.25)
             p.setBrush(SESSION_COLORS[s.state])
             p.drawEllipse(QPointF(row.left() + 4, row.center().y()), 3.5, 3.5)
             p.setFont(bold)
@@ -774,12 +921,25 @@ class FloatingButton(QWidget):
                            loop)
             p.setFont(font)
             if folder_w and s.topic:
-                p.setPen(dim)
+                p.setPen(hue)
                 p.drawText(QRectF(name_rect.right() + gap, row.top(), folder_w, row.height()),
                            Qt.AlignLeft | Qt.AlignVCenter, metrics.elidedText(s.folder, Qt.ElideRight, folder_w))
-            p.setPen(SESSION_COLORS[s.state] if s.state in ("waiting", "error") else dim)
+            label = STATE_LABELS[s.state]
+            p.setPen(SESSION_COLORS[s.state] if s.state in ("waiting", "error") else
+                     text if s.state == "working" else dim)
             p.drawText(QRectF(row.right() - pct_w - state_w, row.top(), state_w, row.height()),
-                       Qt.AlignRight | Qt.AlignVCenter, STATE_LABELS[s.state])
+                       Qt.AlignRight | Qt.AlignVCenter, label)
+            # an icon before it, to tell at a glance: a screwdriver at work (it turns, _work_tick), a check when done
+            icon = QRectF(row.right() - pct_w - metrics.horizontalAdvance(label) - 19,
+                          row.center().y() - 8, 16, 16)
+            if s.state == "working":
+                self._work_icons.append(icon)
+                _screwdriver(p, icon.center(), self._work_angle())
+            elif s.state in ("done", "idle"):
+                p.setFont(check_font)
+                p.setPen(SESSION_COLORS["done"])
+                p.drawText(icon, Qt.AlignCenter, CHECK_GLYPH)
+                p.setFont(font)
             if s.context is not None:
                 p.setPen(QColor("#F5A524") if s.context >= 0.8 else dim)
                 p.drawText(QRectF(row.right() - pct_w, row.top(), pct_w, row.height()),
@@ -864,6 +1024,9 @@ class FloatingButton(QWidget):
             lines.append(f"Agent: {feed['reply']}")
         if (send := feed.get("send")) and send.get("tool") == "page":
             lines.append(f"Stránka v Chromu: {send['name']}\n{send['message']}")
+        elif send and send.get("tool") == "task":
+            lines.append(f"{send['name']} (složka {send['folder']}) z tvých poznámek: nová relace se zadáním, "
+                         "kontextem a poznámkami úkolu. Klikni na bublinu, nebo řekni agentovi „jo“.")
         elif send:
             lines.append(f"Pro relaci {send['name']} ({send['folder']}): {send['message']}")
             if send.get("session_id"):
@@ -915,6 +1078,9 @@ class FloatingButton(QWidget):
                 tip = self._usage_tooltip()
             elif self._on_agent(pos):
                 tip = self._agent_tooltip()
+            elif self._on_notes(pos):
+                tip = ("Poznámky: tvoje úkoly s kontextem a poznámkami.\nAktivní kontroluju každou půlhodinu a pro "
+                       "první na řadě se zeptám, jestli otevřít novou relaci.")
             elif dot:
                 tip = f"Barva: {theme.THEMES[dot][0]}"
             else:
@@ -936,7 +1102,10 @@ class FloatingButton(QWidget):
             if self._press_on_button:
                 self.pressed.emit()
         elif event.button() == Qt.RightButton:
-            self.menu_requested.emit(event.globalPosition().toPoint())
+            if session := self._session_at(event.position()):  # its folder's colour (and Orbit's menu in it)
+                self.folder_menu_requested.emit(session.cwd or session.folder, event.globalPosition().toPoint())
+            else:
+                self.menu_requested.emit(event.globalPosition().toPoint())
 
     def mouseMoveEvent(self, event):
         if self._press_global is None:
@@ -962,6 +1131,8 @@ class FloatingButton(QWidget):
             self.mute_toggled.emit()
         elif self._on_agent(event.position()):
             self.agent_clicked.emit()
+        elif self._on_notes(event.position()):
+            self.notes_clicked.emit()
         elif dot := self._dot_at(event.position()):
             self.theme_chosen.emit(dot)
         elif self._cta_rect.contains(event.position()):
@@ -1166,6 +1337,10 @@ def _label(text: str, role: str | None = None, wrap: bool = False) -> QLabel:
         label.setProperty("role", role)
     label.setWordWrap(wrap)
     return label
+
+
+FADE_CHOICES = [(3, "za 3 s (výchozí)"), (5, "za 5 s"), (10, "za 10 s"), (30, "za 30 s"), (60, "za minutu"),
+                (0, "nikdy")]  # the settings' "Zprůhlednit tlačítko": seconds idle (config fade_after_s)
 
 
 def _combo() -> QComboBox:
@@ -1677,7 +1852,7 @@ class SettingsDialog(QDialog):
         transcript.addWidget(self.learn)
         self.live = _OptionRow("Přepisovat už během mluvení", "Dlouhý diktát je hotový skoro hned po puštění, "
                                "občas o chlup méně přesně.", cfg["live_transcribe"])
-        self.commands = _OptionRow("Hlasové povely", "„Nový řádek“, „nový odstavec“. Věta „Odešli.“ na konci "
+        self.commands = _OptionRow("Hlasové povely", "„Nový řádek“, „(nový) odstavec“. Věta „Odešli.“ na konci "
                                    "zmáčkne Enter, samotné „Stop.“ zmáčkne Esc.", cfg["voice_commands"])
         self.keep = _OptionRow("Ukládat nahrávky", "Posledních 30 do složky recordings, pro ladění přesnosti.",
                                cfg["keep_recordings"])
@@ -1699,8 +1874,17 @@ class SettingsDialog(QDialog):
         self.sounds = _OptionRow("Pípnout při nahrávání", "Na začátku a na konci.", cfg["sounds"])
         self.show_btn = _OptionRow("Plovoucí tlačítko", None, cfg["show_button"])
         self.autostart = _OptionRow("Spouštět s Windows", None, autostart)
-        for row in (self.trailing, self.sounds, self.show_btn, self.autostart):
+        for row in (self.trailing, self.sounds, self.show_btn):
             behaviour.addWidget(row)
+        self.fade = _combo()  # how long idle before the button and its panel turn almost transparent
+        for seconds, text in FADE_CHOICES:
+            self.fade.addItem(text, seconds)
+        if self.fade.findData(cfg["fade_after_s"]) < 0:  # another value in config.json
+            self.fade.addItem(f"za {cfg['fade_after_s']} s", cfg["fade_after_s"])
+        self.fade.setCurrentIndex(self.fade.findData(cfg["fade_after_s"]))
+        self.fade.setToolTip("Když se nic neděje, tlačítko i panel nad ním skoro zprůhlední. Najetí myší je vrátí.")
+        behaviour.addLayout(_field("Zprůhlednit tlačítko", self.fade))
+        behaviour.addWidget(self.autostart)
 
         # Claude: the connection, then what needs it (off and greyed out until it's connected)
         behaviour.addSpacing(6)
@@ -1714,13 +1898,15 @@ class SettingsDialog(QDialog):
         self.show_sessions = _OptionRow("Přehled relací Claude Code", "Co která dělá, jestli čeká na tebe a kolik "
                                         "má kontextu. Přidá do nastavení Claude Code hooky Orbitu.",
                                         cfg["show_sessions"] and hooks)
+        self.tint = _OptionRow("Barevná okna relací", "Pozadí terminálu každé relace v barvě její složky, jako "
+                               "proužek v přehledu. Barvu složky změníš pravým klikem na relaci.", cfg["tint_sessions"])
         self.speak = _OptionRow("Předčítat hotové odpovědi", "Když relace doběhne, přečtu nahlas začátek "
                                 "odpovědi. Jen lokálně.", cfg["speak_answers"])
         self.artifacts = _OptionRow("Předčítat souhrn artefaktů", "Když relace zveřejní artefakt, Claude ho shrne "
                                     "do 7 vět a já je přečtu. Čerpá z tvých limitů.", cfg["read_artifacts"] and hooks)
         self.agent = _OptionRow("Hlasový agent pro relace", "Drž jeho tlačítko a mluv, nebo klikni. Ptej se na relace "
                                 "a nech ho do nich psát, vždy se nejdřív zeptá.", cfg["agent"])
-        for row in (self.show_usage, self.show_sessions, self.speak, self.artifacts, self.agent):
+        for row in (self.show_usage, self.show_sessions, self.tint, self.speak, self.artifacts, self.agent):
             behaviour.addWidget(row)
         # the agent's own button (it takes it over system-wide, so it can't be the dictation's)
         self._agent_binding = dict(cfg["agent_ptt"])
@@ -1742,7 +1928,7 @@ class SettingsDialog(QDialog):
         behaviour.addWidget(self.agent_key_hint)
         self.agent.toggle.toggled.connect(lambda _: self._check_keys())
         self._show_agent_key()
-        self._claude_rows = (self.learn, self.show_sessions, self.speak, self.artifacts, self.agent,
+        self._claude_rows = (self.learn, self.show_sessions, self.tint, self.speak, self.artifacts, self.agent,
                              self.agent_key_label, self.agent_key)
 
         self.voice = _combo()
@@ -1966,6 +2152,7 @@ class SettingsDialog(QDialog):
             "trailing_space": self.trailing.isChecked(),
             "sounds": self.sounds.isChecked(),
             "show_button": self.show_btn.isChecked(),
+            "fade_after_s": self.fade.currentData(),
             "show_usage": self.show_usage.isChecked(),
             "voice": self.voice.currentData() or self._cfg["voice"],
             "autostart": self.autostart.isChecked(),
@@ -1973,6 +2160,7 @@ class SettingsDialog(QDialog):
         if self._connected():
             sessions_on, artifacts_on = self.show_sessions.isChecked(), self.artifacts.isChecked()
             values.update(learn_vocabulary=self.learn.isChecked(), show_sessions=sessions_on,
+                          tint_sessions=self.tint.isChecked(),
                           speak_answers=self.speak.isChecked(), read_artifacts=artifacts_on,
                           agent=self.agent.isChecked() and not self._keys_clash(), agent_ptt=self._agent_binding,
                           claude_hooks=sessions_on or artifacts_on)

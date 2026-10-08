@@ -404,6 +404,11 @@ section{position:relative}
 .w-agent.confirm svg{color:var(--busy)}
 .w-agent.listen{background:var(--rec);box-shadow:0 0 0 6px rgba(255,77,90,.25)}
 .w-agent.listen svg{color:#fff}
+/* the notebook (the user's tasks) at the panel's left end, with the number of active ones, as in the app */
+.w-notes{position:relative;margin-right:auto;width:40px;height:40px;border-radius:50%;background:#181E2C;border:1px solid rgba(255,255,255,.11);display:grid;place-items:center;transition:box-shadow .4s}
+.w-notes svg{width:24px;height:24px}
+.w-notes b{position:absolute;left:23px;top:-2px;width:18px;height:18px;border-radius:50%;background:var(--accent);color:var(--on-accent);font:700 12px/18px "Segoe UI",var(--text-font);text-align:center}
+.w-notes.lit{box-shadow:0 0 0 5px rgba(var(--accent-rgb),.22)}
 .w-pill{display:flex;gap:10px;align-items:center;padding:7px 12px;border-radius:999px;background:rgba(24,30,44,.92);border:1px solid rgba(255,255,255,.11)}
 .w-pill i{width:13px;height:13px;border-radius:50%;display:block}
 .w-pill i.on{box-shadow:0 0 0 2px #121826,0 0 0 3.5px #E6E8EC}
@@ -434,6 +439,7 @@ section{position:relative}
 .w-ses .st{color:#9AA1AD;width:104px;flex:none;text-align:right;white-space:nowrap;transition:color .3s}
 .w-ses .ctx{color:#9AA1AD;width:44px;flex:none;text-align:right}
 .w-ses.flash{background:rgba(61,214,140,.16)}
+.w-ses[hidden]{display:none}
 .w-feed{line-height:1.42;min-height:130px}
 .w-feed .w-row{height:25px}
 .w-feed .you{color:#9AA1AD;padding:2px 0;min-height:1.42em}
@@ -471,6 +477,7 @@ section{position:relative}
 }
 .bubble::before{content:"";position:absolute;left:-7px;top:24px;width:12px;height:12px;background:inherit;border-left:1px solid rgba(255,255,255,.12);border-bottom:1px solid rgba(255,255,255,.12);transform:rotate(45deg)}
 .bubble.on{opacity:1;transform:none}
+.bubble.on.press{transform:scale(.97);transition:transform .12s;border-color:rgba(var(--accent-rgb),.5)}
 .bubble .bt{display:flex;align-items:center;gap:9px;font-size:14px;font-weight:600;color:#E6E8EC}
 .bubble .bi{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:700;color:#0B1020;flex:none}
 .bubble .bn{margin-left:auto;font-weight:400;font-size:12.5px}

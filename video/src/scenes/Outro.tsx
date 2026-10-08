@@ -20,6 +20,8 @@ const FEATURES = [
   { ring: 1, phase: 1.9 + Math.PI, label: "Relace Claude Code", color: C.accent },
   { ring: 2, phase: 3.6, label: "Hlasový agent", color: C.accent },
   { ring: 2, phase: 3.6 + Math.PI, label: "Předčítání", color: C.text },
+  // upper left at first, then over the top: clear of the other labels, the mic and the headline the whole outro
+  { ring: 0, phase: 3.9, label: "Poznámky a úkoly", color: C.accent },
 ];
 
 /** Drums stop, the pad rings out: the orrery again, every feature on its orbit, and the download. */

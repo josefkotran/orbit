@@ -29,7 +29,9 @@ Push-to-talk je **boční tlačítko myši vpřed** (`{"kind": "mouse", "code": 
 vkládání **psaním znaků** (`insert_mode: "type"`), bez mezery za textem, povely zapnuté, pípání zapnuté, panel Clauda
 zapnutý, **ukládání nahrávek zapnuté** (`recordings/`), spouštění s Windows zapnuté, hlas Jirka (Piper), agent zapnutý.
 Průběžný přepis, učení slovníku a předčítání artefaktů má zapnuté (výslovně v configu; noví uživatelé mají učení,
-artefakty a agenta vypnuté). Slovník a opravy (`vocabulary`, `replacements`) doplňuje Claude, `learned_until`
+artefakty a agenta vypnuté). Od 8. 10. barevná okna relací zapnutá (`tint_sessions`, noví uživatelé vypnuté) a barvy
+složek `folder_colors`: hommel-portal (HHW) zelená, m-tex a mtex-portal oranžová, orbit modrá, ostatní automaticky;
+zprůhlednění tlačítka `fade_after_s` 3 s (výchozí). Slovník a opravy (`vocabulary`, `replacements`) doplňuje Claude, `learned_until`
 je čas posledního přepisu z logu, který už Claude viděl. `name` (jméno pro agenta) a `about` („O mně“ pro učení
 slovníku) přibyly 3. 10. a v jeho configu zatím nejsou, tedy prázdné: agent mu do té doby říká „uživatel“.
 Souhlasy `claude_hooks` / `claude_statusline` a `wizard_pending` (taky od 3. 10.) v jeho configu nebyly: první start
@@ -63,6 +65,9 @@ nové verze dá `claude_hooks` = true, protože jeho hooky v `~/.claude/settings
 | `app/learning.py` | učení slovníku: přepisy z logu → `claude -p` → nová slova a opravy |
 | `app/artifacts.py` | předčítání artefaktů: záznam od hooku → text stránky → souhrn 7 vět od Clauda |
 | `app/sessions.py` | přehled relací Claude Code: stav z hook souborů, kontext ze stavového řádku (jinak odhad z přepisu), režim oprávnění, přepnutí okna |
+| `app/tasks.py` | vlastní úkoly uživatele (poznámky): `tasks.json` v datové složce, co nabídnout ke spuštění, zadání pro relaci, spuštění relace v samostatném procesu (bez Qt) |
+| `app/notebook.py` | okno Poznámky: sekce Aktivní / V plánu / Poznámky / Hotovo, úkol s názvem, složkou, kontextem a poznámkami, přetahování a šipky |
+| `app/colors.py` | barvy relací podle složky (jména jako `/color` v Claude Code): proužek v panelu a obarvení pozadí terminálu relace (OSC 11, jen stdlib) |
 | `app/cc_hook.py` | hook, který Claude Code spouští (jen stdlib, rychlý): zapíše `<data>/sessions/<id>.<událost>.json` (i `permission_mode` a okno relace) |
 | `app/agent.py` | hlasový agent: trvalý `claude -p` (stream-json), přehled relací pro něj, potvrzování odeslání |
 | `app/agent_tools.py` | vlastní nástroje agenta jako MCP server (stdio): nová relace, hledání a otevření stránky |
@@ -287,7 +292,8 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   a bublina „Okno běží jako správce…“. Stejně, když `SendInput` nevezme všechny události.
 - Po 3 s nečinnosti (stav idle, myš mimo, žádné menu) tlačítko i panel zprůhlední na 30 % (`windowOpacity`,
   animace), Pepa chtěl, aby bylo vidět „jen malinko“ (10 % i 20 % byly moc průhledné, 30 % schválil). Najetí myší, nahrávání nebo
-  přepis ho hned vrátí.
+  přepis ho hned vrátí. Od 8. 10. jde čas zvolit v nastavení („Zprůhlednit tlačítko“: 3 s, 5 s, 10 s, 30 s, minuta,
+  nikdy; `fade_after_s`, 0 = nikdy, `FloatingButton.set_fade_after`).
 
 ### Relace Claude Code (`show_sessions`, `speak_answers`)
 - Pepa pouští Claude Code přes `cmd.exe` z Průzkumníka, **každá relace má vlastní okno Windows Terminalu**
@@ -346,6 +352,13 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 - Panel relací se překreslí jen při změně toho, co řádky ukazují (`FloatingButton._sessions_look`, od 7. 10.), ikona
   a tooltip v oznamovací oblasti se nastavují jen při změně. Proč: dřív se panel překresloval každou sekundu
   (~19 ms, polovina CPU Orbitu v klidu).
+- **Stavy v panelu** (od 8. 10., Pepa: jen „hotovo“ a „pracuje“, poznat „na první dobrou“, ne křiklavé barvy):
+  „v klidu“ (`idle`) se ukazuje jako „hotovo“ (`STATE_LABELS`, zelená tečka; vnitřní stav `idle` zůstává kvůli
+  oznámením). Před stavem ikonka: u „pracuje“ kreslený šroubováček s modrou rukojetí, který se kroutí jako při
+  šroubování (`ui._screwdriver`, `_work_timer` po 80 ms jen dokud nějaká relace pracuje), u „hotovo“ zelená fajfka
+  (E73E). „Pracuje“ má světlý text, „hotovo“ tlumený. „Čeká na tebe“ a „chyba“ zůstaly (chtějí uživatele). Animace
+  překresluje jen čtverečky 16 px se šroubováky (`_only_work_icons`/`_paint_work_icons`: pozadí panelu
+  `CompositionMode_Source` + šroubovák), 0,12 ms místo ~2 ms celého panelu.
 - **Loop v relaci** (od 7. 10., `Session.loop`, `sessions._LoopScan`): za názvem relace ikona smyčky (E8EE) a „do 23:00“
   (bez konce v zadání „loop“) v barvě akcentu, v tooltipu jak často a kdy je další kolo, totéž dostane agent. Joby
   `/loop` žijí jen v procesu relace, proto se čtou z přepisu (čte se dál od posledního místa, poprvé celý):
@@ -542,6 +555,20 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   složka jako pracovní adresář: nic z nich nejde spustit jako příkaz (ověřeno s `& | > ^ % !VAR! "`). Zadání vždy
   začíná prefixem se jménem (MCP server ho dostane v `ORBIT_USER_NAME`), takže nikdy nezačne „-“ jako přepínač.
   Síťové složky (`\\server\…`) odmítne (cmd by začal v `C:\Windows`). `cmd.exe` se spouští plnou cestou ze System32.
+- **Prostředí nové relace = uživatelovo** (od 8. 10., `agent_tools._user_environment`, `CreateEnvironmentBlock`
+  z registru, jako program spuštěný z plochy; bez `ANTHROPIC_API_KEY`). Proč: MCP server dědí prostředí agentova
+  `claude.exe` a ten svým nástrojům dává `NO_COLOR=1`, `CLAUDE_PROJECT_DIR` (jeho prázdná složka), `GCM_INTERACTIVE=never`,
+  `GIT_TERMINAL_PROMPT=0`, `GIT_EDITOR=true`, `PSEXECUTIONPOLICYPREFERENCE`…: relace od agenta byla celá bílá (Pepa:
+  „všechno bílý, není tam žádná barva“) a git by se v ní nezeptal na přihlášení. Ověřeno porovnáním s relací
+  z Průzkumníka (liší se jen proměnné, které si nastaví Claude Code a Průzkumník sám).
+- **Poslední screenshot k zadání** (od 8. 10., parametr `screenshot` u `open_session`): Pepa chtěl „vlož tam
+  nejnovější screenshot“ (navrhoval Alt+V). Alt+V by chtělo okno relace v popředí a klávesy do něj (relace běží
+  minimalizovaná), proto Orbit k zadání připíše „Přiložený snímek obrazovky: <cesta>“ a relace si obrázek otevře sama
+  (Read; ověřeno s haiku, i s diakritikou a mezerami a mimo složku projektu). Snímek vybírá Orbit, ne agent:
+  nejnovější `.png/.jpg` ve složce Snímky obrazovky (`FOLDERID_Screenshots`, kam ukládají Výstřižky a Win+PrtScn;
+  `agent.latest_screenshot`), v otázce zazní jeho čas („A přiložím poslední snímek obrazovky z 8:35.“), do
+  `updatedInput` jde jeho cesta a `agent_tools` přiloží jen soubor přímo v té složce (`agent.is_screenshot`).
+  Ke zprávě do běžící relace (SendMessage) přiložit nejde, agent to řekne. Schránka se nečte.
 - **Pojistka v `agent_tools.open_session`** (od 7. 10.): MCP server už jen neprovede, co pustí hook, sám kontroluje:
   relaci otevře jen ve složce ze seznamu (`agent.known_folder`, ta je i pracovní složkou) a ze zadání ubere jen přesný
   prefix „<jméno> (hlasem přes Orbit):“ nebo „Uživatel (…)“ a vrátí ho jednou. Odmítne zadání s dalším
@@ -550,7 +577,57 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   šířky, bidi, tag znaky U+E00xx). Odmítnutí přijde agentovi až po „jo“ jako chyba nástroje; hlavní kontrola je
   od 7. 10. i v `main._ask_confirm` ještě před otázkou (platí i pro SendMessage, který `agent_tools` nechrání).
 
+### Barvy relací (od 8. 10., `app/colors.py`)
+- Pepa chtěl každou relaci „v jiné barvě“ a stejně v panelu: HHW zeleně, M-tex oranžově, Orbit modře. Barva patří
+  složce (`colors.key` = jméno složky malými písmeny). Volba uživatele je v `folder_colors` (pravý klik na relaci
+  v panelu → „Barva složky …“, v menu i celé menu Orbitu), ostatní složky dostanou stálou barvu ze zbylých (podle CRC
+  jména, nikdy červenou: ta je u Orbitu chyba a poslech). Jména barev jsou jako `/color` v Claude Code (red, blue,
+  green, yellow, purple, orange, pink, cyan).
+- Panel: proužek vlevo u relace a název složky v její barvě. Okno relace (`tint_sessions`, v nastavení „Barevná okna
+  relací“): pozadí terminálu tmavý odstín barvy (`colors.shade`, 15 % barvy do `#0C0C0C`) přes **OSC 11** zapsané do
+  konzole `claude.exe` (`AttachConsole` + `CONOUT$`). Ověřeno: Windows Terminal ho vezme od jiného procesu, obarví celé
+  okno i lištu karty a Claude Code ho nepřepíše. Jen okno, jehož konzole má viditelného vlastníka (WT, klasická
+  konzole), terminál v IDE ne. Zápis dělá malý proces `pythonw -I -c … colors._main` (`colors.tint_sessions`): Orbit
+  sám se ke konzoli nepřipojuje, jinak by ji zdědilo, co zrovna spouští. Orbit obarví každou relaci jednou na barvu
+  (`Dictation._tinted`, PID → barva), novou do sekundy, po restartu Orbitu všechny znovu; vypnutí (nebo vypnutý
+  přehled relací) vrátí pozadí OSC 111. Hook se kvůli tomu neměnil.
+- Barvu lišty zadávání v Claude Code (`/color`) zvenku nastavit nejde: umí to jen control protokol SDK (`set_color`)
+  a ručně `/color` (ukládá se do přepisu jako `{"type":"agent-color"}`), obyčejná relace v terminálu ho nemá.
+
+### Poznámky a úkoly (od 8. 10., `app/tasks.py`, `app/notebook.py`)
+- Pepa chtěl ikonku prázdného sešitu vlevo nad „Claude“ a v ní vlastní úkoly s kontextem a poznámkami, které přesouvá
+  do „Aktivní“ nebo „V plánu“ a řadí nahoru a dolů; aktivní má „bot každou půlhodinu čekovat“ a nový začít v nové
+  relaci ve správné složce, po jeho schválení.
+- Panel: kruh se sešitem (kroužková vazba, prázdný) ve stejném pruhu jako tečky barev, u levého konce panelu, číslo =
+  počet aktivních (`FloatingButton._paint_notes_chip`, `notes_clicked`). Okno `Notebook` (QDialog `#notebook`, styly
+  v `theme.stylesheet`): vlevo strom sekcí (Aktivní, V plánu, Poznámky, Hotovo sbalené), přetažení přesouvá i mezi
+  sekcemi (`_Tree.dropEvent` → `_dropped` přečte pořadí ze stromu), šipky ↑↓; vpravo název, stav (4 tlačítka),
+  složka (seznam `agent.project_folders`), kontext, poznámky s časem (Enter přidá, pravý klik smaže), „Začít teď“,
+  „Smazat úkol“. Všechno se ukládá hned (psaní po 0,5 s) do `<data>/tasks.json` (atomicky; nečitelný soubor se
+  zkopíruje do `tasks.json.bad-*`). Pořadí v souboru = pořadí v sekci.
+- Kontrola (`Dictation._check_tasks`, `tasks_timer` každých 30 min od startu Orbitu): první aktivní úkol se složkou,
+  který ještě neběžel a nebyl odmítnut (`tasks.next_to_offer`). Otázka jako u agenta: řádek v panelu „→ Úkol: …“,
+  bublina („Klikni sem a začnu“) a hlas („Aktivní úkol: … Otevřu pro něj novou relaci ve složce … Mám?“). Odpověď
+  kliknutím na bublinu nebo „jo“ přes tlačítko agenta (`_confirm` s `kind: "task"`, stejné `CONFIRM_SEEN_S`
+  a vypršení po 2 min; agentovo potvrzení ani konec agenta otázku úkolu neruší chybně, `_drop_confirm`). „Ne“ =
+  `declined`, sám se už nenabídne (jen „Začít teď“, nebo přesun jinam a zpátky do Aktivních); jiná věta jde agentovi.
+- Spuštění (`tasks.start_session`): `python -I -c …` → `agent_tools.open_session(folder, prompt,
+  source="úkol z poznámek Orbitu")` ve vlastním procesu (minimalizace se připojuje ke konzoli, Orbitův proces nesmí),
+  čeká i na minimalizaci, výsledek JSONem (~2 s). První zpráva: „Pepa (úkol z poznámek Orbitu): Úkol: … Kontext: …
+  Poznámky: 9:30 … | …“ (`tasks.prompt_for`: odkaz v Markdownu jako „text (adresa)“, bez neviditelných znaků;
+  nad 6000 znaků jde celé zadání do `<data>/tasks/<id>.md` a zpráva na něj odkáže). Úspěch = `started`, úkol
+  zůstává v Aktivních, do Hotovo ho přesouvá uživatel. Ověřeno s falešným `claude.exe` (kopie `timeout.exe`)
+  v dočasné složce Claude Code: okno ve WT, minimalizované, správné zadání; špatná složka = česká chyba.
+- **Všude, kde se Orbit ukazuje** (Pepa 8. 10.: „aby byla zmíněná a zahrnutá konzistentně“): v menu Orbitu je
+  „Poznámky…“ (bez panelu by na sešit jinak nebylo kde kliknout), průvodce je zmiňuje na stránce Claude i v „Hotovo“,
+  instalátor v popisu zástupce a v otázce na smazání dat (`tasks.json` je v datové složce), `verify_bundle.py`
+  otevře okno Poznámek a zkusí uložit a načíst úkol. Web, README a video viz jejich sekce. Texty pro všechny bez
+  rodu („Spuštění bylo odmítnuto“, ne „jsi odmítl“). Když se funkce změní, opravit i tyhle popisy.
+
 ### Hlasové povely pro terminál
+- „Nový řádek“ = zalomení, „nový odstavec“ = prázdný řádek. Od 8. 10. i samotné „odstavec“, ale jen jako samostatný
+  kus mezi interpunkcí („Ahoj Andrej, odstavec, přeposílám“; Pepa to tak řekl do Outlooku a čekal odstavec),
+  „přepiš ten odstavec“ zůstane textem (`whisper_server._COMMAND_RE`).
 - Věta „Odešli.“ (nebo „Odeslat.“) na konci diktátu = Enter; diktát jen „Stop.“ / „Zastav.“ = Esc (přeruší Clauda).
   Jen jako samostatná věta, „…tak mu to odešli.“ zůstane textem. Patří pod přepínač „Hlasové povely“.
 - Enter jde po textu se zpožděním 300 ms + 1 ms na znak (max 1,5 s): terminál vkládá asynchronně a Claude Code bere
@@ -627,7 +704,8 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   `config.json` nebo soubor `portable` (**Pepův checkout**: má `config.json`, takže se nic nestěhuje a vše zůstává,
   kde bylo), 3. `%LOCALAPPDATA%\Orbit`. Uvnitř: `config.json`, `orbit.log`, `whisper-server.log`, `crash.log`,
   `recordings\`, `models\` (+ `piper\`), `sessions\` (+ `artifacts\`, `status\`), `cache\`,
-  `statusline-previous.json` (původní stavový řádek uživatele, když je Orbitův zapnutý). Ve složce aplikace zůstává
+  `statusline-previous.json` (původní stavový řádek uživatele, když je Orbitův zapnutý), `tasks.json` (+ `tasks\`
+  s dlouhými zadáními; úkoly z Poznámek, nikdy do gitu). Ve složce aplikace zůstává
   jen kód, `assets\` (statické) a `whisper\`.
 - Složka Claude Code: `ORBIT_CLAUDE_DIR`, jinak `CLAUDE_CONFIG_DIR` (Claude Code ji tak umí přesunout, `.claude.json`
   je pak v ní), jinak `~/.claude` a `~/.claude.json`. Všechno, co Orbit čte nebo zapisuje u Claude Code (hooky,
@@ -817,9 +895,15 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   drží, instalátor přejmenuje na `*.orbit-old` a vedle zapíše nový (`MoveAsideIfInUse`; běžící exe a DLL smazat
   nejde, přejmenovat ano, ověřeno), jinak by tichá instalace z `install.ps1` (`/SUPPRESSMSGBOXES`) skončila na Abort.
   `restartreplace` bez práv správce nic nedělá. Zbytky smaže další aktualizace nebo odinstalace; nová menší verze
-  Pythonu by tam nechala staré soubory (nepoužité). **Spuštěním instalátoru zatím neověřeno** (jen ISCC ho přeloží):
-  před další verzí vyzkoušet testovací variantou `.iss` (viz Spuštění) se smyčkou, která během tiché aktualizace
-  pouští `runtime\python.exe` po 100 ms; aktualizace musí skončit kódem 0 a `python.exe` tam musí být.
+  Pythonu by tam nechala staré soubory (nepoužité). **Ověřeno 8. 10. na 1.1.0** testovací variantou `.iss` (jiné
+  `AppId`, mutex, zástupce; data a Claude Code v tempu): `/VERYSILENT` aktualizace, během které se `runtime\python.exe`
+  spouštěl každých 100 ms (120 spuštění, všechna prošla), skončila kódem 0, `python.exe`, `python313.dll`
+  a `vcruntime140.dll` šly stranou jako `*.orbit-old`, nový `python.exe` běží, další aktualizace zbytky smazala,
+  `tasks.json` zůstal beze změny, odinstalace smazala složku i `*.orbit-old` a data nechala. **Pozor:** při spouštění
+  python.exe každých 100 ms už od startu Setupu visel Setup ~10 min na kontrole Restart Manageru (`RmGetList`, PID
+  se recyklují) a pokračoval až po zastavení smyčky; po 1 s trvala kontrola 2–3 s. Skutečné hooky tak husté nejsou.
+  Kdyby se to stalo, `CloseApplications=no` v `orbit.iss` kontrolu vypne (běžící Orbit hlídá mutex, držené soubory
+  `MoveAsideIfInUse`). Neověřeno: `/SILENT` (jak instaluje `install.ps1`) a hodně dlouhá cesta instalace.
 - **Spouští se `runtime\pythonw.exe -s Orbit.pyw`.** `runtime\python313._pth` nastaví `sys.path` jen na balíček
   a schválně **nemá `import site`**: s ním by Python přidal uživatelovo `%APPDATA%\Python\Python313\site-packages`
   (u Pepy jiný numpy a PySide6) i u spuštění, která Orbit dělá sám bez `-s` (klíč Run, hooky, stavový řádek,
@@ -829,8 +913,13 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   a mikrofon) a řeknou, ať ho uživatel zavře.
 - **Odinstalace**: nejdřív `runtime\python.exe -s Orbit.pyw --cleanup` (hooky a stavový řádek *této* instalace pryč,
   původní stavový řádek zpět, jen její hodnota v Run; jiná kopie Orbitu zůstane, viz Spuštění), pak otázka, jestli
-  smazat i `%LOCALAPPDATA%\Orbit` (nastavení, slovník, nahrávky, modely); výchozí Ne, tichá odinstalace data vždy nechá.
-- Tichá instalace: `Orbit-Setup-1.0.0.exe /VERYSILENT /SUPPRESSMSGBOXES /CURRENTUSER` (Orbit se po ní nespustí),
+  smazat i `%LOCALAPPDATA%\Orbit` (nastavení, slovník, poznámky, nahrávky, modely); výchozí Ne, tichá odinstalace
+  data vždy nechá.
+- **Vydané verze**: 1.0.0 (7. 10. 2026), **1.1.0 (8. 10. 2026)**: Poznámky a úkoly, barvy relací, zprůhlednění
+  tlačítka v nastavení, nové relace agenta ve Windows Terminalu a opravy ze 7. 10. po vydání 1.0.0 (Piper ve vlastním
+  procesu, potvrzování agenta, překreslování…); `Orbit-Setup-1.1.0.exe`,
+  81 942 251 B, SHA-256 `b9b24530…6714771` (celý v `web/release.json`).
+- Tichá instalace: `Orbit-Setup-1.1.0.exe /VERYSILENT /SUPPRESSMSGBOXES /CURRENTUSER` (Orbit se po ní nespustí),
   odinstalace `unins000.exe /VERYSILENT /SUPPRESSMSGBOXES`.
 - **Podpis**: instalátor je nepodepsaný, SmartScreen ukáže „neznámý vydavatel“. Pro rozdávání ve velkém je potřeba
   certifikát; build ho umí přes `ORBIT_SIGN_THUMBPRINT`, `ORBIT_SIGN_COMMAND` (Azure Trusted Signing) nebo
@@ -876,7 +965,7 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   ```
   Whisper server při zabití aplikace skončí sám (Job object).
 - Kontrola kódu: `.venv\Scripts\python.exe -m pyflakes app Orbit.pyw tests`.
-- **Testy** (od 7. 10., stdlib `unittest`, 83 testů, ~35 s): `.venv\Scripts\python.exe -m unittest discover -s tests`
+- **Testy** (od 7. 10., stdlib `unittest`, 106 testů, ~35 s): `.venv\Scripts\python.exe -m unittest discover -s tests`
   (jen část: `-p "test_core*.py"`, `test_claude*`, `test_dist*`, `test_ui*`; `test_ui_*` zkouší metody `Dictation`
   na stubu a `VoiceAgent` s falešným procesem, bez Clauda). Samy si nastaví `ORBIT_DATA_DIR`/`ORBIT_CLAUDE_DIR`
   na dočasné složky a uklidí po sobě. Nespouští `claude` ani whisper-server (místo něj malý server v Pythonu), klávesy
@@ -968,6 +1057,12 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   nespustil). `ORBIT_INSTALL_DRYRUN=1` skončí po kontrole součtu. Na stránce je zadání pro Claude Code ke zkopírování:
   nejdřív si skript přečíst a říct, co udělá, pak ho spustit přes `powershell -NoProfile -Command "…"`. Soubor
   stažený skriptem nemá značku z internetu, SmartScreen se tak neozve; ochranou je kontrolní součet.
+- **Poznámky na webu** (od 8. 10.): replika panelu má vlevo nad ním sešit s číslem aktivních (`#wNotes`, jako
+  `_notes_center` v aplikaci), karta „Poznámky a úkoly“ je **třetí** (za Relace) a hraje scénu `poznamky` v `site.js`
+  (otázka v panelu a bublina jako `Dictation._check_tasks`, klik na bublinu, „otevírám…“ → „otevřeno ✓“ a nová relace
+  `#s4`). Jako poslední karta nešla: sekce už končí, lepivý panel odjel nahoru a na 1280×720 byl sešit mimo obraz.
+  Zmínky jsou i v úvodu, sekci Claude, soukromí (úkol dostane relace až po potvrzení, jinak zůstává v počítači),
+  požadavcích, otázkách (bez Claude Code, hlas na internet, aktualizace, odinstalace) a v orrery bez videa.
 - Stránka odkazuje na GitHub (menu, instalace, otázka „Kolik Orbit stojí?“, patička).
   Bez `--installer` se nahrají jen změněné soubory stránky. Podrobnosti a FTP (FTPS přes `ftp.m-tex.cz`, heslo
   v `~/m-tex/private/ftp.netrc`, Windows curl useknul soubory) v `web/README.md`.
@@ -1001,6 +1096,9 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   `video/src/lib/theme.ts`, písma v `video/public/fonts` a vyrenderovat znovu. Aplikace ve videu je replika
   `app/ui.py` v Reactu (`video/src/components/OrbitWidget.tsx`, `Bubble.tsx`); po změně vzhledu aplikace ji upravit.
   Ověřené proti skutečnému renderu z Qt (`video/capture/grab.py`, ukázková data, 3× rozlišení).
+- Od 8. 10. ukazuje i Poznámky bez přestřihu: replika panelu má sešit s „2“ (`NotesChip`, ověřeno proti Qt
+  `FloatingButton.set_notes_count(2)`) a v závěru krouží „Poznámky a úkoly“ (vnější dráha, fáze 3,9, nikde se
+  nepřekrývá s jiným popiskem). Tlačítko na konci je na stejném místě, `CTA_IN`/`CTA_OUT` na webu platí dál.
 - Hudba: „Mountains“ (Andrew Ev, Mixkit, licence bez uvádění autora, nesmí se šířit samostatně, proto není v gitu).
 - Video má být srozumitelné i ztlumené (na webu hraje bez zvuku), proto je všechno řečené i v obraze.
 - Render: `npx remotion render Orbit out/orbit-master.mp4 --crf 14`, pak `node scripts/export-web.mjs` (2 průchody,

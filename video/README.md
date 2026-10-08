@@ -6,7 +6,8 @@ písem jsou kopie z `web/site/assets/fonts`). Nadpisy „dýchají“ stejně ja
 podle `site.js`): každé písmeno má vlastní šířku a tloušťku, běží jimi vlna, při objevení se skládají z tenkých
 a úzkých a věty, které někdo říká (kurzíva Anybody), se chvějí podle hlasitosti. Začíná příletem z hyperprostoru
 jako web. Aplikace ve videu je **věrná replika** kreslicího kódu `app/ui.py` (stejné rozměry, barvy, písma Segoe UI
-a ikony Segoe Fluent Icons), okno nastavení je skutečný render z Qt.
+a ikony Segoe Fluent Icons), i se sešitem Poznámek vlevo nad panelem (s počtem aktivních úkolů, jako
+`_paint_notes_chip`), okno nastavení je skutečný render z Qt.
 
 ## Příběh a střih na hudbu
 
@@ -23,7 +24,7 @@ Celé video je stříhané na takty (`src/lib/time.ts`, 122,92 BPM, takt = 1,952
 | 31–47 s | 16–24 | Limity, relace, bublina „hotovo“ a „čeká na tebe“ (se zvuky z aplikace) |
 | 47–57 s | 24–29 | Hlasový agent: otázka, odpověď, zpráva do relace, „Jo.“, odesláno |
 | 57–62 s | 29–32 | Předčítání odpovědí a artefaktů |
-| 62–76 s | 32– | Bicí skončí, mikrofon doletí doprostřed, funkce na drahách, „Stáhni si Orbit.“ |
+| 62–76 s | 32– | Bicí skončí, mikrofon doletí doprostřed, funkce na drahách (i „Poznámky a úkoly“), „Stáhni si Orbit.“ |
 
 ## Hudba
 

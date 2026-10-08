@@ -416,6 +416,7 @@ class Wizard(QDialog):
                      "Přehled relací Claude Code: co dělají a kdy čekají na tebe",
                      "Hlasový agent, kterému řekneš, co má kterým relacím napsat",
                      "Předčítání souhrnů artefaktů, které relace zveřejní",
+                     "Úkoly z poznámek, které ti Orbit nabídne začít v nové relaci",
                      "Slovník, který se sám učí z tvých diktátů"):
             bullets.addWidget(_label(f"•  {line}", "bullet", wrap=True))
         box.addLayout(bullets)
@@ -524,7 +525,9 @@ class Wizard(QDialog):
         lines = [f"•  Drž {key} a mluv. Až pustíš, text se vloží tam, kde máš kurzor.",
                  "•  Totéž umí plovoucí tlačítko s mikrofonem: drž ho a mluv. Přetažením ho přesuneš, pravým "
                  "tlačítkem otevřeš menu.",
-                 "•  Ikona Orbitu u hodin: klik otevře nastavení. V menu najdeš i tenhle průvodce."]
+                 "•  Ikona Orbitu u hodin: klik otevře nastavení. V menu najdeš i tenhle průvodce.",
+                 "•  Poznámky (sešit u panelu Clauda, nebo menu Orbitu): úkoly s kontextem a poznámkami. Aktivní "
+                 "ti Orbit s připojeným Claudem nabídne začít v nové relaci Claude Code."]
         if self._connected() and self.agent.isChecked():
             lines.append(f"•  {hotkey.binding_name(self._cfg['agent_ptt'])}: drž a mluv s agentem o relacích.")
         self._howto.setText("\n\n".join(lines))

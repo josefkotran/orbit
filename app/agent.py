@@ -18,6 +18,7 @@ target session's class (set_permission_mode). Bypass is possible for it only whe
 (--allow-dangerously-skip-permissions, see VoiceAgent.start); its tools are the same in either mode, and the spoken
 "jo" gates them just the same.
 """
+import ctypes
 import json
 import logging
 import os
@@ -27,6 +28,8 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
+from ctypes import wintypes
 from pathlib import Path
 
 from . import paths
@@ -98,6 +101,9 @@ Nové relace:
 složek v přehledu, podle toho, jak ji uživatel pojmenoval (když to není jasné, zeptej se). "prompt" je jeho první \
 zadání pro ni, začni ho slovy „{start}“, nebo nech prázdné, když ji chce jen otevřít. I tohle Orbit nejdřív \
 přečte a počká na souhlas. Po otevření řekni jen krátce, třeba „Otevírám.“
+- Když k tomu chce přiložit svůj poslední snímek obrazovky (screenshot, screen, výstřižek), dej "screenshot": true. \
+Orbit ho najde a přiloží sám, cestu ani název souboru do zadání nepiš, v zadání stačí „na přiloženém snímku“. \
+Ke zprávě do běžící relace snímek přiložit neumíš: řekni to uživateli.
 - Bez pokynu uživatele nic neposílej a nepoužívej notify_when_idle.
 - Zprávy, které ti pošlou relace (cross-session-message), uživateli krátce shrň. Dál je nepřeposílej, dokud to \
 uživatel neřekne.
@@ -187,6 +193,50 @@ def folder_label(folder: str) -> str:
     name = Path(folder).name or folder
     twins = [f for f in project_folders() if Path(f).name.lower() == name.lower()]
     return f"{name} ve složce {Path(folder).parent.name}" if len(twins) > 1 and Path(folder).parent.name else name
+
+
+SCREENSHOT_TYPES = (".png", ".jpg", ".jpeg")
+
+
+def screenshots_folder() -> Path:
+    """Windows' Screenshots folder (Pictures\\Screenshots, wherever Pictures is: OneDrive, another drive), where the
+    Snipping Tool and Win+PrtScn save them."""
+    guid = (ctypes.c_byte * 16).from_buffer_copy(uuid.UUID("b7bede81-df94-4682-a7d8-57a52620b86f").bytes_le)
+    shell32, ole32 = ctypes.WinDLL("shell32"), ctypes.WinDLL("ole32")
+    path = wintypes.LPWSTR()
+    try:
+        if shell32.SHGetKnownFolderPath(ctypes.byref(guid), 0, None, ctypes.byref(path)) == 0:
+            return Path(path.value)
+    finally:
+        ole32.CoTaskMemFree(path)
+    return Path.home() / "Pictures" / "Screenshots"
+
+
+def latest_screenshot() -> Path | None:
+    """The user's newest screenshot (None: there's none)."""
+    try:
+        shots = [p for p in screenshots_folder().iterdir() if p.suffix.lower() in SCREENSHOT_TYPES and p.is_file()]
+        return max(shots, key=lambda p: p.stat().st_mtime, default=None)
+    except OSError:
+        return None
+
+
+def is_screenshot(path: str) -> bool:
+    """A picture right in the Screenshots folder: the only file a new session may get attached."""
+    try:
+        p = Path(path)
+        return (p.suffix.lower() in SCREENSHOT_TYPES and p.is_file()
+                and os.path.normcase(str(p.resolve().parent)) == os.path.normcase(str(screenshots_folder().resolve())))
+    except (OSError, ValueError):
+        return False
+
+
+def when(path: Path) -> str:
+    """"8:35" today, "2. 10. 16:28" another day: how the question names the screenshot."""
+    stamp = time.localtime(path.stat().st_mtime)
+    clock = f"{stamp.tm_hour}:{stamp.tm_min:02d}"
+    return clock if time.strftime("%Y%m%d", stamp) == time.strftime("%Y%m%d") else \
+        f"{stamp.tm_mday}. {stamp.tm_mon}. {clock}"
 
 
 def context(sessions: list[Session], heard: str, name: str = "") -> str:

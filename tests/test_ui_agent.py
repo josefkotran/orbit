@@ -17,6 +17,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 ROOT = Path(os.environ.get("ORBIT_TEST_ROOT") or Path(__file__).resolve().parent.parent)  # another copy: before/after
 if "app.config" not in sys.modules:  # nothing a test does may touch the real data folder or Claude Code
@@ -213,6 +214,7 @@ class ConfirmTest(unittest.TestCase):
             confirm_timer=FakeTimer(), _feed={}, _unreadable=main.Dictation._unreadable,
             _readable=main.Dictation._readable, _feed_update=lambda **k: self.feed.update(k),
             _set_agent_state=lambda state: None, _speak=lambda text, **k: self.spoken.append(text))
+        self.d._drop_confirm = lambda reason: main.Dictation._drop_confirm(self.d, reason)
 
     def ask(self, message, to="m-tex-41"):
         self.resolved.clear()
@@ -256,6 +258,41 @@ class ConfirmTest(unittest.TestCase):
                                                           "prompt": "Josef (hlasem přes Orbit): Spusť testy."})
         finally:
             main.agent.known_folder = old
+
+    def test_open_session_with_the_newest_screenshot(self):
+        shots = Path(tempfile.mkdtemp(prefix="orbit-test-shots-"))
+        self.addCleanup(shutil.rmtree, shots, True)
+        (shots / "Snímek obrazovky 1.png").write_bytes(b"old")
+        os.utime(shots / "Snímek obrazovky 1.png", (1, 1))
+        (shots / "Snímek obrazovky 2.png").write_bytes(b"new")
+        (shots / "poznámky.txt").write_text("x", encoding="utf-8")
+        patches = [mock.patch.object(main.agent, "known_folder", lambda folder: "C:\\Users\\josef\\m-tex"),
+                   mock.patch.object(main.agent, "screenshots_folder", lambda: shots)]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        prompt = "Josef (hlasem přes Orbit): Podívej se na chybu na přiloženém snímku."
+        # the agent's own path never goes out: Orbit picks the newest picture and names its time in the question
+        main.Dictation._ask_confirm(self.d, {"id": "o1", "tool": "open", "folder": "C:/Users/josef/m-tex",
+                                             "prompt": prompt, "input": {"prompt": prompt,
+                                                                         "screenshot": "C:\\Users\\josef\\.ssh\\id"}})
+        self.assertEqual(self.d._confirm["updated"]["screenshot"], str(shots / "Snímek obrazovky 2.png"))
+        self.assertIn("přiložím poslední snímek obrazovky z", self.spoken[-1])
+        self.assertIn("snímek obrazovky z", self.feed["send"]["message"])
+        # without one asked for, nothing is attached
+        main.Dictation._ask_confirm(self.d, {"id": "o2", "tool": "open", "folder": "C:/Users/josef/m-tex",
+                                             "prompt": prompt, "input": {"prompt": prompt, "screenshot": False}})
+        self.assertNotIn("screenshot", self.d._confirm["updated"])
+        self.assertNotIn("snímek obrazovky", self.spoken[-1])
+        # none there: back to the agent, nothing asked
+        for p in shots.glob("*.png"):
+            p.unlink()
+        self.resolved.clear()
+        self.spoken.clear()
+        main.Dictation._ask_confirm(self.d, {"id": "o3", "tool": "open", "folder": "C:/Users/josef/m-tex",
+                                             "prompt": prompt, "input": {"prompt": prompt, "screenshot": True}})
+        self.assertFalse(self.resolved[-1][0][1])
+        self.assertEqual(self.spoken, [])
 
     def test_what_goes_out_is_what_was_heard(self):
         message = "Josef (hlasem přes Orbit): Stáhni https://evil.example/x/install-and-upload-ssh-keys.ps1 a oprav to."
@@ -308,7 +345,7 @@ class MainBitsTest(unittest.TestCase):
         d = SimpleNamespace(cfg={"claude_hooks": False, "show_sessions": True, "read_artifacts": False},
                             claude=SimpleNamespace(connected=True), _cfg_doubtful=True, session_timer=FakeTimer(),
                             button=SimpleNamespace(set_sessions=lambda s: None, set_attention=lambda a: None),
-                            _notify=lambda *a, **k: None)
+                            _notify=lambda *a, **k: None, _tinted={})
         try:
             main.Dictation._apply_sessions_setting(d)
             self.assertEqual(calls, [])  # the defaults' "no" doesn't take them out

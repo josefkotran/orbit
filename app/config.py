@@ -41,11 +41,14 @@ DEFAULTS = {
     "trailing_space": True,
     "sounds": True,
     "show_button": True,
+    "fade_after_s": 3,  # idle this long -> the button and its panel turn almost transparent (0 = never)
     "show_usage": True,  # Claude plan usage panel above the mic button
     # where the limits come from: "statusline" (Orbit's status line in Claude Code) or "oauth" (the internal usage
     # endpoint with Claude Code's token; not in the settings window, an older config.json gets it: see main)
     "usage_source": "statusline",
     "show_sessions": True,  # Claude Code sessions in that panel (needs Orbit's hooks in Claude Code's settings.json)
+    "folder_colors": {},  # folder name (lower case) -> a colour of colors.COLORS; the others get one automatically
+    "tint_sessions": False,  # the sessions' terminal background in their folder's colour (colors.py)
     "speak_answers": True,  # read the start of a finished session's answer aloud
     "read_artifacts": False,  # a session published an artifact: Claude sums it up in 7 sentences, read aloud
     "muted": False,  # the speaker button: no beeps, no bubble chimes, nothing read aloud
@@ -99,6 +102,10 @@ def _valid(key: str, value) -> bool:
         return isinstance(value, str) and bool(value)
     if key == "usage_source":
         return value in ("statusline", "oauth")
+    if key == "folder_colors":
+        return isinstance(value, dict) and all(isinstance(v, str) for v in value.values())
+    if key == "fade_after_s":
+        return type(value) is int and 0 <= value <= 3600
     return isinstance(value, type(DEFAULTS[key]))
 
 

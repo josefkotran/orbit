@@ -104,7 +104,7 @@ def stylesheet() -> str:
     hover = QColor(ACCENT).lighter(112).name()
     chevron = _chevron_path()
     arrow = f"QComboBox::down-arrow {{ image: url({chevron}); width: 12px; height: 12px; }}" if chevron else ""
-    d = lambda sel: ", ".join(f"QDialog#{name} {sel}".rstrip() for name in ("settings", "wizard"))  # both windows
+    d = lambda sel: ", ".join(f"QDialog#{name} {sel}".rstrip() for name in ("settings", "wizard", "notebook"))  # all three
     return f"""
     {d("")} {{ background: {BG}; }}
     {d("QLabel")} {{ color: {TEXT}; font-family: "{TEXT_FONT}"; font-size: 13px; }}
@@ -131,6 +131,17 @@ def stylesheet() -> str:
     QScrollBar::handle:vertical:hover {{ background: {t('#3A4A6E')}; }}
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
     QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; }}
+    {d("QTreeWidget")}, {d("QListWidget")} {{ background: {SURFACE}; color: {TEXT}; border: 1px solid {LINE};
+        border-radius: 8px; padding: 4px; font-family: "{TEXT_FONT}"; font-size: 13px; outline: none; }}
+    {d("QTreeWidget::item")} {{ padding: 4px 6px; }}
+    {d("QListWidget::item")} {{ padding: 4px 2px; border-radius: 5px; }}
+    {d("QTreeWidget::item:hover")}, {d("QListWidget::item:hover")} {{ background: {t('#1E2A40')}; }}
+    {d("QTreeWidget::item:selected")}, {d("QListWidget::item:selected")} {{ background: {t('#24365A')};
+        color: {TEXT}; }}
+    {d("QTreeWidget::branch")}, {d("QTreeWidget::branch:selected")}, {d("QTreeWidget::branch:hover")} {{
+        background: transparent; border-image: none; image: none; }}
+    {d('QPushButton[role="small"][selected="true"]')} {{ color: {TEXT}; border-color: {ACCENT};
+        background: {t('#1E2D4A')}; }}
     QProgressBar {{ background: {LINE}; border: none; border-radius: 3px; max-height: 6px; min-height: 6px; }}
     QProgressBar::chunk {{ background: {ACCENT}; border-radius: 3px; }}
 

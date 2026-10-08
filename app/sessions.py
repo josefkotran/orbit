@@ -23,9 +23,10 @@ from .config import SESSIONS_DIR
 log = logging.getLogger(__name__)
 
 STATUS_DIR = SESSIONS_DIR / "status"  # cc_status.py's files
-DONE_FRESH_S = 600  # "hotovo" for this long after a turn, then "v klidu"
+DONE_FRESH_S = 600  # "done" for this long after a turn, then "idle" (no news to tell any more)
 WAITING_TYPES = ("permission_prompt", "elicitation_dialog")
-STATE_LABELS = {"working": "pracuje", "waiting": "čeká na tebe", "done": "hotovo", "idle": "v klidu",
+# idle shows as done: the user wants to tell at a glance only whether a session works or is finished (8 Oct)
+STATE_LABELS = {"working": "pracuje", "waiting": "čeká na tebe", "done": "hotovo", "idle": "hotovo",
                 "error": "chyba"}
 STALE_S = 12 * 3600  # sessions whose process can't be checked disappear after this long without an event
 STATUS_FRESH_S = 600  # the status line's context counts while it isn't this much older than the transcript

@@ -7,6 +7,10 @@ s Vulkanem), takže zvuk nikam neodchází.
 Když pracuješ s **Claude Code**, Orbit nad plovoucím mikrofonem ukazuje limity a stav relací, přečte ti hotové
 odpovědi a hlasový agent ti pošle zadání do relace, až mu řekneš „jo“.
 
+**Poznámky a úkoly:** v sešitu u panelu si vedeš úkoly se složkou, kontextem a průběžnými poznámkami (Aktivní,
+V plánu, Poznámky, Hotovo, pořadí přetažením). Aktivní ti Orbit každou půlhodinu nabídne a po kliknutí na bublinu
+nebo „jo“ pro ně otevře novou relaci Claude Code v jejich složce, se zadáním, kontextem i poznámkami.
+
 Web: **https://orbit.easya.cz**
 
 ## Instalace
@@ -27,14 +31,16 @@ Web: **https://orbit.easya.cz**
 - Grafiku s Vulkanem (NVIDIA, AMD, Intel). Na large-v3 aspoň 6 GB paměti grafiky, jinak Orbit vezme rychlejší
   turbo. Bez grafiky přepisuje procesor, jen pomalu.
 - Místo na model: 3,1 GB (turbo 1,6 GB), stáhne se při prvním spuštění.
-- Volitelně Claude Code s vlastním předplatným Claude (limity, relace, předčítání, hlasový agent) a Google Chrome
-  (otevírání stránek hlasem).
+- Volitelně Claude Code s vlastním předplatným Claude (limity, relace, předčítání, hlasový agent, spouštění úkolů
+  z poznámek) a Google Chrome (otevírání stránek hlasem).
 
 ## Soukromí
 
 - Mikrofon je otevřený jen po dobu, kdy držíš klávesu (a v okně nastavení kvůli ukazateli hlasitosti).
 - Přepis běží lokálně. Claude dostane jen text, a jen když to zapneš: učení slovníku z diktátů, nebo zpráva,
   kterou hlasovému agentovi potvrdíš.
+- Poznámky a úkoly jsou jen v tvém počítači (`tasks.json` v datové složce Orbitu). Nová relace Claude Code dostane
+  úkol, až když její spuštění potvrdíš.
 - Orbit nikdy nechce heslo ani token od Clauda: přihlašuješ se v Claude Code na stránce Anthropicu.
 
 ## Přesnost

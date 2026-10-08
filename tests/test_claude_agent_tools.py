@@ -22,7 +22,7 @@ os.environ["ORBIT_CLAUDE_DIR"] = os.path.join(_TMP, "claude")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 logging.getLogger().addHandler(logging.NullHandler())  # the code's warnings aren't test output
 
-from app import agent_tools  # noqa: E402
+from app import agent, agent_tools  # noqa: E402
 from app.agent import prefix  # noqa: E402
 
 FOLDER = os.path.join(_TMP, "projekt")
@@ -81,15 +81,15 @@ class OpenSession(unittest.TestCase):
         self.minimize = minimize.start()
         self.addCleanup(minimize.stop)
 
-    def run_task(self, prompt: str, folder: str = FOLDER) -> str:
+    def run_task(self, prompt: str, folder: str = FOLDER, screenshot: str = "") -> str:
         """The task the new session gets (ORBIT_TASK), "" = opened without one."""
-        agent_tools.open_session(folder, prompt)
+        agent_tools.open_session(folder, prompt, screenshot)
         self.popen.assert_called_once()
         return self.popen.call_args.kwargs["env"]["ORBIT_TASK"]
 
-    def refused(self, prompt: str, folder: str = FOLDER) -> None:
+    def refused(self, prompt: str, folder: str = FOLDER, screenshot: str = "") -> None:
         with self.assertRaises(ValueError, msg=prompt):
-            agent_tools.open_session(folder, prompt)
+            agent_tools.open_session(folder, prompt, screenshot)
         self.popen.assert_not_called()
 
     def test_plain_task_gets_the_prefix_once(self):
@@ -107,6 +107,41 @@ class OpenSession(unittest.TestCase):
         self.assertEqual(Path(kwargs["executable"]).name.lower(), "cmd.exe")
         self.assertEqual(os.path.normcase(str(kwargs["cwd"])), os.path.normcase(FOLDER))
         self.assertIn('"!ORBIT_TASK!"', self.popen.call_args.args[0])
+
+    def test_users_own_environment_not_the_agents(self):
+        # the agent's Claude Code gives its tools these: the session had no colours and git couldn't ask for a login
+        agents = {"NO_COLOR": "1", "GCM_INTERACTIVE": "never", "GIT_TERMINAL_PROMPT": "0",
+                  "CLAUDE_PROJECT_DIR": _TMP, "ANTHROPIC_API_KEY": "sk-test"}
+        with mock.patch.dict(os.environ, agents):
+            self.run_task("Spusť testy.")
+        env = {k.upper(): v for k, v in self.popen.call_args.kwargs["env"].items()}
+        self.assertFalse(set(agents) & set(env), env.keys())
+        self.assertIn("PATH", env)
+        self.assertEqual(env["CLAUDE_CONFIG_DIR"], os.environ["ORBIT_CLAUDE_DIR"])
+        self.assertEqual(env["ORBIT_CLAUDE"], r"C:\fake\claude.exe")
+
+    def test_a_task_from_the_notebook_says_so(self):
+        agent_tools.open_session(FOLDER, "Úkol: Ceník.", source="úkol z poznámek Orbitu")
+        self.assertEqual(self.popen.call_args.kwargs["env"]["ORBIT_TASK"],
+                         "Josef (úkol z poznámek Orbitu): Úkol: Ceník.")
+
+    def test_screenshot_only_from_the_screenshots_folder(self):
+        shots = Path(_TMP) / "Snímky obrazovky"
+        shots.mkdir(exist_ok=True)
+        shot = shots / "Snímek obrazovky 2026-10-08 083555.png"
+        shot.write_bytes(b"png")
+        secret = Path(_TMP) / "id_ed25519.png"
+        secret.write_bytes(b"key")
+        with mock.patch.object(agent, "screenshots_folder", lambda: shots):
+            task = self.run_task("Podívej se na přiložený snímek.", screenshot=str(shot))
+            self.assertEqual(task, f"Josef (hlasem přes Orbit): Podívej se na přiložený snímek. "
+                                   f"Přiložený snímek obrazovky: {shot}")
+            self.popen.reset_mock()
+            self.assertEqual(self.run_task("", screenshot=str(shot)),
+                             f"Josef (hlasem přes Orbit): Přiložený snímek obrazovky: {shot}")
+            self.popen.reset_mock()
+            self.refused("Podívej se.", screenshot=str(secret))
+            self.refused("Podívej se.", screenshot=str(shots / "chybí.png"))
 
     def test_without_task(self):
         self.assertEqual(self.run_task(""), "")
