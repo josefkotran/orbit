@@ -7,6 +7,8 @@ again only in one of the user's folders and with a task that was read out whole 
 find_pages and open_page find a page in the user's Chrome history and open it (app/browser.py), without asking: they
 only show a page. That's why open_page opens only what find_pages found here (the same page with another number in
 its path or query is fine), never an address the model made up or read somewhere.
+open_folder (not a tool: Orbit's + above the panel, favorites.start_session) opens a session in a folder the user
+picked, without a task, and brings its window to the front.
 
 Its own process (Claude Code starts it): standard library and app modules without Qt only.
 """
@@ -224,21 +226,67 @@ def open_session(folder: str, prompt: str = "", screenshot: str = "", source: st
     known = known_folder(folder)
     if not known:
         raise ValueError(f"Složka {folder} není v seznamu složek pro nové relace. Vezmi celou cestu ze seznamu.")
-    if known.startswith(("\\\\", "//")):
-        raise ValueError("Složka na síťovém disku (\\\\server\\…) nejde, relaci otevřu jen v místní složce.")
-    path = Path(known)
-    if not path.is_dir():
-        raise ValueError(f"Složka {folder} neexistuje.")
+    path = _local_folder(known)
     if screenshot and not is_screenshot(screenshot):
         raise ValueError("Snímek obrazovky jsem nenašel, relaci jsem neotevřel. Zkus to znovu.")
     task = _task(prompt, source)
     if screenshot:
         task = f"{task or _start(source)} Přiložený snímek obrazovky: {screenshot}"
+    if task[:1] in ("-", "/"):
+        task = f"Úkol: {task}"
+    _, background = _launch(path, task, task_id)
+    shot = " Snímek obrazovky má v zadání." if screenshot else ""
+    if background:
+        return f"Nová relace se zadáním běží ve složce {path}, minimalizovaná na liště.{shot}"
+    if task:
+        return f"Nová relace se otevírá ve složce {path}. Claude Code se nejdřív zeptá na běh bez oprávnění.{shot}"
+    return f"Nová relace se otevírá ve složce {path} v novém okně terminálu."
+
+
+def open_folder(folder: str) -> str:
+    """A new session without a task in a folder the user picked (Orbit's favourite folders, the + above the panel:
+    favorites.py), in a window of its own like their sessions, brought to the front. Any local folder, not only
+    known_folder: the user chose it with their own click, the agent never gets here. Not an MCP tool."""
+    path = _local_folder(folder)
+    proc, _ = _launch(path)
+    _bring_up(proc.pid)
+    return f"Nová relace se otevírá ve složce {path}."
+
+
+def _local_folder(folder: str) -> Path:
+    if folder.startswith(("\\\\", "//")):  # cmd.exe can't start in one: it would run in C:\Windows
+        raise ValueError("Složka na síťovém disku (\\\\server\\…) nejde, relaci otevřu jen v místní složce.")
+    path = Path(folder)
+    if not path.is_absolute() or not path.is_dir():
+        raise ValueError(f"Složka {folder} neexistuje.")
+    return path
+
+
+def _bring_up(pid: int) -> None:
+    """The new session's window to the front as soon as it shows: started from Orbit, which never takes the focus
+    (the + is in a window that doesn't activate), Windows may leave it behind the window the user is in. Checked for
+    a moment more, Windows Terminal activates its new window itself once again (~0.35 s), and brought up at most 3×
+    so a click elsewhere right away wins."""
+    user32 = ctypes.windll.user32
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    start, hwnd = time.monotonic(), 0
+    while not hwnd and time.monotonic() - start < 10:
+        hwnd = _console_window(pid)
+        time.sleep(0 if hwnd else 0.02)
+    tries, end = 0, time.monotonic() + 1.0
+    while hwnd and time.monotonic() < end and tries < 3:
+        if user32.GetForegroundWindow() != hwnd:
+            tries += 1
+            sessions.focus_window(hwnd)
+        time.sleep(0.05)
+
+
+def _launch(path: Path, task: str = "", task_id: str = "") -> tuple[subprocess.Popen, bool]:
+    """Starts Claude Code in path (task: its first message, "" = none): (cmd.exe's process, whether it runs minimized
+    in the background)."""
     exe = find_exe()
     if not exe:
         raise ValueError("Claude Code tu není nainstalovaný.")
-    if task[:1] in ("-", "/"):
-        task = f"Úkol: {task}"
     bypass = sessions.bypass_in_use()
     # In a normal console window like the user's own sessions (cmd.exe → claude.exe; claude.exe alone shows on the
     # taskbar as "some Claude program"). Claude's path and the task reach cmd only as variables expanded after cmd has
@@ -257,13 +305,9 @@ def open_session(folder: str, prompt: str = "", screenshot: str = "", source: st
         env.update(ORBIT_TASK_ID=task_id, ORBIT_TASK_DATA=str(paths.data_dir()))
     proc = subprocess.Popen(f'cmd.exe /s /v:on /k "{command}"', executable=CMD, cwd=path, env=env, close_fds=True,
                             creationflags=subprocess.CREATE_NEW_CONSOLE | subprocess.CREATE_NEW_PROCESS_GROUP)
-    shot = " Snímek obrazovky má v zadání." if screenshot else ""
     if background:
         threading.Thread(target=_minimize, args=(proc.pid, focused), daemon=True).start()
-        return f"Nová relace se zadáním běží ve složce {path}, minimalizovaná na liště.{shot}"
-    if task:
-        return f"Nová relace se otevírá ve složce {path}. Claude Code se nejdřív zeptá na běh bez oprávnění.{shot}"
-    return f"Nová relace se otevírá ve složce {path} v novém okně terminálu."
+    return proc, background
 
 
 def _result(request_id, result=None, error=None) -> dict:

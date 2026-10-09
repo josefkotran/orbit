@@ -14,6 +14,7 @@ history.json
 history.json.*
 corrections.json
 corrections.json.*
+ducked.json*
 statusline-previous.json
 *.log
 portable

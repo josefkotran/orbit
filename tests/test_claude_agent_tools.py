@@ -56,7 +56,9 @@ class Shape(unittest.TestCase):
             self.assertEqual(opened.call_count, 1)
 
 
-class OpenSession(unittest.TestCase):
+class _Starting(unittest.TestCase):
+    """cmd.exe isn't started (Popen replaced), Claude Code is a fake path, the user's sessions run in bypass."""
+
     @classmethod
     def setUpClass(cls):
         for folder in (FOLDER, OTHER):
@@ -81,6 +83,8 @@ class OpenSession(unittest.TestCase):
         self.minimize = minimize.start()
         self.addCleanup(minimize.stop)
 
+
+class OpenSession(_Starting):
     def run_task(self, prompt: str, folder: str = FOLDER, screenshot: str = "") -> str:
         """The task the new session gets (ORBIT_TASK), "" = opened without one."""
         agent_tools.open_session(folder, prompt, screenshot)
@@ -193,6 +197,41 @@ class OpenSession(unittest.TestCase):
         self.refused("Spusť testy.", OTHER)
         self.refused("", os.path.join(_TMP, "neni"))
         self.refused("", r"\\server\share\projekt")
+
+
+class OpenFolder(_Starting):
+    """open_folder: the + above Orbit's panel, a folder the user picked (not only one Claude Code knows), no task,
+    its window brought to the front."""
+
+    def setUp(self):
+        super().setUp()
+        bring = mock.patch.object(agent_tools, "_bring_up")
+        self.bring = bring.start()
+        self.addCleanup(bring.stop)
+
+    def test_any_local_folder_without_a_task(self):
+        agent_tools.open_folder(OTHER)  # not in Claude Code's list: the user chose it
+        kwargs = self.popen.call_args.kwargs
+        self.assertEqual(os.path.normcase(str(kwargs["cwd"])), os.path.normcase(OTHER))
+        self.assertEqual(Path(kwargs["executable"]).name.lower(), "cmd.exe")
+        self.assertEqual(kwargs["env"]["ORBIT_TASK"], "")
+        self.assertNotIn("!ORBIT_TASK!", self.popen.call_args.args[0])
+        self.assertIn("--dangerously-skip-permissions", self.popen.call_args.args[0])  # like the user's sessions
+        self.minimize.assert_not_called()  # in front, not minimized
+        self.bring.assert_called_once_with(self.popen.return_value.pid)
+
+    def test_refused_folders(self):
+        for folder in (os.path.join(_TMP, "neni"), r"\\server\share\projekt", "projekt", ""):
+            with self.assertRaises(ValueError, msg=folder):
+                agent_tools.open_folder(folder)
+        self.popen.assert_not_called()
+
+    def test_not_a_tool_of_the_agent(self):
+        self.assertNotIn("open_folder", {tool["name"] for tool in agent_tools.TOOLS})
+        reply = agent_tools.handle({"id": 1, "method": "tools/call",
+                                    "params": {"name": "open_folder", "arguments": {"folder": OTHER}}})
+        self.assertTrue(reply["result"]["isError"])
+        self.popen.assert_not_called()
 
 
 if __name__ == "__main__":

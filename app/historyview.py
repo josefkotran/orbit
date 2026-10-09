@@ -1,21 +1,27 @@
-"""The dictation history window (history.py): the last dictations, newest first, and the chosen one on the right with
-what can be done with it: insert it again where the user was (this window goes away first, so Windows brings that
-window back), copy it, listen to its recording, transcribe it again, correct it (the correction goes to vocabulary
-learning: editing.word_changes) or delete it."""
+"""The dictation history window (history.py, opened from the clock above the panel or the menu): every dictation,
+newest first, each copied with one click on the icon at its row's end (or a double click), a search above them; the
+chosen one on the right with the rest of what can be done with it: insert it again where the user was (this window
+goes away first, so Windows brings that window back), listen to its recording, transcribe it again, correct it (the
+correction goes to vocabulary learning: editing.word_changes) or delete it."""
 import time
+import unicodedata
 import winsound
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import (QDialog, QHBoxLayout, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit,
-                               QPushButton, QVBoxLayout, QWidget)
+from PySide6.QtCore import QRect, Qt, QTimer, Signal
+from PySide6.QtGui import QColor, QFont, QKeySequence
+from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
+                               QPlainTextEdit, QPushButton, QStyle, QStyledItemDelegate, QVBoxLayout, QWidget)
 
-from . import history
+from . import history, theme
 from .theme import style_titlebar
 from .ui import _label, _repolish, mic_icon
 
 ID = Qt.UserRole
 OUTCOMES = {history.INSERTED: "vloženo", history.CLIPBOARD: "ve schránce", history.FAILED: "přepis selhal"}
+COPY_GLYPH, CHECK_GLYPH = chr(0xE8C8), chr(0xE73E)  # "Copy", "CheckMark" in Segoe Fluent Icons
+COPY_ZONE = 34  # px at a row's right end: its copy icon
+COPIED_MS = 1500  # the tick stays this long after a copy
 
 
 def when(at: float) -> str:
@@ -25,9 +31,53 @@ def when(at: float) -> str:
     return clock if t[:3] == now[:3] else f"{t.tm_mday}. {t.tm_mon}. {clock}"
 
 
-def first_line(text: str, limit: int = 40) -> str:
+def first_line(text: str, limit: int = 36) -> str:
     line = " ".join(text.split())
     return line if len(line) <= limit else line[:limit - 1].rstrip() + "…"
+
+
+def _fold(text: str) -> str:
+    """For the search: lower case without diacritics ("dalsi" finds "další")."""
+    return "".join(c for c in unicodedata.normalize("NFD", text.lower()) if not unicodedata.combining(c))
+
+
+class _RowDelegate(QStyledItemDelegate):
+    """A row as usual, with a copy icon at its right end (a green tick for a moment after it was copied)."""
+
+    def __init__(self, view):
+        super().__init__(view)
+        self.copied = ""  # the entry just copied
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        zone = QRect(option.rect.right() - COPY_ZONE + 1, option.rect.top(), COPY_ZONE, option.rect.height())
+        done = index.data(ID) == self.copied
+        hovered = bool(option.state & QStyle.State_MouseOver)
+        painter.save()
+        font = QFont(theme.icon_font())
+        font.setPixelSize(15)
+        painter.setFont(font)
+        painter.setPen(QColor("#3DD68C" if done else theme.TEXT if hovered else theme.DIM))
+        painter.drawText(zone, Qt.AlignCenter, CHECK_GLYPH if done else COPY_GLYPH)
+        painter.restore()
+
+
+class _Rows(QListWidget):
+    """The dictations: a click on a row's copy icon, or Ctrl+C, copies it (copy(entry id))."""
+    copy = Signal(str)
+
+    def mouseReleaseEvent(self, event):
+        index = self.indexAt(event.position().toPoint())
+        if (event.button() == Qt.LeftButton and index.isValid()
+                and event.position().x() >= self.visualRect(index).right() - COPY_ZONE):
+            self.copy.emit(index.data(ID))
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.matches(QKeySequence.Copy) and self.currentItem():
+            self.copy.emit(self.currentItem().data(ID))
+            return
+        super().keyPressEvent(event)
 
 
 class HistoryWindow(QDialog):
@@ -56,10 +106,22 @@ class HistoryWindow(QDialog):
         left = QVBoxLayout()
         left.setSpacing(10)
         left.addWidget(_label("Historie diktátů", "section"))
-        self.list = QListWidget()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Hledat v diktátech…")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(lambda _: self.refresh())
+        left.addWidget(self.search)
+        self.list = _Rows()
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # first_line() keeps the rows short
+        self.list.setMouseTracking(True)  # the copy icon lights up under the mouse
+        self.list.setToolTip("Ikona vpravo, dvojklik nebo Ctrl+C diktát zkopíruje.")
+        self._rows = _RowDelegate(self.list)
+        self.list.setItemDelegate(self._rows)
         self.list.currentItemChanged.connect(lambda item, _: self._select(item))
-        self.list.itemDoubleClicked.connect(lambda _: self._insert())
+        self.list.itemDoubleClicked.connect(lambda item: self._copy_row(item.data(ID)))
+        self.list.copy.connect(self._copy_row)
+        self._copied_timer = QTimer(self, singleShot=True, interval=COPIED_MS)
+        self._copied_timer.timeout.connect(self._copied_gone)
         left.addWidget(self.list, 1)
         self.count = _label("", "dim", wrap=True)
         left.addWidget(self.count)
@@ -93,12 +155,11 @@ class HistoryWindow(QDialog):
         buttons.setSpacing(8)
         self.insert = QPushButton("Vložit")
         self.insert.setProperty("role", "primary")
-        self.insert.setToolTip("Vloží text do okna, které bylo vpředu před otevřením historie. Dvojklik na diktát "
-                               "dělá totéž.")
+        self.insert.setToolTip("Vloží text do okna, které bylo vpředu před otevřením historie.")
         self.insert.clicked.connect(self._insert)
         self.copy = QPushButton("Kopírovat")
         self.copy.setProperty("role", "ghost")
-        self.copy.clicked.connect(lambda: self._emit(self.copy_requested, "Zkopírováno, vlož ho Ctrl+V."))
+        self.copy.clicked.connect(lambda: self._current and self._copy_row(self._current.id))
         self.save = QPushButton("Uložit opravu")
         self.save.setProperty("role", "ghost")
         self.save.setToolTip("Uloží opravený text. Slova, která Whisper přeslechl, si Orbit zapamatuje pro učení "
@@ -150,10 +211,13 @@ class HistoryWindow(QDialog):
 
     def refresh(self, select: str | None = None, status: str = "") -> None:
         keep = select or (self._current.id if self._current else None)
+        query = _fold(self.search.text().strip())
         self.list.blockSignals(True)
         self.list.clear()
         chosen = None
         for entry in reversed(self.history.items):
+            if query and query not in _fold(f"{entry.best} {entry.app} {entry.instruction}"):
+                continue
             where = entry.app or "?"
             outcome = OUTCOMES.get(entry.outcome, "")
             head = f"{when(entry.at)} · {where}" + (f" · {outcome}" if entry.outcome != history.INSERTED else "")
@@ -169,7 +233,11 @@ class HistoryWindow(QDialog):
         has = self.list.count() > 0
         self.detail.setVisible(has)
         self.empty.setVisible(not has)
-        if not has:
+        self.empty.setText("Nic takového tu není." if query and self.history.items else
+                           "Zatím tu nic není. Každý diktát se sem zapíše, i když skončí ve schránce.")
+        if query:
+            self.count.setText(f"Nalezeno: {self.list.count()} z {len(self.history.items)}")
+        elif not has:
             self.count.setText("")
         elif self.history.persist:
             self.count.setText(f"Jen v tomhle počítači, nejvýš {history.MAX_ITEMS} posledních.")
@@ -235,6 +303,20 @@ class HistoryWindow(QDialog):
         signal.emit(self._current.id)
         if status:
             self._say(status)
+
+    def _copy_row(self, entry_id: str) -> None:
+        """One click (or a double click, or Ctrl+C): the dictation on the clipboard, a tick on its row."""
+        if self._current and self._current.id == entry_id:
+            self._keep_edit()  # an edited text: the edited one
+        self.copy_requested.emit(entry_id)
+        self._rows.copied = entry_id
+        self.list.viewport().update()
+        self._copied_timer.start()
+        self._say("Zkopírováno, vlož ho Ctrl+V.")
+
+    def _copied_gone(self) -> None:
+        self._rows.copied = ""
+        self.list.viewport().update()
 
     def _keep_edit(self) -> None:
         """Inserting or copying an edited text uses the edited one: saved as the correction first."""

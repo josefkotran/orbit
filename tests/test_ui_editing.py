@@ -9,6 +9,7 @@ import atexit
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -300,6 +301,42 @@ class Editing(unittest.TestCase):
         self.assertEqual(self.d.history.last().best, "Napiš to Claudovi.")
         self.assertEqual([(c["wrong"], c["right"]) for c in learning.corrections_since(None)],
                          [("klodovi", "Claudovi")])
+
+
+class HistoryWindowTest(unittest.TestCase):
+    """The history window: one click copies a row (it gets a tick), the search finds without diacritics."""
+
+    def test_copy_and_search(self):
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is not None and not isinstance(app, QApplication):  # another test's QGuiApplication: a window
+            # needs a QApplication, so this one runs in a process of its own
+            test = f"{__name__}.HistoryWindowTest.test_copy_and_search"
+            run = subprocess.run([sys.executable, "-m", "unittest", test],
+                                 cwd=Path(__file__).parent, capture_output=True, text=True, encoding="utf-8",
+                                 errors="replace", timeout=120)
+            self.assertEqual(run.returncode, 0, run.stderr[-2000:])
+            return
+        self.app = app or QApplication([])  # kept for the window's lifetime
+        from app.historyview import HistoryWindow
+        h = history.History(persist=False)
+        h.persist = True  # several entries in memory (nothing is saved: the file is in the test's data folder)
+        first = h.add("Faktura za září pořád chybí.", app="chrome")
+        h.add("Pošli mi to zítra.", app="WindowsTerminal")
+        window = HistoryWindow(h, Path(tempfile.gettempdir()))
+        copied = []
+        window.copy_requested.connect(copied.append)
+        self.assertEqual(window.list.count(), 2)
+        window.list.copy.emit(first.id)  # the icon at the row's end
+        self.assertEqual(copied, [first.id])
+        self.assertEqual(window._rows.copied, first.id)
+        self.assertIn("Zkopírováno", window.status.text())
+        window.search.setText("zari")
+        self.assertEqual(window.list.count(), 1)
+        self.assertIn("Nalezeno: 1 z 2", window.count.text())
+        window.search.setText("nic takového")
+        self.assertEqual(window.list.count(), 0)
+        history.path().unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

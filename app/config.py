@@ -4,7 +4,7 @@ import os
 import shutil
 import time
 
-from . import paths, vocab
+from . import favorites, paths, vocab
 from .paths import ROOT
 
 # Where things are: see paths.py. The data folder is decided once per run.
@@ -45,6 +45,8 @@ DEFAULTS = {
     "insert_mode": "paste",  # "paste" (clipboard + Ctrl+V) or "type" (Unicode keystrokes)
     "trailing_space": True,
     "sounds": True,
+    # other programs' sound while the microphone is open (ducking.py): "keep", "lower" (to a fifth) or "mute"
+    "duck_audio": "keep",
     "show_button": True,
     "fade_after_s": 3,  # idle this long -> the button and its panel turn almost transparent (0 = never)
     "show_usage": True,  # Claude plan usage panel above the mic button
@@ -54,6 +56,7 @@ DEFAULTS = {
     "show_sessions": True,  # Claude Code sessions in that panel (needs Orbit's hooks in Claude Code's settings.json)
     "folder_colors": {},  # folder name (lower case) -> a colour of colors.COLORS; the others get one automatically
     "tint_sessions": False,  # the sessions' terminal background in their folder's colour (colors.py)
+    "favorite_folders": [],  # the + above the panel: full paths, a new Claude Code session in one click (favorites.py)
     "speak_answers": True,  # read the start of a finished session's answer aloud
     "read_artifacts": False,  # a session published an artifact: Claude sums it up in 7 sentences, read aloud
     "muted": False,  # the speaker button: no beeps, no bubble chimes, nothing read aloud
@@ -107,8 +110,12 @@ def _valid(key: str, value) -> bool:
         return isinstance(value, str) and bool(value)
     if key == "usage_source":
         return value in ("statusline", "oauth")
+    if key == "duck_audio":
+        return value in ("keep", "lower", "mute")
     if key == "folder_colors":
         return isinstance(value, dict) and all(isinstance(v, str) for v in value.values())
+    if key == "favorite_folders":
+        return isinstance(value, list) and all(isinstance(v, str) for v in value)
     if key == "fade_after_s":
         return type(value) is int and 0 <= value <= 3600
     return isinstance(value, type(DEFAULTS[key]))
@@ -164,6 +171,7 @@ def load() -> dict:
                     len(replacements))
         cfg["replacements"] = replacements
     cfg["name"], cfg["about"] = clean_name(cfg["name"]), clean_about(cfg["about"])
+    cfg["favorite_folders"] = favorites.clean(cfg["favorite_folders"])
     return cfg
 
 

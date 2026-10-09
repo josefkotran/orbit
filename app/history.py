@@ -17,7 +17,7 @@ from . import config
 
 log = logging.getLogger(__name__)
 
-MAX_ITEMS = 200
+MAX_ITEMS = 1000  # Pepa (8 Oct): "ať vidím všechnu historii"; about 300 kB
 
 # where a dictation's text went
 INSERTED = "inserted"  # typed into the window it was meant for

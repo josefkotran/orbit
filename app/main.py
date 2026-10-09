@@ -18,15 +18,17 @@ from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication
 from PySide6.QtTextToSpeech import QTextToSpeech
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
-from . import (agent, artifacts, claude_cli, claude_settings, claude_usage, colors, config, downloads, editing,
-               history, hotkey, inserter, learning, paths, rewrite, sessions, tasks, theme, vocab, voice, winutil)
+from . import (agent, artifacts, claude_cli, claude_settings, claude_usage, colors, config, downloads, ducking,
+               editing, favorites, history, hotkey, inserter, learning, paths, rewrite, sessions, tasks, theme, vocab,
+               voice, winutil)
+from .favoritesview import FavoritesDialog, NewRepoDialog
 from .historyview import HistoryWindow
 from .inserter import Inserter
 from .notebook import Notebook
 from .onboarding import CANCELLED, ClaudeConnection, Downloads, Wizard
 from .recorder import Recorder, input_devices, is_bluetooth_handsfree, is_silent
-from .ui import (Bubble, FloatingButton, SettingsDialog, color_icon, export_vocabulary, import_vocabulary,
-                 message_box, mic_icon)
+from .ui import (ADD_GLYPH, CHOOSE_GLYPH, Bubble, FloatingButton, FolderMenu, SettingsDialog, color_icon,
+                 export_vocabulary, fill_color_menu, import_vocabulary, message_box, mic_icon)
 from .version import VERSION
 from .whisper_server import (SAMPLE_RATE, WhisperServer, apply_replacements, apply_voice_commands, build_prompt,
                              clean_text, terminal_command, to_wav)
@@ -112,7 +114,7 @@ class Bridge(QObject):
     rewrite_failed = Signal(object, str)  # the Take, the message
     retranscribed = Signal(str, object)  # a history entry transcribed again: its id, {"text", "raw"} or {"error"}
     usage_ready = Signal(object)
-    usage_failed = Signal(str)
+    usage_failed = Signal(str, object)  # why, the last answer from before a restart (claude_usage.Limited) or None
     learned = Signal(object)
     learn_failed = Signal(str)
     artifact_ready = Signal(object, object)  # artifacts.Published, artifacts.Summary
@@ -123,6 +125,7 @@ class Bridge(QObject):
     agent_heard = Signal(str, object)  # text, the confirmation it may answer (Take.confirm_id)
     agent_event = Signal(str, object)  # see agent.VoiceAgent
     task_done = Signal(str, bool, str)  # a task's session: task id, opened, the message (tasks.start_session)
+    favorite_failed = Signal(str, str)  # a session in a favourite folder didn't open: the folder, why
 
 
 class Dictation:
@@ -169,6 +172,8 @@ class Dictation:
         self._rewriting = 0  # edits Claude is working on (the button shows it)
         self.history = history.History(self.cfg["keep_history"])
         self.history_window: HistoryWindow | None = None
+        self.ducker = ducking.Ducker(config.DATA_DIR / "ducked.json")  # other programs quieter while dictating
+        self.ducker.restore_leftover()  # what a run that died mid-dictation left quiet
 
         self.bridge = Bridge()
         self.server = WhisperServer(on_event=self.bridge.server_event.emit)
@@ -259,6 +264,12 @@ class Dictation:
         self.inbox_timer.start()
         self.bridge.task_done.connect(self._task_done)
         self.button.notes_clicked.connect(self.open_notebook)
+        self.button.history_clicked.connect(self.open_history)
+        self.button.new_session_clicked.connect(self._show_favorites)
+        self.bridge.favorite_failed.connect(self._favorite_failed)
+        self.favorites_dialog: FavoritesDialog | None = None
+        self.repo_dialog: NewRepoDialog | None = None
+        self._favorites_popup: QMenu | None = None  # the +'s menu while it's open
         self.button.set_notes_count(sum(t.status == "active" for t in self.tasks))
         self.button.connect_clicked.connect(lambda: self.open_wizard("claude"))
         self.button.statusline_clicked.connect(self._enable_statusline)
@@ -274,6 +285,13 @@ class Dictation:
         self.menu.addAction("Nastavení…", self.open_settings)
         self.menu.addAction("Průvodce nastavením…", self.open_wizard)
         self.menu.addAction("Poznámky…", self.open_notebook)
+        # the + above the panel, also here: without the panel there is nowhere else to click
+        self.favorites_menu = FolderMenu("Nová relace Claude Code")
+        self.menu.addMenu(self.favorites_menu)
+        self.favorites_menu.right_clicked.connect(
+            lambda folder, pos: self._favorite_color(self.favorites_menu, folder, pos))
+        self.favorites_menu.aboutToShow.connect(lambda: self._fill_favorites(self.favorites_menu, heading=False))
+        self._fill_favorites(self.favorites_menu, heading=False)  # (an empty submenu may not open at all)
         self.toggle_action = QAction("Zobrazovat plovoucí tlačítko", self.menu, checkable=True)
         self.toggle_action.setChecked(self.cfg["show_button"])
         self.toggle_action.toggled.connect(self._set_button_visible)
@@ -526,11 +544,13 @@ class Dictation:
         def run():
             try:
                 self.bridge.usage_ready.emit(claude_usage.fetch(source))
+            except claude_usage.Limited as e:
+                self.bridge.usage_failed.emit(str(e), e.last)
             except claude_usage.UsageError as e:
-                self.bridge.usage_failed.emit(str(e))
+                self.bridge.usage_failed.emit(str(e), None)
             except Exception as e:
                 log.exception("Načtení využití Clauda selhalo")
-                self.bridge.usage_failed.emit(f"Načtení využití selhalo: {e}")
+                self.bridge.usage_failed.emit(f"Načtení využití selhalo: {e}", None)
 
         threading.Thread(target=run, daemon=True).start()
 
@@ -564,10 +584,12 @@ class Dictation:
             self._notify(f"Při tomhle tempu ti 5hodinový limit dojde v {local.hour}:{local.minute:02d}"
                          + (f", {reset}." if reset else "."), title="Limit Clauda")
 
-    def _usage_failed(self, msg):
+    def _usage_failed(self, msg, last=None):
         self._usage_inflight = False
         if msg != self.usage_error:
             log.warning("Využití Clauda: %s", msg)
+        if self.usage is None and last is not None:
+            self.usage = last  # just restarted and Claude says wait: the last answer (marked "neaktuální") over nothing
         self.usage_error = msg
         self.button.set_usage(self.usage, msg)
         self.refresh()
@@ -618,6 +640,7 @@ class Dictation:
             return
         self._recording_since = time.monotonic()
         self._desktop_ok = winutil.on_user_desktop()
+        self.ducker.duck(self.cfg["duck_audio"], {os.getpid()})  # Orbit's own beeps stay
         self.watch_timer.start()
         self.refresh()
 
@@ -666,6 +689,7 @@ class Dictation:
 
     def _drop_recording(self):
         """Ends the recording and throws it away."""
+        self.ducker.restore()
         self.stop_timer.stop()
         self.live_timer.stop()
         self.listen_timer.stop()
@@ -729,6 +753,7 @@ class Dictation:
             self._submit(self._transcribe_piece, take, audio)
 
     def _finish_recording(self):
+        self.ducker.restore()  # the music back as soon as the microphone closes
         self.live_timer.stop()
         self.listen_timer.stop()
         self.stop_timer.stop()
@@ -1509,25 +1534,25 @@ class Dictation:
     def _show_folder_menu(self, folder: str, pos: QPoint):
         """A right click on a session in the panel: its folder's colour (the panel and, with tint_sessions, its
         terminals), then Orbit's own menu."""
-        name, label = colors.key(folder), Path(folder).name or folder
-        current = self.cfg["folder_colors"].get(name)
         menu = QMenu()
-        title = menu.addAction(f"Barva složky {label}")
-        title.setEnabled(False)
-        for color, (czech, hex_) in colors.COLORS.items():
-            action = menu.addAction(color_icon(hex_), czech)
-            action.setCheckable(True)
-            action.setChecked(color == current)
-            action.triggered.connect(lambda _=False, c=color: self._set_folder_color(name, c))
-        others = {k: v for k, v in self.cfg["folder_colors"].items() if k != name}
-        auto = menu.addAction(f"Automaticky ({colors.COLORS[colors.color_for(name, others)][0]})")
-        auto.setCheckable(True)
-        auto.setChecked(current not in colors.COLORS)
-        auto.triggered.connect(lambda: self._set_folder_color(name, None))
+        fill_color_menu(menu, folder, self.cfg["folder_colors"],
+                        lambda color: self._set_folder_color(colors.key(folder), color))
         menu.addSeparator()
         self.menu.setTitle("Orbit")
         menu.addMenu(self.menu)
         self._folder_menu = menu  # (kept while it's open)
+        menu.popup(pos)
+
+    def _favorite_color(self, owner: QMenu, folder: str, pos: QPoint):
+        """A right click on a folder under the + (or in Orbit's menu): its colours over that menu, which stays open
+        and shows the new colour right away. (Closing it first and opening the colours on their own didn't work: Qt
+        closed a popup opened while it still handled the click straight away.)"""
+        def pick(color):
+            self._set_folder_color(colors.key(folder), color)
+            if owner.isVisible():
+                self._fill_favorites(owner, heading=owner is not self.favorites_menu)
+        menu = self._folder_menu = QMenu(owner)
+        fill_color_menu(menu, folder, self.cfg["folder_colors"], pick)
         menu.popup(pos)
 
     def _set_folder_color(self, name: str, color: str | None):
@@ -1538,6 +1563,8 @@ class Dictation:
         config.save(self.cfg)
         log.info("Barva složky %s: %s", name, color or "automaticky")
         self.button.set_folder_colors(chosen)
+        if self.favorites_dialog is not None and self.favorites_dialog.isVisible():
+            self.favorites_dialog.set_colors(chosen)  # its dots (the automatic ones may have moved too)
         self._poll_sessions()  # its sessions' windows (and the automatic colours of the others) right away
 
     def _session_changed(self, s: sessions.Session, state: str):
@@ -2019,6 +2046,96 @@ class Dictation:
             self.tasks_timer.start(tasks.RETRY_MS)
 
     # -- the user's own tasks (notebook) -------------------------------------------------------
+
+    # -- favourite folders: the + above the panel (favorites.py) ------------------------------
+
+    def _show_favorites(self, anchor: QPoint, up: bool):
+        menu = self._favorites_popup = FolderMenu()  # (kept while it's open)
+        menu.right_clicked.connect(lambda folder, pos: self._favorite_color(menu, folder, pos))
+        self._fill_favorites(menu)
+        menu.popup(anchor - QPoint(0, menu.sizeHint().height()) if up else anchor)
+
+    def _fill_favorites(self, menu: QMenu, heading: bool = True):
+        """A new Claude Code session in one of the favourite folders (each in its colour), a new repo, which folders
+        show here."""
+        menu.clear()
+        menu.setToolTipsVisible(True)
+        if not self.claude.connected:
+            menu.addAction("Připojit Clauda…").triggered.connect(lambda: self.open_wizard("claude"))
+            return
+        if heading:
+            menu.addAction("Nová relace Claude Code ve složce").setEnabled(False)
+        folders = [f for f in favorites.ordered(self.cfg["favorite_folders"]) if os.path.isdir(f)]
+        names = favorites.labels(folders)
+        for folder in folders:
+            action = menu.addAction(color_icon(colors.accent(colors.color_for(folder, self.cfg["folder_colors"]))),
+                                    names[folder])
+            action.setData(folder)  # (FolderMenu: a right click asks for its colour)
+            action.setToolTip(f"{folder}\nPravým klikem změníš barvu složky.")
+            action.triggered.connect(lambda _=False, f=folder: self._open_favorite(f))
+        if not folders:
+            menu.addAction("Zatím tu žádná složka není").setEnabled(False)
+        menu.addSeparator()
+        menu.addAction(theme.glyph_icon(ADD_GLYPH, theme.DIM, 16), "Nové repo…").triggered.connect(self._new_repo)
+        menu.addAction(theme.glyph_icon(CHOOSE_GLYPH, theme.DIM, 16), "Vybrat složky a barvy…").triggered.connect(
+            self._choose_favorites)
+
+    def _open_favorite(self, folder: str):
+        log.info("Nová relace v oblíbené složce %s", Path(folder).name)
+
+        def run():
+            ok, text = favorites.start_session(folder)
+            if not ok:
+                self.bridge.favorite_failed.emit(folder, text)
+        threading.Thread(target=run, daemon=True).start()
+
+    def _favorite_failed(self, folder: str, text: str):
+        log.info("Relace v oblíbené složce %s se neotevřela", Path(folder).name)
+        self._notify(text, error=True, title=f"Relace ve složce {Path(folder).name} se neotevřela")
+
+    @staticmethod
+    def _bring_window(window) -> bool:
+        """An Orbit window that is already open to the front (True), or False when there is none."""
+        if window is None or not window.isVisible():
+            return False
+        window.showNormal()
+        window.raise_()
+        window.activateWindow()
+        return True
+
+    def _choose_favorites(self):
+        if self._bring_window(self.favorites_dialog):
+            return
+        dialog = self.favorites_dialog = FavoritesDialog(self.cfg["favorite_folders"], agent.project_folders(),
+                                                         self.cfg["folder_colors"])
+        dialog.saved.connect(self._favorites_saved)
+        dialog.color_chosen.connect(lambda folder, color: self._set_folder_color(colors.key(folder), color or None))
+        dialog.show()
+        self._bring_window(dialog)
+
+    def _favorites_saved(self, folders: list):
+        self.cfg["favorite_folders"] = folders
+        config.save(self.cfg)
+        log.info("Oblíbené složky: %d", len(folders))
+
+    def _new_repo(self):
+        if self._bring_window(self.repo_dialog):
+            return
+        dialog = self.repo_dialog = NewRepoDialog(
+            favorites.default_parent(self.cfg["favorite_folders"] or agent.project_folders()))
+        dialog.created.connect(self._repo_created)
+        dialog.show()
+        self._bring_window(dialog)
+
+    def _repo_created(self, path: str, git_problem: str):
+        log.info("Nové repo %s%s", Path(path).name, " (bez gitu)" if git_problem else "")
+        self.cfg["favorite_folders"] = favorites.add(self.cfg["favorite_folders"], path)
+        config.save(self.cfg)
+        if self.favorites_dialog is not None and self.favorites_dialog.isVisible():
+            self.favorites_dialog.include(path)  # its Uložit mustn't drop the new one
+        if git_problem:
+            self._notify(f"Složka {Path(path).name} je založená, ale {git_problem}")
+        self._open_favorite(path)
 
     def open_notebook(self):
         if self.notebook and self.notebook.isVisible():
@@ -2593,6 +2710,7 @@ class Dictation:
             self.agent_ptt.stop()
         self.agent.stop()
         self.recorder.shutdown()
+        self.ducker.shutdown()
         self.server.stop()
         self.tray.hide()
 

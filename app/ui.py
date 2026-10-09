@@ -8,7 +8,7 @@ from PySide6.QtCore import (QEasingCurve, QEvent, QPoint, QPointF, QPropertyAnim
 from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontMetricsF, QGuiApplication, QIcon, QPainter,
                            QPainterPath, QPen, QPixmap, QPolygonF, QRadialGradient, QRegion, QTextLayout)
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-                               QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QToolTip,
+                               QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QToolTip,
                                QVBoxLayout, QWidget)
 
 from . import colors, config, downloads, history, hotkey, theme, vocab, voice
@@ -21,6 +21,9 @@ from .version import VERSION
 MIC_GLYPH = ""  # "Microphone" in Segoe Fluent Icons / Segoe MDL2 Assets
 REFRESH_GLYPH = chr(0xE72C)  # "Refresh" in Segoe Fluent Icons / Segoe MDL2 Assets
 EDIT_GLYPH = chr(0xE70F)  # "Edit" (a pencil): the dictation is an instruction for editing text
+HISTORY_GLYPH = chr(0xE81C)  # "History": the dictation history's chip above the panel
+ADD_GLYPH = chr(0xE710)  # "Add": the + above the panel, a new Claude Code session in a favourite folder
+CHOOSE_GLYPH = chr(0xE762)  # "MultiSelect": "Vybrat složky…" in the +'s menu
 LOOP_GLYPH = chr(0xE8EE)  # "RepeatAll": a session running a /loop
 SPEAKER_GLYPH = chr(0xE767)  # "Volume"
 MUTE_GLYPH = chr(0xE74F)  # "Mute"
@@ -88,6 +91,38 @@ def color_icon(hex_: str, size: int = 16) -> QIcon:
     return QIcon(pm)
 
 
+def fill_color_menu(menu: QMenu, folder: str, chosen: dict, pick) -> None:
+    """A folder's colour (colors.py, config folder_colors: its stripe in the panel, its dot under the +, with
+    tint_sessions its terminals): the colours and Automaticky. pick(colour) when one is chosen, None = automatic."""
+    name, label = colors.key(folder), Path(folder).name or folder
+    current = chosen.get(name)
+    menu.addAction(f"Barva složky {label}").setEnabled(False)
+    for color, (czech, hex_) in colors.COLORS.items():
+        action = menu.addAction(color_icon(hex_), czech)
+        action.setCheckable(True)
+        action.setChecked(color == current)
+        action.triggered.connect(lambda _=False, c=color: pick(c))
+    others = {k: v for k, v in chosen.items() if k != name}
+    auto = menu.addAction(f"Automaticky ({colors.COLORS[colors.color_for(name, others)][0]})")
+    auto.setCheckable(True)
+    auto.setChecked(current not in colors.COLORS)
+    auto.triggered.connect(lambda: pick(None))
+
+
+class FolderMenu(QMenu):
+    """A menu of folders (each item's data is its folder): a right click on one asks for its colour instead of
+    running it, like a right click on a session in the panel."""
+    right_clicked = Signal(str, QPoint)  # the item's folder, where (global)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.RightButton:
+            action = self.actionAt(event.position().toPoint())
+            if action is not None and action.data():
+                self.right_clicked.emit(action.data(), event.globalPosition().toPoint())
+                return
+        super().mouseReleaseEvent(event)
+
+
 def mic_icon(state: str, size: int = 64, editing: bool = False) -> QIcon:
     pm = QPixmap(size, size)
     pm.fill(Qt.transparent)
@@ -151,6 +186,9 @@ class FloatingButton(QWidget):
     theme_chosen = Signal(str)
     agent_clicked = Signal()
     notes_clicked = Signal()  # the notebook above the panel's left end: the user's tasks
+    history_clicked = Signal()  # the clock next to the agent: the dictation history
+    # the + next to the clock: the favourite folders' menu, opened at this point (global), upwards when True
+    new_session_clicked = Signal(QPoint, bool)
     connect_clicked = Signal()  # "Připojit Clauda" in the panel
     statusline_clicked = Signal()  # "Zapnout" in the panel: the yes to Orbit's status line in Claude Code
 
@@ -214,6 +252,7 @@ class FloatingButton(QWidget):
         self._usage_error: str | None = None
         self._forecast: datetime | None = None
         self._sessions: list[Session] = []
+        self._sessions_shown: tuple = ()  # _sessions_look of what the rows show now
         self._session_rows: list[tuple[QRectF, Session]] = []
         self._folder_colors: dict = {}  # config folder_colors: the user's colour per folder
         self._notes_active = 0  # tasks in Aktivní (the notebook's number)
@@ -362,6 +401,30 @@ class FloatingButton(QWidget):
         c = self._agent_center()
         return c is not None and math.hypot(pos.x() - c.x(), pos.y() - c.y()) <= self.AGENT_D / 2 + 2
 
+    def _history_center(self) -> QPointF | None:
+        """The dictation history's chip: left of the agent's (or of the colour pill, without the agent)."""
+        dots = self._dots()
+        if not dots:
+            return None
+        agent = self._agent_center()
+        if agent is not None:
+            return QPointF(agent.x() - self.AGENT_D - 6, agent.y())
+        first = dots[0][1]
+        return QPointF(first.x() - self.PILL_H / 2 - 8 - self.AGENT_D / 2, first.y())
+
+    def _on_history(self, pos: QPointF) -> bool:
+        c = self._history_center()
+        return c is not None and math.hypot(pos.x() - c.x(), pos.y() - c.y()) <= self.AGENT_D / 2 + 2
+
+    def _new_center(self) -> QPointF | None:
+        """The + for a new Claude Code session: left of the history's chip, with Claude connected."""
+        history = self._history_center()
+        return QPointF(history.x() - self.AGENT_D - 6, history.y()) if history and self._claude else None
+
+    def _on_new(self, pos: QPointF) -> bool:
+        c = self._new_center()
+        return c is not None and math.hypot(pos.x() - c.x(), pos.y() - c.y()) <= self.AGENT_D / 2 + 2
+
     def _notes_center(self) -> QPointF | None:
         """The notebook's chip: in the same strip as the colour dots, at the panel's left end (above "Claude")."""
         dots = self._dots()
@@ -441,12 +504,16 @@ class FloatingButton(QWidget):
                       None if s.context is None else round(s.context * 100)) for s in sessions)
 
     def set_sessions(self, sessions: list[Session]) -> None:
-        count_before, look_before = len(self._sessions), self._sessions_look(self._sessions)
+        # the tracker changes its Session objects in place: what the rows show is kept, not worked out again from
+        # self._sessions (by now those already are the new states, and the panel kept "hotovo" while a session
+        # worked, or the screwdriver after it finished, until something else repainted it)
+        count_before, look = len(self._sessions), self._sessions_look(sessions)
         self._sessions = sessions
         if len(sessions) != count_before:
             self._relayout()
             self._auto_align()
-        if self._sessions_look(sessions) != look_before:
+        if look != self._sessions_shown:
+            self._sessions_shown = look
             self.update()
         else:  # clicks and tooltips get the current sessions (the rows stay where they were painted)
             self._session_rows = [(rect, new) for (rect, _), new in zip(self._session_rows, sessions)]
@@ -588,6 +655,8 @@ class FloatingButton(QWidget):
             self._paint_dots(p)
             self._paint_agent_chip(p)
             self._paint_notes_chip(p)
+            self._paint_history_chip(p)
+            self._paint_new_chip(p)
         c = self._button_center()
         r = self.DIAMETER / 2
         if self._state == "recording":
@@ -679,6 +748,27 @@ class FloatingButton(QWidget):
             p.setPen(QColor(theme.ON_ACCENT))
             p.drawText(QRectF(badge.x() - 6.5, badge.y() - 6.5, 13, 13), Qt.AlignCenter,
                        str(self._notes_active) if self._notes_active < 10 else "9+")
+
+    def _paint_history_chip(self, p: QPainter) -> None:
+        """The dictation history: a clock with an arrow going back, in a chip like the notebook's."""
+        self._paint_glyph_chip(p, self._history_center(), HISTORY_GLYPH, 15)
+
+    def _paint_new_chip(self, p: QPainter) -> None:
+        """The + for a new session in a favourite folder, a chip like the history's."""
+        self._paint_glyph_chip(p, self._new_center(), ADD_GLYPH, 13)
+
+    def _paint_glyph_chip(self, p: QPainter, c: QPointF | None, glyph: str, size: int) -> None:
+        if c is None:
+            return
+        r = self.AGENT_D / 2
+        p.setPen(QPen(QColor(255, 255, 255, 28), 1))
+        p.setBrush(theme.tint("#181B22"))
+        p.drawEllipse(c, r - 0.5, r - 0.5)
+        font = QFont(theme.icon_font())
+        font.setPixelSize(size)
+        p.setFont(font)
+        p.setPen(QColor("#C9D1DC"))
+        p.drawText(QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r), Qt.AlignCenter, glyph)
 
     def _paint_agent_chip(self, p: QPainter) -> None:
         """The voice agent: a small planet with a ring and a moon. Red while it listens, the moon circles while it
@@ -1081,6 +1171,12 @@ class FloatingButton(QWidget):
                 tip = self._usage_tooltip()
             elif self._on_agent(pos):
                 tip = self._agent_tooltip()
+            elif self._on_history(pos):
+                tip = ("Historie diktátů: všechno, co se nadiktovalo, nejnovější nahoře.\nKlikni sem a diktát "
+                       "zkopíruješ jedním klikem, vložíš znovu nebo opravíš.")
+            elif self._on_new(pos):
+                tip = ("Nová relace Claude Code: klikni a vyber oblíbenou složku, relace se v ní otevře v novém "
+                       "okně terminálu.\nTamtéž založíš nové repo a vybereš, které složky tu mají být.")
             elif self._on_notes(pos):
                 tip = ("Poznámky: tvoje úkoly s kontextem a poznámkami.\nAktivní kontroluju každou půlhodinu a pro "
                        "první na řadě se zeptám, jestli otevřít novou relaci.")
@@ -1134,6 +1230,13 @@ class FloatingButton(QWidget):
             self.mute_toggled.emit()
         elif self._on_agent(event.position()):
             self.agent_clicked.emit()
+        elif self._on_history(event.position()):
+            self.history_clicked.emit()
+        elif self._on_new(event.position()):
+            c, r = self._new_center(), self.AGENT_D / 2
+            # the menu opens away from the panel: up from a strip above it, down from one below it
+            anchor = QPointF(c.x() - r, c.y() + (r + 4 if self._below else -r - 4))
+            self.new_session_clicked.emit(self.mapToGlobal(anchor).toPoint(), not self._below)
         elif self._on_notes(event.position()):
             self.notes_clicked.emit()
         elif dot := self._dot_at(event.position()):
@@ -1885,8 +1988,16 @@ class SettingsDialog(QDialog):
         self.sounds = _OptionRow("Pípnout při nahrávání", "Na začátku a na konci.", cfg["sounds"])
         self.show_btn = _OptionRow("Plovoucí tlačítko", None, cfg["show_button"])
         self.autostart = _OptionRow("Spouštět s Windows", None, autostart)
-        for row in (self.trailing, self.sounds, self.show_btn):
+        for row in (self.trailing, self.sounds):
             behaviour.addWidget(row)
+        self.duck = _combo()  # other programs' sound while the microphone is open (ducking.py)
+        for value, text in (("keep", "Hraje dál"), ("lower", "Ztiší se"), ("mute", "Úplně se ztlumí")):
+            self.duck.addItem(text, value)
+        self.duck.setCurrentIndex(max(0, self.duck.findData(cfg["duck_audio"])))
+        self.duck.setToolTip("Hudba, videa a ostatní programy, jen dokud je otevřený mikrofon; pak se hned vrátí. "
+                             "Orbitova pípnutí zůstanou. Méně hudby v mikrofonu znamená i přesnější přepis.")
+        behaviour.addLayout(_field("Hudba a zvuk při diktování", self.duck))
+        behaviour.addWidget(self.show_btn)
         self.fade = _combo()  # how long idle before the button and its panel turn almost transparent
         for seconds, text in FADE_CHOICES:
             self.fade.addItem(text, seconds)
@@ -2164,6 +2275,7 @@ class SettingsDialog(QDialog):
             "keep_recordings": self.keep.isChecked(),
             "trailing_space": self.trailing.isChecked(),
             "sounds": self.sounds.isChecked(),
+            "duck_audio": self.duck.currentData() or "keep",
             "show_button": self.show_btn.isChecked(),
             "fade_after_s": self.fade.currentData(),
             "show_usage": self.show_usage.isChecked(),

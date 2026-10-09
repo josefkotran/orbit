@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 from . import paths
-from .config import SESSIONS_DIR
+from .config import CACHE_DIR, SESSIONS_DIR
 
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 STATUS_DIR = SESSIONS_DIR / "status"
@@ -158,12 +158,65 @@ def parse(data: dict) -> Usage:
 
 
 _retry_at = 0.0  # after a 429: no asking before this
+# The last answer and the 429 pause, kept over a restart of Orbit: every start asked at once, a few restarts in a row
+# got a 429 and a fresh Orbit then had no limits to show for 5 minutes and more (9 Oct).
+OAUTH_CACHE = CACHE_DIR / "usage-oauth.json"
+OAUTH_FRESH_S = 110  # an answer this new is shown again instead of asking (Orbit asks every 2 minutes)
+OAUTH_SHOW_S = 3600  # while asking isn't possible, an answer up to this old is shown (marked as not current)
+TOO_OFTEN = "Claude teď odpovídá, že se ptáme moc často. Zkusím to za pár minut."
+
+
+class Limited(UsageError):
+    """Not asked now (a 429 earlier); last = the last answer, when there is a recent one."""
+
+    def __init__(self, message: str, last: Usage | None):
+        super().__init__(message)
+        self.last = last
+
+
+def _cache() -> dict:
+    try:
+        data = json.loads(OAUTH_CACHE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _keep(**changes) -> None:
+    data = dict(_cache(), **changes)
+    try:
+        OAUTH_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = OAUTH_CACHE.with_name(OAUTH_CACHE.name + ".tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        tmp.replace(OAUTH_CACHE)
+    except OSError:
+        pass  # only a cache
+
+
+def _cached(max_age: float) -> Usage | None:
+    """The kept answer if it's at most max_age seconds old."""
+    data = _cache()
+    at = data.get("at")
+    if not isinstance(at, (int, float)) or not isinstance(data.get("answer"), dict) or \
+            not 0 <= time.time() - at <= max_age:
+        return None
+    try:
+        usage = parse(data["answer"])
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return None
+    usage.fetched_at = datetime.fromtimestamp(at, timezone.utc)
+    return usage
 
 
 def fetch_oauth() -> Usage:
     global _retry_at
+    kept = _cache().get("retry_at")
+    if isinstance(kept, (int, float)):
+        _retry_at = max(_retry_at, min(kept, time.time() + 3600))
     if time.time() < _retry_at:
-        raise UsageError("Claude teď odpovídá, že se ptáme moc často. Zkusím to za pár minut.")
+        raise Limited(TOO_OFTEN, _cached(OAUTH_SHOW_S))
+    if usage := _cached(OAUTH_FRESH_S):  # Orbit restarted right after it asked: that answer still holds
+        return usage
     try:
         creds = json.loads((paths.claude_dir() / ".credentials.json").read_text(encoding="utf-8"))["claudeAiOauth"]
         token = creds["accessToken"]
@@ -188,13 +241,17 @@ def fetch_oauth() -> Usage:
         except ValueError:
             wait = 0
         _retry_at = time.time() + min(max(wait, 300), 3600)
-        raise UsageError("Claude teď odpovídá, že se ptáme moc často. Zkusím to za pár minut.")
+        _keep(retry_at=_retry_at)
+        raise Limited(TOO_OFTEN, _cached(OAUTH_SHOW_S))
     if r.status_code != 200:
         raise UsageError(f"Claude odpověděl chybou {r.status_code}.")
     try:
-        return parse(r.json())
-    except (ValueError, TypeError, KeyError):
+        answer = r.json()
+        usage = parse(answer)
+    except (ValueError, TypeError, KeyError, AttributeError):
         raise UsageError("Odpovědi Clauda o využití nerozumím.")
+    _keep(at=time.time(), answer=answer, retry_at=0)
+    return usage
 
 
 # --- forecast and texts ------------------------------------------------------------------------------

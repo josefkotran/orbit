@@ -105,7 +105,7 @@ def stylesheet() -> str:
     chevron = _chevron_path()
     arrow = f"QComboBox::down-arrow {{ image: url({chevron}); width: 12px; height: 12px; }}" if chevron else ""
     d = lambda sel: ", ".join(f"QDialog#{name} {sel}".rstrip()  # Orbit's windows
-                              for name in ("settings", "wizard", "notebook", "history"))
+                              for name in ("settings", "wizard", "notebook", "history", "favorites"))
     return f"""
     {d("")} {{ background: {BG}; }}
     {d("QLabel")} {{ color: {TEXT}; font-family: "{TEXT_FONT}"; font-size: 13px; }}
@@ -168,6 +168,7 @@ def stylesheet() -> str:
     QPushButton[role="primary"] {{ background: {ACCENT}; color: {ON_ACCENT}; border: 1px solid {ACCENT}; }}
     QPushButton[role="primary"]:hover {{ background: {hover}; border-color: {hover}; }}
     QPushButton[role="primary"]:focus {{ border: 2px solid {TEXT}; }}
+    QPushButton[role="primary"]:disabled {{ background: {LINE}; border-color: {LINE}; color: {DIM}; }}
     QPushButton[role="ghost"] {{ background: transparent; color: {TEXT}; border: 1px solid {LINE}; }}
     QPushButton[role="ghost"]:hover {{ border-color: {t('#3A4A6E')}; background: {t('#182033')}; }}
     QPushButton[role="ghost"]:focus {{ border-color: {ACCENT}; }}

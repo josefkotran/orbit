@@ -49,30 +49,41 @@ class FakeTimer:
 class SessionRepaintTest(unittest.TestCase):
     def test_repaints_only_when_rows_change(self):
         calls = []
-        button = SimpleNamespace(_sessions=[], _session_rows=[], _sessions_look=ui.FloatingButton._sessions_look,
+        button = SimpleNamespace(_sessions=[], _sessions_shown=(), _session_rows=[],
+                                 _sessions_look=ui.FloatingButton._sessions_look,
                                  _relayout=lambda: calls.append("relayout"), _auto_align=lambda: None,
                                  update=lambda: calls.append("update"), _work_timer=FakeTimer())
+        # like SessionTracker.poll: the same Session objects every second, changed in place
+        a = Session(id="a", cwd="C:/m-tex", topic="Katalog", state="idle", context_pct=31.0)
+        b = Session(id="b", cwd="C:/orbit", state="idle")
 
-        def poll(state="working", context=0.31, message=""):
-            return [Session(id="a", cwd="C:/m-tex", topic="Katalog", state=state, context_pct=context * 100,
-                            message=message),
-                    Session(id="b", cwd="C:/orbit", state="idle")]
+        def poll(**changes):
+            for name, value in changes.items():
+                setattr(a, name, value)
+            return [a, b]
         ui.FloatingButton.set_sessions(button, poll())
         self.assertEqual(calls, ["relayout", "update"])
-        button._session_rows = [("row a", button._sessions[0]), ("row b", button._sessions[1])]  # as painted
+        button._session_rows = [("row a", a), ("row b", b)]  # as painted
         calls.clear()
-        fresh = poll(message="nová odpověď")  # nothing the rows show
-        ui.FloatingButton.set_sessions(button, fresh)
+        ui.FloatingButton.set_sessions(button, poll(state="working"))  # the user sent a prompt: at once
+        self.assertEqual(calls, ["update"])
+        self.assertTrue(button._work_timer.on)
+        calls.clear()
+        ui.FloatingButton.set_sessions(button, poll(message="nová odpověď"))  # nothing the rows show
         self.assertEqual(calls, [])
-        self.assertIs(button._session_rows[0][1], fresh[0])  # a click or tooltip sees the current session
-        ui.FloatingButton.set_sessions(button, poll(context=0.314))  # still 31 %
+        ui.FloatingButton.set_sessions(button, poll(context_pct=31.4))  # still 31 %
         self.assertEqual(calls, [])
-        ui.FloatingButton.set_sessions(button, poll(context=0.32))
+        ui.FloatingButton.set_sessions(button, poll(context_pct=32.0))
         self.assertEqual(calls, ["update"])
         calls.clear()
-        ui.FloatingButton.set_sessions(button, poll(state="done", context=0.32))
+        ui.FloatingButton.set_sessions(button, poll(state="done"))  # finished: no screwdriver left behind
         self.assertEqual(calls, ["update"])
         self.assertFalse(button._work_timer.on)  # nothing works: no screwdriver turns
+        calls.clear()
+        fresh = [Session(id="a", cwd="C:/m-tex", topic="Katalog", state="done", context_pct=32.0), b]
+        ui.FloatingButton.set_sessions(button, fresh)  # a new object, the same look: no repaint
+        self.assertEqual(calls, [])
+        self.assertIs(button._session_rows[0][1], fresh[0])  # a click or tooltip sees the current session
 
     def test_screwdrivers_turn_in_their_squares_only(self):
         app = QApplication.instance()
