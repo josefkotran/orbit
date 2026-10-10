@@ -539,6 +539,11 @@ def _running() -> tuple[dict[str, dict], set[int]]:
     return found, headless
 
 
+def running_ids() -> set[str]:
+    """Ids of the interactive sessions running right now (the session history marks them "běží")."""
+    return set(_running()[0])
+
+
 def _find_transcript(session_id: str) -> str:
     return str(next(paths.claude_dir().glob(f"projects/*/{session_id}.jsonl"), ""))
 

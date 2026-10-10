@@ -5,7 +5,7 @@ Claude Code 2.1.287 nebo novější. Fungují v terminálu i na kartě Code v ap
 
 | Mod | Co dělá |
 |---|---|
-| `orbit-mozek` | `/mozek` otevře vedle konverzace panel „Mozek“. Ukazuje, o čem Claude právě přemýšlí, co píše, které nástroje běží a jak dlouho, co dělají podagenti, „mozkovou vlnu“ (kolik napsal v každém kroku) a kontext rozdělený podle kategorií jako `/context`, s limity. Všechno zůstává v Claude Code, nic se nikam neposílá. |
+| `orbit-mozek` | `/mozek` otevře vedle konverzace panel „Mozek“. Ukazuje, o čem Claude právě přemýšlí, co píše, které nástroje běží a jak dlouho, co dělají podagenti, „mozkovou vlnu“ (kolik napsal v každém kroku) a kontext rozdělený podle kategorií jako `/context`, s limity. Limity (5 h a týden) po každém tahu předá i panelu Orbitu: zapíše je do jeho datové složky v počítači, bez jediného dotazu na server. Nic se nikam neposílá. |
 | `orbit-ukoly` | V relaci, kterou Orbit založil z úkolu v Poznámkách, je nad promptem řádek s úkolem a tlačítky **Poznámka** a **Hotovo**. Claude ví, na čem pracuje, a dostane dva nástroje: zapsat poznámku k úkolu a úkol dokončit. Orbit pak úkol přesune do Hotovo a ozve se bublinou. `/ukol` vypíše aktivní úkoly a relaci připojí k jednomu (`/ukol 2`), `/ukol odpojit` ji odpojí. |
 
 ## Instalace
@@ -18,8 +18,10 @@ V Claude Code (v terminálu):
 ```
 
 Nejdřív `y` (přidat marketplace), pak rozsah (Enter = pro tebe ve všech projektech). Ze složky s Orbitem
-(vývoj): `claude plugin marketplace add <složka s Orbitem>` a `claude plugin install orbit-mozek@orbit`; mod se pak
-čte přímo z té složky a po úpravě stačí v relaci `/reload-plugins`.
+(vývoj): `claude plugin marketplace add <složka s Orbitem>` a `claude plugin install orbit-mozek@orbit`. Claude Code
+si mod zkopíruje k sobě (`~/.claude/plugins/cache/orbit/…`), takže po úpravě zvedni `version` v `plugin.json`
+a spusť `claude plugin marketplace update orbit` a `claude plugin update orbit-mozek@orbit`; relace ho načtou po
+restartu.
 
 ## Jak `orbit-ukoly` mluví s Orbitem
 

@@ -21,7 +21,8 @@ from .version import VERSION
 MIC_GLYPH = ""  # "Microphone" in Segoe Fluent Icons / Segoe MDL2 Assets
 REFRESH_GLYPH = chr(0xE72C)  # "Refresh" in Segoe Fluent Icons / Segoe MDL2 Assets
 EDIT_GLYPH = chr(0xE70F)  # "Edit" (a pencil): the dictation is an instruction for editing text
-HISTORY_GLYPH = chr(0xE81C)  # "History": the dictation history's chip above the panel
+HISTORY_GLYPH = chr(0xE81C)  # "History": the session history's chip above the panel
+DICTATIONS_GLYPH = chr(0xE8BD)  # "Message" (a bubble with lines): the dictation history's chip next to the notebook
 ADD_GLYPH = chr(0xE710)  # "Add": the + above the panel, a new Claude Code session in a favourite folder
 CHOOSE_GLYPH = chr(0xE762)  # "MultiSelect": "Vybrat složky…" in the +'s menu
 LOOP_GLYPH = chr(0xE8EE)  # "RepeatAll": a session running a /loop
@@ -186,7 +187,8 @@ class FloatingButton(QWidget):
     theme_chosen = Signal(str)
     agent_clicked = Signal()
     notes_clicked = Signal()  # the notebook above the panel's left end: the user's tasks
-    history_clicked = Signal()  # the clock next to the agent: the dictation history
+    dictation_history_clicked = Signal()  # the bubble next to the notebook: the dictation history
+    sessions_history_clicked = Signal()  # the clock next to the agent: past Claude Code sessions to resume
     # the + next to the clock: the favourite folders' menu, opened at this point (global), upwards when True
     new_session_clicked = Signal(QPoint, bool)
     connect_clicked = Signal()  # "Připojit Clauda" in the panel
@@ -402,9 +404,10 @@ class FloatingButton(QWidget):
         return c is not None and math.hypot(pos.x() - c.x(), pos.y() - c.y()) <= self.AGENT_D / 2 + 2
 
     def _history_center(self) -> QPointF | None:
-        """The dictation history's chip: left of the agent's (or of the colour pill, without the agent)."""
+        """The session history's chip: left of the agent's (or of the colour pill, without the agent), with Claude
+        connected."""
         dots = self._dots()
-        if not dots:
+        if not dots or not self._claude:
             return None
         agent = self._agent_center()
         if agent is not None:
@@ -417,9 +420,9 @@ class FloatingButton(QWidget):
         return c is not None and math.hypot(pos.x() - c.x(), pos.y() - c.y()) <= self.AGENT_D / 2 + 2
 
     def _new_center(self) -> QPointF | None:
-        """The + for a new Claude Code session: left of the history's chip, with Claude connected."""
+        """The + for a new Claude Code session: left of the history's chip (both only with Claude connected)."""
         history = self._history_center()
-        return QPointF(history.x() - self.AGENT_D - 6, history.y()) if history and self._claude else None
+        return QPointF(history.x() - self.AGENT_D - 6, history.y()) if history else None
 
     def _on_new(self, pos: QPointF) -> bool:
         c = self._new_center()
@@ -432,6 +435,15 @@ class FloatingButton(QWidget):
 
     def _on_notes(self, pos: QPointF) -> bool:
         c = self._notes_center()
+        return c is not None and math.hypot(pos.x() - c.x(), pos.y() - c.y()) <= self.AGENT_D / 2 + 2
+
+    def _dictations_center(self) -> QPointF | None:
+        """The dictation history's chip: right of the notebook's (no Claude needed)."""
+        notes = self._notes_center()
+        return QPointF(notes.x() + self.AGENT_D + 6, notes.y()) if notes else None
+
+    def _on_dictations(self, pos: QPointF) -> bool:
+        c = self._dictations_center()
         return c is not None and math.hypot(pos.x() - c.x(), pos.y() - c.y()) <= self.AGENT_D / 2 + 2
 
     def set_notes_count(self, active: int) -> None:
@@ -655,6 +667,7 @@ class FloatingButton(QWidget):
             self._paint_dots(p)
             self._paint_agent_chip(p)
             self._paint_notes_chip(p)
+            self._paint_glyph_chip(p, self._dictations_center(), DICTATIONS_GLYPH, 14)
             self._paint_history_chip(p)
             self._paint_new_chip(p)
         c = self._button_center()
@@ -750,7 +763,7 @@ class FloatingButton(QWidget):
                        str(self._notes_active) if self._notes_active < 10 else "9+")
 
     def _paint_history_chip(self, p: QPainter) -> None:
-        """The dictation history: a clock with an arrow going back, in a chip like the notebook's."""
+        """The session history: a clock with an arrow going back, in a chip like the notebook's."""
         self._paint_glyph_chip(p, self._history_center(), HISTORY_GLYPH, 15)
 
     def _paint_new_chip(self, p: QPainter) -> None:
@@ -1144,13 +1157,19 @@ class FloatingButton(QWidget):
                              "na Zapnout a Orbit si ho do Claude Code přidá. Tvůj vlastní stavový řádek zůstane vidět.")
             elif self._usage.note:
                 lines.append(self._usage.note)
+        elif self._usage and self._usage.source == "combined":
+            local = self._usage.fetched_at.astimezone()
+            lines.append(f"Využití Clauda (aktualizováno v {local.hour}:{local.minute:02d}; 5 h a týden hlásí "
+                         "relace Claude Code s každou odpovědí)")
         elif self._usage:
             local = self._usage.fetched_at.astimezone()
             lines.append(f"Využití Clauda (aktualizováno v {local.hour}:{local.minute:02d})")
         if self._usage:
             for lim in self._usage.limits:
                 reset = reset_text(lim.resets_at)
-                lines.append(f"{lim.title}: {lim.percent:.0f} %" + (f" – {reset}" if reset else ""))
+                old = lim.at and (self._usage.fetched_at - lim.at).total_seconds() > self.STALE_AFTER_S
+                when = f" (údaj z {lim.at.astimezone().hour}:{lim.at.astimezone().minute:02d})" if old else ""
+                lines.append(f"{lim.title}: {lim.percent:.0f} %{when}" + (f" – {reset}" if reset else ""))
         if self._forecast:
             local = self._forecast.astimezone()
             lines.append(f"Při současném tempu 5hodinové okno dojde v {local.hour}:{local.minute:02d}, "
@@ -1172,11 +1191,14 @@ class FloatingButton(QWidget):
             elif self._on_agent(pos):
                 tip = self._agent_tooltip()
             elif self._on_history(pos):
-                tip = ("Historie diktátů: všechno, co se nadiktovalo, nejnovější nahoře.\nKlikni sem a diktát "
-                       "zkopíruješ jedním klikem, vložíš znovu nebo opravíš.")
+                tip = ("Historie relací: minulé relace Claude Code, nejnovější nahoře (jako claude --resume).\n"
+                       "Klikni sem, najdi relaci podle názvu nebo zadání a pokračuj v ní.")
             elif self._on_new(pos):
                 tip = ("Nová relace Claude Code: klikni a vyber oblíbenou složku, relace se v ní otevře v novém "
                        "okně terminálu.\nTamtéž založíš nové repo a vybereš, které složky tu mají být.")
+            elif self._on_dictations(pos):
+                tip = ("Historie diktátů: všechno, co se nadiktovalo, nejnovější nahoře.\nKlikni sem a diktát "
+                       "zkopíruješ jedním klikem, vložíš znovu nebo opravíš.")
             elif self._on_notes(pos):
                 tip = ("Poznámky: tvoje úkoly s kontextem a poznámkami.\nAktivní kontroluju každou půlhodinu a pro "
                        "první na řadě se zeptám, jestli otevřít novou relaci.")
@@ -1231,7 +1253,7 @@ class FloatingButton(QWidget):
         elif self._on_agent(event.position()):
             self.agent_clicked.emit()
         elif self._on_history(event.position()):
-            self.history_clicked.emit()
+            self.sessions_history_clicked.emit()
         elif self._on_new(event.position()):
             c, r = self._new_center(), self.AGENT_D / 2
             # the menu opens away from the panel: up from a strip above it, down from one below it
@@ -1239,6 +1261,8 @@ class FloatingButton(QWidget):
             self.new_session_clicked.emit(self.mapToGlobal(anchor).toPoint(), not self._below)
         elif self._on_notes(event.position()):
             self.notes_clicked.emit()
+        elif self._on_dictations(event.position()):
+            self.dictation_history_clicked.emit()
         elif dot := self._dot_at(event.position()):
             self.theme_chosen.emit(dot)
         elif self._cta_rect.contains(event.position()):

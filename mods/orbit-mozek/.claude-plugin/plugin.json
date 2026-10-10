@@ -1,8 +1,10 @@
 {
   "name": "orbit-mozek",
-  "version": "0.1.0",
-  "description": "Mozek relace (/mozek): o čem Claude přemýšlí, co dělají nástroje a podagenti a jak je plný kontext.",
-  "author": { "name": "Josef Kotran" },
+  "version": "0.2.0",
+  "description": "Mozek relace (/mozek): o čem Claude přemýšlí, co dělají nástroje a podagenti a jak je plný kontext. Limity relace předává panelu Orbitu.",
+  "author": {
+    "name": "Josef Kotran"
+  },
   "homepage": "https://orbit.easya.cz",
   "license": "GPL-3.0-or-later",
   "types": "./types/index.d.ts"

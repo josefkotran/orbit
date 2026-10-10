@@ -338,6 +338,65 @@ class HistoryWindowTest(unittest.TestCase):
         self.assertEqual(window.list.count(), 0)
         history.path().unlink(missing_ok=True)
 
+    def test_what_was_said_to_the_agent(self):
+        """Said to the voice agent: its own entry with the agent's answer and what it sent (as the panel had them,
+        until its turn ends), marked "Agent Orbit" and kept apart by the filter; "Vlož to znovu" skips it."""
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is not None and not isinstance(app, QApplication):
+            test = f"{__name__}.HistoryWindowTest.test_what_was_said_to_the_agent"
+            run = subprocess.run([sys.executable, "-m", "unittest", test],
+                                 cwd=Path(__file__).parent, capture_output=True, text=True, encoding="utf-8",
+                                 errors="replace", timeout=120)
+            self.assertEqual(run.returncode, 0, run.stderr[-2000:])
+            return
+        self.app = app or QApplication([])
+        from app.historyview import HEAD, HistoryWindow
+        h = history.History(persist=False)
+        h.persist = True
+        h.add("Faktura za září pořád chybí.", app="chrome")
+        changed = []
+        d = SimpleNamespace(history=h, _feed={}, _agent_entry="", _history_changed=lambda *a: changed.append(1))
+        d._feed_to_history = lambda: main.Dictation._feed_to_history(d)
+        take = SimpleNamespace(raw_text="napiš do mtexu ať pošle ceník", seconds=3.24, stem="")
+        main.Dictation._remember_agent(d, "Napiš do m-texu, ať pošle ceník.", take)
+        entry = h.items[-1]
+        self.assertEqual((entry.kind, entry.outcome, entry.seconds), (history.AGENT, "", 3.2))
+        d._feed = {"you": entry.text, "reply": "Pošlu do relace Ceník Profodu: Pošli ceník. Mám to poslat?",
+                   "send": {"tool": "send", "name": "Ceník Profodu", "folder": "m-tex", "message": "Pošli ceník.",
+                            "status": "confirm"}}
+        main.Dictation._feed_to_history(d)
+        self.assertIn("Mám to poslat?", entry.reply)
+        self.assertEqual(entry.action, "→ Ceník Profodu, m-tex · čeká na tvoje „jo“\nPošli ceník.")
+        d._feed["send"] = dict(d._feed["send"], status="sent")
+        main.Dictation._feed_to_history(d)
+        self.assertTrue(entry.action.startswith("→ Ceník Profodu, m-tex · odesláno ✓"))
+        d._agent_entry = ""  # its turn is over: a session's message to the agent changes nothing here
+        d._feed["reply"] = "Relace m-tex hlásí hotovo."
+        main.Dictation._feed_to_history(d)
+        self.assertNotIn("hlásí", entry.reply)
+        self.assertEqual(h.last().text, "Faktura za září pořád chybí.")  # "Vlož to znovu": the dictation
+
+        window = HistoryWindow(h, Path(tempfile.gettempdir()))
+        self.assertEqual(window.list.count(), 2)
+        self.assertEqual(window._rows.agent, {entry.id})  # the stripe and "Agent Orbit"
+        self.assertTrue(window.list.item(0).data(HEAD).endswith("Agent Orbit"))
+        self.assertIn("pro agenta Orbit", window.meta.text())
+        self.assertIn("odesláno ✓", window.reply.toPlainText())
+        self.assertFalse(window.reply.isHidden())
+        window.show_kind.setCurrentIndex(window.show_kind.findData("dictation"))
+        self.assertEqual(window.list.count(), 1)
+        self.assertTrue(window.reply.isHidden())  # a dictation has no answer
+        window.show_kind.setCurrentIndex(window.show_kind.findData(history.AGENT))
+        self.assertEqual(window.list.count(), 1)
+        window.show_kind.setCurrentIndex(0)
+        window.search.setText("odeslano")  # the answer's words find it too
+        self.assertEqual(window.list.count(), 1)
+        kept_off = history.History(persist=False)  # keep_history off: its one entry stays the last dictation
+        main.Dictation._remember_agent(SimpleNamespace(history=kept_off), "Ahoj", take)
+        self.assertEqual(kept_off.items, [])
+        history.path().unlink(missing_ok=True)
+
 
 if __name__ == "__main__":
     unittest.main()

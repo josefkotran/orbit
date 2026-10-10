@@ -40,7 +40,8 @@ slovníku) přibyly 3. 10. a v jeho configu zatím nejsou, tedy prázdné: agent
 Souhlasy `claude_hooks` / `claude_statusline` a `wizard_pending` (taky od 3. 10.) v jeho configu nebyly: první start
 nové verze dá `claude_hooks` = true, protože jeho hooky v `~/.claude/settings.json` už jsou
 (`claude_settings.hooks_installed`), `claude_statusline` = false (stavový řádek nemá), `usage_source` = `"oauth"`
-(limity dál z OAuth endpointu, i s řádkem Fable) a průvodce se mu neukáže (config.json existuje).
+(limity dál z OAuth endpointu, i s řádkem Fable; od 10. 10. 5 h a týden z relací přes mod `orbit-mozek`, endpoint
+jen nad tím, viz Limity Clauda) a průvodce se mu neukáže (config.json existuje).
 
 ## Struktura
 
@@ -57,7 +58,9 @@ nové verze dá `claude_hooks` = true, protože jeho hooky v `~/.claude/settings
 | `app/inserter.py` | vložení textu: schránka + Ctrl+V (se zálohou schránky), nebo psaní přes `SendInput` Unicode; okno v popředí, okna správce; mazání a označení napsaného (Backspace, Shift+←), čtení výběru (Ctrl+Insert), čekání na puštěný Ctrl/Shift |
 | `app/editing.py` | co Orbit napsal naposledy (`Trail`: kdy je bezpečné to vzít zpět) a povely nad tím: „Smaž to“, „Vyber to“, „Vlož to znovu“, „Nahraď X za Y“; hledání přeslechnutého slova, rozdíly pro opravy (jen stdlib) |
 | `app/history.py` | historie diktátů: `<data>/history.json`, posledních 1000, kam text šel, nahrávka, oprava (bez Qt) |
-| `app/historyview.py` | okno Historie diktátů (ikona hodin vedle agenta): kopírování jedním klikem, hledání, vložit znovu, přehrát nahrávku, přepsat znovu, opravit, smazat |
+| `app/historyview.py` | okno Historie diktátů (ikona bubliny vedle Poznámek, menu Orbitu): kopírování jedním klikem, hledání, vložit znovu, přehrát nahrávku, přepsat znovu, opravit, smazat |
+| `app/pastsessions.py` | minulé relace Claude Code jako u `claude --resume`: přepisy z `projects/*/<id>.jsonl`, název, složka, první a poslední zadání, čte jen začátek a konec přepisu a jen změněné (bez Qt) |
+| `app/pastsessionsview.py` | okno Historie relací (ikona hodin vedle agenta): hledání, filtr složky, „Pokračovat v relaci“ (`claude --resume` ve složce relace), běžící relace = přepnutí do jejího okna |
 | `app/rewrite.py` | úpravy textu hlasem přes `claude -p` (Ctrl/Shift + klávesa diktování): pokyn + označený text nebo poslední diktát, Claude spuštěný už během mluvení |
 | `app/ducking.py` | hudba a zvuk ostatních programů ztlumené nebo ztišené, dokud je otevřený mikrofon (Core Audio přes ctypes, vlastní vlákno, `<data>/ducked.json` pro návrat po pádu) |
 | `app/ui.py` | `FloatingButton` (mikrofon + panel limitů), `Bubble` (oznámení), `SettingsDialog` (nastavení), kreslení ikony; společné kusy nastavení a průvodce: `KeyAndMic`, `ClaudeBox`, `DownloadRow`, `scrolling` |
@@ -692,6 +695,36 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   neotevřela“.
 - Neudělané (Pepa nežádal): zmínka v průvodci, na webu, v README a ve videu (u Poznámek to Pepa chtěl všude).
 
+### Historie relací (od 10. 10., `app/pastsessions.py`, `app/pastsessionsview.py`)
+- Pepa chtěl pod ikonou hodin (mezi pluskem a agentem) místo Historie diktátů „Historii sessions“: najít svou minulou
+  relaci a pokračovat v ní jako s `claude --resume`. Ikona (`FloatingButton.sessions_history_clicked`) je jen
+  s připojeným Claudem (jako plusko), v menu Orbitu je „Historie relací…“, Historie diktátů zůstala jen v menu.
+- Zdroj = přepisy Claude Code `projects/*/<id>.jsonl` (u Pepy ~150 relací, 3 GB, Claude Code je maže po
+  `cleanupPeriodDays`, výchozí 30 dní). Neoficiální formát jako u přehledu relací. Název jako ve výběru `/resume`
+  (zjištěno z `claude.exe` 2.1.296): `custom-title` (`/rename`) > `ai-title` > `summary` > první zadání. Vynechá se
+  to, co vynechává i Claude Code: `entrypoint` `sdk-…` (agent Orbitu, učení slovníku, skripty), podagenti
+  (`isSidechain`), relace bez jediného zadání a relace s `continued-in` na přepis, který existuje.
+- Zadání = záznam `user` od člověka (`origin.kind` human nebo chybí, ne `isMeta`, ne `isCompactSummary`, ne výsledek
+  nástroje, ne text začínající `<`: oznámení úkolů, zprávy jiných relací, `<local-command…>`); příkaz jako „/loop 5m …“.
+  Poslední zadání = nejnovější takový záznam. Záznam `last-prompt` jen jako záloha: Claude Code ho při odchodu
+  z relace znovu zapíše na konec a bývá v něm pak první zadání (viděno v Pepově přepisu). Počet zadání =
+  `turnPosition.promptIndex` z konce (sedí na ±1).
+- Rychlost: čte se začátek (bloky 256 kB, nejvýš 4 MB: na začátku bývá `CLAUDE.md` jako attachment) a konec pozpátku
+  (nejvýš 8 MB, dokud není název, poslední zadání a větev). `Index` drží výsledek podle velikosti a mtime; přepis,
+  který jen narostl, má znovu čtený jen konec. Na Pepových datech první načtení 1,4–1,5 s (ve vlákně okna), další 4 ms.
+  Okno čte znovu každých 5 s, jen když je otevřené, a seznam překreslí jen při změně.
+- Okno: vlevo hledání (všechna slova, bez diakritiky, i v zadáních, cestě, větvi a id), filtr složky („m-tex (90)“),
+  řádky s proužkem a složkou v barvě složky (`colors.color_for`, jako panel) a „běží“ zeleně
+  (`sessions.running_ids`, seznam relací Claude Code). Vpravo název, cesta, větev, kdy začala a naposledy, počet
+  zadání, první a poslední zadání (stejné = jen „Zadání“), „Pokračovat v relaci“ (i dvojklik a Enter), „Kopírovat
+  příkaz“ (`claude --resume <id>`), „Otevřít složku“.
+- Pokračování: `favorites.start_session(cwd, resume=id)` → `agent_tools.resume_folder` (samostatný proces jako u
+  plusku, `_launch(..., resume=id)`: `--resume "!ORBIT_RESUME!"`, id jen jako proměnná a jen tvaru UUID, složka =
+  `cwd` z prvního záznamu přepisu, kde relace začala). Není nástroj agenta. Běžící relace se znovu neotevře: okno do
+  popředí (`sessions.focus`, když ji zná přehled relací), jinak hláška v okně. Chyba = bublina „Relace ve složce …
+  se neotevřela“ (třeba smazaná složka). Ověřeno skutečným `cmd.exe` s falešným `claude.bat`: dostal přesně
+  `--dangerously-skip-permissions --resume "<id>"`. Neověřeno: skutečné `claude --resume` z Orbitu.
+
 ### Mody pro Claude Code (od 8. 10., `mods/`)
 - Pepa slyšel o modech Claude Code (doplňky v TypeScriptu, které běží uvnitř Claude Code: panely, řádek nad promptem,
   příkazy, nástroje, přístup k proudu odpovědi; od 2.1.287, API je v ranném přístupu) a vybral dva nápady:
@@ -702,6 +735,12 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   podagenti, „aktivita“ (výstupní tokeny po krocích) a kontext jako `/context` z `$.session.usage({ breakdown:
   'summary' })` (odhad bez požadavků na API, nejvýš jednou za 2,5 s) s limity 5 h a týden. Proud se do vykreslení
   propisuje nejvýš po 120 ms (`flush`), běžící čas tiká jen během tahu. Nic neposílá ven.
+- **Limity pro panel Orbitu** (od 10. 10., `orbit-mozek` 0.2.0): hook `session.measure` (engine ho volá po každém tahu
+  a při posunu limitu o celý bod, s tím, co hlásily odpovědi: `rateLimits` `{kind, percentUsed, resetsAt}` ISO, bez
+  požadavku) zapíše `<data>/sessions/status/<id relace>.mod.json` (`session_id`, `time` v s, `source`,
+  `rate_limits.five_hour/seven_day` `{used_percentage, resets_at}`) do každé datové složky Orbitu, kterou najde (má
+  `config.json`): `ORBIT_DATA_DIR`, `ORBIT_TASK_DATA`, `%LOCALAPPDATA%\Orbit`, `~\orbit`; bez nalezené zkusí znovu
+  po 10 min. Funguje i bez panelu `/mozek` (hook běží v každé relaci s modem). Fable v `rateLimits` není.
 - **`orbit-ukoly`**: v relaci s `ORBIT_TASK_ID` řádek nad promptem (úkol, složka, počet poznámek, tlačítka Poznámka,
   Hotovo, Skrýt), sekce systémového promptu „pracuješ na úkolu…“ (`prompt.compose`, ne když je úkol hotový) a nástroje
   `mcp__orbit-ukoly__task_note` a `task_done` (`isDeferred: false`). Úkol čte z `tasks.json` (znovu po 15 s), píše jen
@@ -709,9 +748,12 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   `$.store` podle id relace, takže to platí i po obnovení), `/ukol odpojit`. Datovou složku bez proměnné hledá:
   poslední známá, `ORBIT_DATA_DIR`, `%LOCALAPPDATA%\Orbit`, `~\orbit`. Na mobilu není `Input`, tlačítko Poznámka tam
   chybí.
-- Instalace u Pepy (8. 10.): `claude plugin marketplace add C:\Users\josef\orbit` (marketplace `orbit`, čte se přímo
-  ze složky, po úpravě stačí `/reload-plugins`) a `claude plugin install orbit-mozek@orbit` + `orbit-ukoly@orbit`
-  pro uživatele; v `settings.json` jsou `enabledPlugins` a `extraKnownMarketplaces`. Ostatní:
+- Instalace u Pepy (8. 10.): `claude plugin marketplace add C:\Users\josef\orbit` (marketplace `orbit` typu
+  directory) a `claude plugin install orbit-mozek@orbit` + `orbit-ukoly@orbit` pro uživatele; v `settings.json` jsou
+  `enabledPlugins` a `extraKnownMarketplaces`. **Nainstalovaný mod je kopie** v `~/.claude/plugins/cache/orbit/<mod>/
+  <verze>` (`installed_plugins.json`), ne složka repa: po úpravě zvednout `version` v `plugin.json`, pak
+  `claude plugin marketplace update orbit` a `claude plugin update <mod>@orbit` (10. 10. tak 0.1.0 → 0.2.0); běžící
+  relace ho načtou po restartu (nebo `/reload-plugins`). Ostatní:
   `/plugin install orbit-mozek --marketplace josefkotran/orbit` (až bude `mods/` na GitHubu).
 - Kontrola: `claude plugin validate mods/<mod>` a `claude plugin test mods/<mod>` (testy v `tests/*.test.ts` běží
   proti enginu: vše, co engine dělá sám, odpovídá test; volání na `$` vrací `{ value }`, cesty přicházejí se
@@ -759,13 +801,26 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   (Pepa: „ať vidím všechnu historii“; ~300 kB): text, Whisperův surový text, program (`inserter.app_name`),
   vloženo/ve schránce, délka, nahrávka (`recordings/<stem>`, když se ukládají), pokyn a původní text u úprav,
   uživatelova oprava. Vypnutí soubor smaže, v paměti zůstane poslední (kvůli „Vlož to znovu“). Okno
-  (`historyview.HistoryWindow`) otevře **ikona hodin vedle agenta** v pruhu nad panelem (`FloatingButton.history_clicked`,
-  Pepa ji chtěl „vedle tlačítka Agent“; bez agenta vlevo od teček barev) i menu „Historie diktátů…“. Kopírování je
+  (`historyview.HistoryWindow`) otevře ikona bubliny s řádky (E8BD, `ui.DICTATIONS_GLYPH`) hned vpravo od sešitu
+  Poznámek (`FloatingButton.dictation_history_clicked`, i bez Clauda) a menu „Historie diktátů…“. Do 10. 10. ji
+  otevírala ikona hodin vedle agenta, tu má teď Historie relací (Pepa: „nechci tam Historii diktátů, chci tam
+  Historii sessions“), a Pepa pak chtěl „novou ikonku vedle poznámek Historie diktátů“. Kopírování je
   hlavní: ikona na konci každého řádku (po kliku na chvíli zelená fajfka, `_RowDelegate`), dvojklik nebo Ctrl+C;
   nahoře hledání bez diakritiky. Vpravo Vložit (okno se schová, Windows vrátí předchozí okno a text jde tam),
   Kopírovat, Přehrát nahrávku, Přepsat znovu (s dnešním slovníkem), Uložit opravu, Smazat; dole Vymazat historii.
   V menu i „Vložit / Kopírovat poslední diktát“. Text, který skončil ve schránce (okno se změnilo), má bublinu „Nebo
   klikni sem a vložím ho, kam teď píšeš“.
+- **I věty pro agenta Orbit** (od 10. 10., Pepa: „přidej do historie diktátů i diktování botovi… ať je to tam
+  oddělené, vzhledově že to bylo pro AI agenta Orbit“): každá nahrávka pro agenta s textem (i „jo“ na otázku) je záznam
+  `kind: "agent"` (`history.AGENT`, `Dictation._remember_agent` z `_agent_heard`, jen s `take`: druhé volání z otázky
+  úkolu nic nepřidá). Odpověď agenta (`reply`) a řádek odeslání (`action`, „→ téma, složka · odesláno ✓“ + zpráva) se
+  doplňují z panelu (`_feed_update` → `_feed_to_history`), dokud tah agenta trvá; událost `done` (bez čekající otázky),
+  `exit` a `reset` ho ukončí, tah, který začala zpráva od relace, tak k větě nic nepřipíše. S vypnutým
+  `keep_history` se nezapisují (jediný záznam v paměti má zůstat poslední diktát). `History.last()` (Vlož to znovu,
+  menu) je přeskakuje. Okno: řádky kreslí `_RowDelegate` celé (čas a cíl tlumeně, text), u agenta proužek v barvě
+  akcentu a „Agent Orbit“ v ní; nahoře výběr Všechno / Diktáty / Agent Orbit; vpravo „pro agenta Orbit“ a pole
+  „Odpověď agenta Orbit“; hledá se i v odpovědi. Obnovení okna během odpovědi agenta nechá rozepsanou opravu
+  i přehrávání (`_shown`).
 - **Úpravy textu hlasem** (`voice_edit`, noví uživatelé vypnuté, posílá text Claudovi): **Ctrl nebo Shift držený se
   začátkem diktátu** (`inserter.edit_held`, kontrola při stisku a znovu s prvním zvukem; diktovací klávesa sama se
   nepočítá) = to, co se řekne, je pokyn. Tlačítko má místo mikrofonu tužku (E70F), pořád červenou při poslechu.
@@ -837,8 +892,23 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   z `.credentials.json` ve složce Claude Code. Endpoint je interní (našel jsem ho v `claude.exe`), může se změnit.
   Čte se pole `limits`: `session` → „5 h“, `weekly_all` → „Týden“, `weekly_scoped` → název modelu ze
   `scope.model.display_name` („Fable“). Starší tvar (`five_hour`, `seven_day`) je jako záloha.
-- Obnova OAuth každé 2 minuty (`USAGE_REFRESH_MS`) plus položka v menu. **Token se jen čte, nikdy neobnovuje** (refresh by
-  rotoval refresh token a mohl rozbít přihlášení Claude Code). Když vyprší, panel zešedne a ukáže „neaktuální“.
+- **Od 10. 10. jen nad čísly z relací** (`claude_usage.combined`, Pepa: „pořád se to opakuje, nejsou vidět limity“).
+  V logu od 9. 10. 22:32 ani jedna úspěšná odpověď: endpoint vracel 429 s `Retry-After` přes hodinu, po každém restartu
+  znovu, a s ním i 401 při startu (token zrovna vypršel, Claude Code ho obnoví až další relací). Na endpoint se ptají
+  i samy relace Claude Code (`fetchUtilization` v `claude.exe`: `/api/oauth/usage?at_wall=1`, `cedar_ember`…) a limit
+  je na účet, takže při hodně relacích na Orbit nezbývá. Teď 5 h a týden berou z `<data>/sessions/status/*.json`
+  (stavový řádek Orbitu `<id>.json`, mod `orbit-mozek` `<id>.mod.json`, viz Mody) každých 5 s, novější hlášení
+  vyhrává (`Limit.at`, i proti odpovědi endpointu); endpoint se ptá nejvýš jednou za 30 min (`OAUTH_EVERY_S`) a jen
+  když od posledního pokusu nějaká relace něco nahlásila (Claude Code se nepoužívá = limity se nehýbou, přes noc ani
+  jeden dotaz; čas pokusu `asked_at` v cache platí i přes restart; menu „Obnovit využití Clauda“ = hned), kvůli řádku
+  Fable (jen on ho má, ukáže se z odpovědi až 12 h staré, `OAUTH_EXTRA_S`) a práci mimo Claude Code. Dřív každé
+  2 min (30 dotazů za hodinu). Jeho chyba se jen zaloguje, panel nezešedne. Bez čísel z relací je to endpoint sám
+  (každých 5 min, `OAUTH_ALONE_S`, chyby do panelu). Orbitovy běhy `claude -p` (agent, úpravy, učení, souhrny) se
+  na endpoint neptají (ověřeno `--debug-file` 10. 10.); zbytek dotazů posílají interaktivní relace Claude Code.
+  Tooltip: „údaj z 10:30“ u řádku staršího o 10 min než nejnovější. Ověřeno 10. 10.: relace v m-tex s novým modem
+  zapsaly limity, panel 5 h 7 % a týden 2 % během 429.
+- Zdroj `statusline` bez souhlasu se stavovým řádkem ukáže limity ze souborů modu, když nějaké jsou (jinak „Zapnout →“).
+- **Token se jen čte, nikdy neobnovuje** (refresh by rotoval refresh token a mohl rozbít přihlášení Claude Code).
 - Bubliny potřebují `Qt.WA_AlwaysShowToolTips`, jinak se u neaktivního okna nezobrazí.
 - Předpověď: z odběrů 5h okna za posledních 30 min (aspoň 10 min a +1 bod) se spočítá, kdy dojde. Když dřív než
   se okno obnoví, hlavička ukáže oranžově „dojde v 14:20“ a jednou za okno přijde bublina, pokud zbývá < 60 min.
@@ -1140,7 +1210,7 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   ```
   Whisper server při zabití aplikace skončí sám (Job object).
 - Kontrola kódu: `.venv\Scripts\python.exe -m pyflakes app Orbit.pyw tests`.
-- **Testy** (od 7. 10., stdlib `unittest`, 182 testů, ~45 s): `.venv\Scripts\python.exe -m unittest discover -s tests`
+- **Testy** (od 7. 10., stdlib `unittest`, 203 testů, ~45 s): `.venv\Scripts\python.exe -m unittest discover -s tests`
   (jen část: `-p "test_core*.py"`, `test_claude*`, `test_dist*`, `test_ui*`; `test_ui_*` zkouší metody `Dictation`
   na stubu a `VoiceAgent` s falešným procesem, bez Clauda). Samy si nastaví `ORBIT_DATA_DIR`/`ORBIT_CLAUDE_DIR`
   na dočasné složky a uklidí po sobě. Nespouští `claude` ani whisper-server (místo něj malý server v Pythonu), klávesy

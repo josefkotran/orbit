@@ -8,7 +8,8 @@ find_pages and open_page find a page in the user's Chrome history and open it (a
 only show a page. That's why open_page opens only what find_pages found here (the same page with another number in
 its path or query is fine), never an address the model made up or read somewhere.
 open_folder (not a tool: Orbit's + above the panel, favorites.start_session) opens a session in a folder the user
-picked, without a task, and brings its window to the front.
+picked, without a task, and brings its window to the front; resume_folder (not a tool either: the session history,
+pastsessions.py) the same with a past session going on in it.
 
 Its own process (Claude Code starts it): standard library and app modules without Qt only.
 """
@@ -253,6 +254,18 @@ def open_folder(folder: str) -> str:
     return f"Nová relace se otevírá ve složce {path}."
 
 
+def resume_folder(folder: str, session_id: str) -> str:
+    """A past session going on in its folder (Orbit's session history, the clock above the panel: pastsessions.py):
+    claude --resume <id> in a window of its own like the user's sessions, brought to the front. Like open_folder no
+    MCP tool, the user picked it."""
+    if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", session_id):
+        raise ValueError("Neplatné číslo relace.")
+    path = _local_folder(folder)
+    proc, _ = _launch(path, resume=session_id)
+    _bring_up(proc.pid)
+    return f"Relace pokračuje ve složce {path}."
+
+
 def _local_folder(folder: str) -> Path:
     if folder.startswith(("\\\\", "//")):  # cmd.exe can't start in one: it would run in C:\Windows
         raise ValueError("Složka na síťovém disku (\\\\server\\…) nejde, relaci otevřu jen v místní složce.")
@@ -281,9 +294,9 @@ def _bring_up(pid: int) -> None:
         time.sleep(0.05)
 
 
-def _launch(path: Path, task: str = "", task_id: str = "") -> tuple[subprocess.Popen, bool]:
-    """Starts Claude Code in path (task: its first message, "" = none): (cmd.exe's process, whether it runs minimized
-    in the background)."""
+def _launch(path: Path, task: str = "", task_id: str = "", resume: str = "") -> tuple[subprocess.Popen, bool]:
+    """Starts Claude Code in path (task: its first message, "" = none; resume: the id of a past session that goes on,
+    claude --resume): (cmd.exe's process, whether it runs minimized in the background)."""
     exe = find_exe()
     if not exe:
         raise ValueError("Claude Code tu není nainstalovaný.")
@@ -293,14 +306,14 @@ def _launch(path: Path, task: str = "", task_id: str = "") -> tuple[subprocess.P
     # parsed the line (/v:on, !ORBIT_…!), so nothing in them – & | > ^ % – can run as a command. /s: cmd drops just
     # the outer quotes. The folder is the working directory, not part of the line.
     command = '"!ORBIT_CLAUDE!"' + (" --dangerously-skip-permissions" if bypass else "") + \
-        (' "!ORBIT_TASK!"' if task else "")
+        (' --resume "!ORBIT_RESUME!"' if resume else "") + (' "!ORBIT_TASK!"' if task else "")
     # With a task it works in the background: on the taskbar, minimized as soon as its window shows (_minimize). Not
     # when Claude Code will first ask whether running without permission prompts is all right: that must be seen.
     background = bool(task) and (not bypass or sessions.bypass_prompt_skipped())
     # Started normally, so it gets the same window as the user's own sessions (Windows Terminal, when that's the
     # default terminal); a console started minimized Windows never hands over and keeps it in the classic window.
     focused = ctypes.windll.user32.GetForegroundWindow() if background else None
-    env = dict(_user_environment(), ORBIT_CLAUDE=exe, ORBIT_TASK=task)
+    env = dict(_user_environment(), ORBIT_CLAUDE=exe, ORBIT_TASK=task, ORBIT_RESUME=resume)
     if task_id:
         env.update(ORBIT_TASK_ID=task_id, ORBIT_TASK_DATA=str(paths.data_dir()))
     proc = subprocess.Popen(f'cmd.exe /s /v:on /k "{command}"', executable=CMD, cwd=path, env=env, close_fds=True,

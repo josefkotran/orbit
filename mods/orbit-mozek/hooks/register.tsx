@@ -1,9 +1,10 @@
 // Orbit's "Mozek" (brain) pane for Claude Code, opened with /mozek: what the session is doing right now. The tail of
 // Claude's thinking and of what it writes, the turn's tool calls with their times, running subagents, a "brain wave"
 // of output tokens per request, and the context window as /context draws it (estimated locally, free), with limits.
-// Everything stays in this Claude Code process: nothing is sent anywhere.
+// The limits also go to Orbit's panel: after each turn the engine hands over what the answers reported, and this mod
+// leaves them in Orbit's data folder on this PC (reportLimits). Nothing is sent anywhere, nothing is asked for.
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 
 import type { MozekContext, MozekLive, MozekPhase, MozekSquare, MozekTool } from '../types'
 
@@ -46,6 +47,15 @@ const CATEGORY: Record<string, string> = {
 }
 
 const LIMIT: Record<string, string> = { five_hour: '5 h', seven_day: 'týden' }
+const SEEK_AGAIN_MS = 10 * 60 * 1000 // no Orbit data folder found: looked for again after this long
+
+// Orbit's data folders (each has its config.json), found once per load: the folder Orbit was told to use, a task
+// session's, the installed Orbit's, a checkout in ~/orbit. Every one found gets the limits: whichever Orbit runs
+// reads its own.
+let dataDirs: string[] | null = null
+let soughtAt = 0
+
+const trimSlash = (dir: string): string => dir.replace(/[\\/]+$/, '')
 
 // The working copy the stream writes into; the host's copy (`live`) is what the pane draws and what survives a reload.
 let cur: MozekLive | null = null
@@ -116,6 +126,44 @@ async function refreshContext($: EngineInterface, force = false): Promise<void> 
   await update($, context, () => value)
 }
 
+async function orbitDataDirs($: EngineInterface): Promise<string[]> {
+  const now = await $.clock.now()
+  if (dataDirs && (dataDirs.length || now - soughtAt < SEEK_AGAIN_MS)) return dataDirs
+  soughtAt = now
+  const candidates = [await $.env.get('ORBIT_DATA_DIR'), await $.env.get('ORBIT_TASK_DATA')]
+  const local = await $.env.get('LOCALAPPDATA')
+  if (local) candidates.push(`${trimSlash(local)}/Orbit`)
+  const home = await $.env.get('USERPROFILE')
+  if (home) candidates.push(`${trimSlash(home)}/orbit`)
+  const found: string[] = []
+  for (const dir of candidates) {
+    if (!dir) continue
+    const clean = trimSlash(dir)
+    const key = clean.replace(/\\/g, '/').toLowerCase()
+    if (found.some(f => f.replace(/\\/g, '/').toLowerCase() === key)) continue
+    if (await $.fs.exists(`${clean}/config.json`).catch(() => false)) found.push(clean)
+  }
+  dataDirs = found
+  return found
+}
+
+/** The limits the session's answers reported, for Orbit's panel: <data>/sessions/status/<session>.mod.json, read like
+ * the files of Orbit's status line (app/claude_usage.py), resets_at as the engine gives it (ISO). */
+async function reportLimits($: EngineInterface, limits: SessionRateLimit[]): Promise<void> {
+  const windows: Record<string, { used_percentage: number; resets_at?: string }> = {}
+  for (const limit of limits) {
+    if (limit.kind !== 'five_hour' && limit.kind !== 'seven_day') continue
+    windows[limit.kind] = { used_percentage: limit.percentUsed, ...(limit.resetsAt ? { resets_at: limit.resetsAt } : {}) }
+  }
+  if (!Object.keys(windows).length) return
+  const session = await $.session.id()
+  if (!/^[\w-]{1,128}$/.test(session)) return
+  const record = JSON.stringify({ session_id: session, time: (await $.clock.now()) / 1000, source: 'orbit-mozek', rate_limits: windows })
+  for (const dir of await orbitDataDirs($)) {
+    await $.fs.write(`${dir}/sessions/status/${session}.mod.json`, record).catch(() => undefined)
+  }
+}
+
 const tokens = (n: number): string =>
   n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1).replace('.', ',')} mil.` : n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`
 
@@ -152,6 +200,13 @@ export const register: Register = on => {
       description: 'Mozek relace: o čem Claude přemýšlí, co dělají nástroje a jak je plný kontext',
     })
     return next(e)
+  })
+
+  // after each turn, and when a limit moved a whole point: what the answers reported, for Orbit (no request of its own)
+  on('session.measure', async ($, e, next) => {
+    const result = await next(e)
+    if (e.rateLimits.length) await reportLimits($, e.rateLimits).catch(() => undefined)
+    return result
   })
 
   on('command.run', { command: 'mozek' }, async $ => {

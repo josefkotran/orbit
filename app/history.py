@@ -1,6 +1,8 @@
 """Dictation history: the last dictations with where they went, so a text that ended up on the clipboard (the window
 changed, a window running as administrator) or one from a while ago can be inserted again, copied or corrected, and
-"Vlož to znovu" has something to insert. The window is historyview.py.
+"Vlož to znovu" has something to insert. What the user said to the voice agent is there too (kind AGENT, since
+10 Oct), with the agent's answer and what it sent or opened; "Vlož to znovu" and the menu's last dictation skip those.
+The window is historyview.py.
 
 Stored in <data>/history.json (local only, written atomically, never in git: it's what the user said). With
 "keep_history" off nothing is written and the file is deleted; the last dictation is still kept in memory for
@@ -24,6 +26,8 @@ INSERTED = "inserted"  # typed into the window it was meant for
 CLIPBOARD = "clipboard"  # that window changed or wouldn't take it: on the clipboard
 FAILED = "failed"  # the transcription failed (its recording may still be there)
 
+AGENT = "agent"  # Entry.kind: said to the voice agent Orbit, not typed anywhere
+
 
 @dataclass
 class Entry:
@@ -39,6 +43,9 @@ class Entry:
     original: str = ""  # an edit by voice: the text before it
     corrected: str = ""  # the user's own correction of the text (the history window)
     key: str = ""  # "send" / "stop": "Odešli" or "Stop" followed it
+    kind: str = ""  # "" = a dictation, AGENT = said to the voice agent
+    reply: str = ""  # AGENT: what the agent answered
+    action: str = ""  # AGENT: what it sent or opened, and how it went ("→ Ceník Profodu, m-tex · odesláno ✓\n…")
 
     @property
     def best(self) -> str:
@@ -109,8 +116,8 @@ class History:
         return next((e for e in self.items if e.id == entry_id), None)
 
     def last(self) -> Entry | None:
-        """The newest one with text (a failed transcription has none)."""
-        return next((e for e in reversed(self.items) if e.best.strip()), None)
+        """The newest dictation with text (a failed transcription has none; what the agent heard doesn't count)."""
+        return next((e for e in reversed(self.items) if e.best.strip() and e.kind != AGENT), None)
 
     def update(self, entry: Entry, **changes) -> None:
         for key, value in changes.items():

@@ -234,5 +234,42 @@ class OpenFolder(_Starting):
         self.popen.assert_not_called()
 
 
+class ResumeFolder(_Starting):
+    """resume_folder: the session history (the clock above the panel), claude --resume <id> in the session's folder,
+    the id only as a variable cmd expands after parsing the line, its window brought to the front."""
+    ID = "1f433bb8-084a-4bfb-b377-837cd2dfc6f7"
+
+    def setUp(self):
+        super().setUp()
+        bring = mock.patch.object(agent_tools, "_bring_up")
+        self.bring = bring.start()
+        self.addCleanup(bring.stop)
+
+    def test_resumes_in_its_folder(self):
+        agent_tools.resume_folder(OTHER, self.ID)
+        line, kwargs = self.popen.call_args.args[0], self.popen.call_args.kwargs
+        self.assertEqual(os.path.normcase(str(kwargs["cwd"])), os.path.normcase(OTHER))
+        self.assertIn('--resume "!ORBIT_RESUME!"', line)
+        self.assertNotIn(self.ID, line)
+        self.assertEqual(kwargs["env"]["ORBIT_RESUME"], self.ID)
+        self.assertEqual(kwargs["env"]["ORBIT_TASK"], "")
+        self.assertIn("--dangerously-skip-permissions", line)  # like the user's sessions
+        self.minimize.assert_not_called()
+        self.bring.assert_called_once_with(self.popen.return_value.pid)
+
+    def test_new_sessions_without_resume(self):
+        agent_tools.open_folder(OTHER)
+        self.assertNotIn("--resume", self.popen.call_args.args[0])
+
+    def test_refused(self):
+        for session_id in ("", "1f433bb8", f"{self.ID} & calc", f'{self.ID}"', self.ID.upper() + "x"):
+            with self.assertRaises(ValueError, msg=session_id):
+                agent_tools.resume_folder(OTHER, session_id)
+        with self.assertRaises(ValueError):
+            agent_tools.resume_folder(os.path.join(_TMP, "neni"), self.ID)  # the folder is gone
+        self.popen.assert_not_called()
+        self.assertNotIn("resume_folder", {tool["name"] for tool in agent_tools.TOOLS})
+
+
 if __name__ == "__main__":
     unittest.main()

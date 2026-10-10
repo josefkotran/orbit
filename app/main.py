@@ -19,12 +19,13 @@ from PySide6.QtTextToSpeech import QTextToSpeech
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
 from . import (agent, artifacts, claude_cli, claude_settings, claude_usage, colors, config, downloads, ducking,
-               editing, favorites, history, hotkey, inserter, learning, paths, rewrite, sessions, tasks, theme, vocab,
-               voice, winutil)
+               editing, favorites, history, hotkey, inserter, learning, pastsessions, paths, rewrite, sessions, tasks,
+               theme, vocab, voice, winutil)
 from .favoritesview import FavoritesDialog, NewRepoDialog
 from .historyview import HistoryWindow
 from .inserter import Inserter
 from .notebook import Notebook
+from .pastsessionsview import SessionHistory
 from .onboarding import CANCELLED, ClaudeConnection, Downloads, Wizard
 from .recorder import Recorder, input_devices, is_bluetooth_handsfree, is_silent
 from .ui import (ADD_GLYPH, CHOOSE_GLYPH, Bubble, FloatingButton, FolderMenu, SettingsDialog, color_icon,
@@ -38,8 +39,7 @@ log = logging.getLogger("orbit")
 TAIL_MS = 250  # keep recording a moment after release – people let go while finishing the last word
 KEEP_RECORDINGS = 30
 LIVE_FALLBACK_MS = 600  # if the mic sends only exact zeros (e.g. muted), start anyway after this
-USAGE_REFRESH_MS = 120_000  # the OAuth endpoint (it answers 429 when asked more often)
-STATUS_REFRESH_MS = 5_000  # the status line's files (local, cheap)
+STATUS_REFRESH_MS = 5_000  # the sessions' limits files (local, cheap); the OAuth endpoint: claude_usage.combined
 SESSION_POLL_MS = 1000
 NOTIFY_TURN_S = 20  # a finished turn is announced only if Claude worked at least this long (else Pepa watched it)
 FORECAST_WARN = timedelta(minutes=60)  # warn when the 5-hour limit runs out sooner than this at the current pace
@@ -122,10 +122,11 @@ class Bridge(QObject):
     agent_down = Signal()
     agent_up = Signal()
     speech_over = Signal()  # hands-free listening: Pepa stopped talking
-    agent_heard = Signal(str, object)  # text, the confirmation it may answer (Take.confirm_id)
+    agent_heard = Signal(str, object, object)  # text, the confirmation it may answer (Take.confirm_id), the Take
     agent_event = Signal(str, object)  # see agent.VoiceAgent
     task_done = Signal(str, bool, str)  # a task's session: task id, opened, the message (tasks.start_session)
     favorite_failed = Signal(str, str)  # a session in a favourite folder didn't open: the folder, why
+    past_resumed = Signal(str, bool, str)  # a past session going on (the session history): its id, opened, message
 
 
 class Dictation:
@@ -172,6 +173,8 @@ class Dictation:
         self._rewriting = 0  # edits Claude is working on (the button shows it)
         self.history = history.History(self.cfg["keep_history"])
         self.history_window: HistoryWindow | None = None
+        self.past_sessions = pastsessions.Index()  # past Claude Code sessions (the clock above the panel)
+        self.past_window: SessionHistory | None = None
         self.ducker = ducking.Ducker(config.DATA_DIR / "ducked.json")  # other programs quieter while dictating
         self.ducker.restore_leftover()  # what a run that died mid-dictation left quiet
 
@@ -234,6 +237,7 @@ class Dictation:
         self._agent_pressed_at = 0.0
         self._hands_free = False  # the agent listens until Pepa stops talking (a click, not a hold)
         self._feed: dict = {}  # the agent's last exchange, as shown in the panel
+        self._agent_entry = ""  # the history entry of what was said to the agent, while its turn lasts
         self._confirm: dict | None = None  # a message the agent wants to send, waiting for Pepa's yes
         self.listen_timer = QTimer(singleShot=True, interval=LISTEN_MAX_MS)
         self.listen_timer.timeout.connect(self._speech_over)
@@ -264,9 +268,11 @@ class Dictation:
         self.inbox_timer.start()
         self.bridge.task_done.connect(self._task_done)
         self.button.notes_clicked.connect(self.open_notebook)
-        self.button.history_clicked.connect(self.open_history)
+        self.button.dictation_history_clicked.connect(self.open_history)
+        self.button.sessions_history_clicked.connect(self.open_past_sessions)
         self.button.new_session_clicked.connect(self._show_favorites)
         self.bridge.favorite_failed.connect(self._favorite_failed)
+        self.bridge.past_resumed.connect(self._past_resumed)
         self.favorites_dialog: FavoritesDialog | None = None
         self.repo_dialog: NewRepoDialog | None = None
         self._favorites_popup: QMenu | None = None  # the +'s menu while it's open
@@ -292,6 +298,7 @@ class Dictation:
             lambda folder, pos: self._favorite_color(self.favorites_menu, folder, pos))
         self.favorites_menu.aboutToShow.connect(lambda: self._fill_favorites(self.favorites_menu, heading=False))
         self._fill_favorites(self.favorites_menu, heading=False)  # (an empty submenu may not open at all)
+        self.menu.addAction("Historie relací…", self.open_past_sessions)  # the clock above the panel
         self.toggle_action = QAction("Zobrazovat plovoucí tlačítko", self.menu, checkable=True)
         self.toggle_action.setChecked(self.cfg["show_button"])
         self.toggle_action.toggled.connect(self._set_button_visible)
@@ -301,7 +308,7 @@ class Dictation:
         self.menu.addAction("Kopírovat poslední diktát", self._copy_last)
         self.retry_action = self.menu.addAction("Přepsat znovu poslední diktát", self._retry_dictation)
         self.retry_action.setEnabled(False)
-        self.menu.addAction("Obnovit využití Clauda", self._fetch_usage)
+        self.menu.addAction("Obnovit využití Clauda", lambda: self._fetch_usage(force=True))
         self.menu.addAction("Naučit slovník z nových diktátů", lambda: self._maybe_learn(force=True))
         self.menu.addAction("Exportovat slovník…", self._export_vocabulary)
         self.menu.addAction("Importovat slovník…", self._import_vocabulary)
@@ -341,8 +348,8 @@ class Dictation:
         b.agent_event.connect(self._agent_event)
         b.captured.connect(self._key_captured)
         b.agent_captured.connect(self._agent_key_captured)
-        self.usage_timer = QTimer(interval=USAGE_REFRESH_MS)
-        self.usage_timer.timeout.connect(self._fetch_usage)
+        self.usage_timer = QTimer(interval=STATUS_REFRESH_MS)
+        self.usage_timer.timeout.connect(lambda: self._fetch_usage())
         self.claude.changed.connect(self._claude_changed)
         self.downloads.progress.connect(self._download_progress)
         self.downloads.finished.connect(self._download_finished)
@@ -479,9 +486,10 @@ class Dictation:
         self.button.set_usage_visible(self.cfg["show_usage"])
         self._apply_statusline()
         if self.cfg["show_usage"] and self.claude.connected:
-            interval = USAGE_REFRESH_MS if self.cfg["usage_source"] == "oauth" else STATUS_REFRESH_MS
-            if not self.usage_timer.isActive() or self.usage_timer.interval() != interval:
-                self.usage_timer.start(interval)
+            # the sessions' files every few seconds; the OAuth endpoint (usage_source "oauth") only on top of them,
+            # claude_usage.combined decides when it's asked (every 10 minutes, every 2 without the sessions' figures)
+            if not self.usage_timer.isActive() or self.usage_timer.interval() != STATUS_REFRESH_MS:
+                self.usage_timer.start(STATUS_REFRESH_MS)
                 self._fetch_usage()
         else:
             self.usage_timer.stop()
@@ -531,19 +539,21 @@ class Dictation:
         self._apply_agent_setting()
         self.refresh()
 
-    def _fetch_usage(self):
+    def _fetch_usage(self, force: bool = False):
+        """force: the menu's "Obnovit využití Clauda", the OAuth endpoint asked now (unless it said to wait)."""
         if self._usage_inflight:
             return
         source = self.cfg["usage_source"]
         if source == "statusline" and not self.cfg["claude_statusline"]:  # no yes to the status line yet
-            self._usage_ready(claude_usage.Usage([], note="Limity Orbit čte ze stavového řádku Claude Code.",
-                                                 source=source, action="statusline"))
+            usage = claude_usage.from_status_line()  # the orbit-mozek mod's files need no status line
+            self._usage_ready(usage if usage.limits else claude_usage.Usage(
+                [], note="Limity Orbit čte ze stavového řádku Claude Code.", source=source, action="statusline"))
             return
         self._usage_inflight = True
 
         def run():
             try:
-                self.bridge.usage_ready.emit(claude_usage.fetch(source))
+                self.bridge.usage_ready.emit(claude_usage.fetch(source, force))
             except claude_usage.Limited as e:
                 self.bridge.usage_failed.emit(str(e), e.last)
             except claude_usage.UsageError as e:
@@ -858,7 +868,7 @@ class Dictation:
             self.bridge.transcribe_failed.emit(str(e), take)
             return
         if take.agent:
-            self.bridge.agent_heard.emit(text, take.confirm_id)
+            self.bridge.agent_heard.emit(text, take.confirm_id, take)
         else:
             self.bridge.dictated.emit(take)
         if keep:  # after the text is on its way: writing the WAV took ~11 ms (up to 50) on the way to the window
@@ -1819,10 +1829,13 @@ class Dictation:
         if self._hands_free and self.take and self.take.agent and self.recorder.active:
             self._finish_recording()
 
-    def _agent_heard(self, text: str, confirm_id=None):
+    def _agent_heard(self, text: str, confirm_id=None, take: Take | None = None):
         """What Pepa said to the agent: an answer to "Mám to poslat?" (only when the question was already in the
-        panel when the recording started, confirm_id), or something for the agent."""
+        panel when the recording started, confirm_id), or something for the agent. A recording (take) goes to the
+        dictation history as said to the agent."""
         text = text.strip()
+        if take is not None and text:
+            self._remember_agent(text, take)
         if self._confirm and text and self._confirm.get("kind") == "task" and confirm_id != self._confirm["id"]:
             # said before Orbit asked about a task: meant for the agent; the task waits for the next check
             self._drop_confirm("")
@@ -1862,6 +1875,33 @@ class Dictation:
             return
         self._set_agent_state("thinking")
 
+    def _remember_agent(self, text: str, take: Take):
+        """What was said to the agent, in the dictation history (only a kept one: with keep_history off the one
+        entry in memory stays the last dictation, for "Vlož to znovu"). The agent's answer and what it sent or opened
+        follow from the panel's feed (_feed_to_history) until its turn ends."""
+        if not self.history.persist:
+            return
+        entry = self.history.add(text, raw=take.raw_text, kind=history.AGENT, outcome="",
+                                 seconds=round(take.seconds, 1), recording=take.stem)
+        self._agent_entry = entry.id
+        self._history_changed()
+
+    def _feed_to_history(self):
+        """The agent's answer and its message's line ("→ Ceník Profodu, m-tex · odesláno ✓" and the text) into the
+        history entry of what was said to it last, while its turn lasts."""
+        entry = self.history.get(self._agent_entry) if self._agent_entry else None
+        if entry is None:
+            return
+        reply, send = self._feed.get("reply", ""), self._feed.get("send")
+        action = ""
+        if send:
+            label = FloatingButton.SEND_STATUS.get(send.get("status", ""), (send.get("status", ""), None))[0]
+            where = ", ".join(x for x in (send.get("name"), send.get("folder")) if x)
+            action = f"→ {where} · {label}" + (f"\n{send['message']}" if send.get("message") else "")
+        if (reply, action) != (entry.reply, entry.action):
+            self.history.update(entry, reply=reply, action=action)
+            self._history_changed()
+
     def _agent_event(self, kind: str, data):
         if kind == "reply":
             log.info("Agent odpověděl (%d znaků)", len(data))
@@ -1893,6 +1933,8 @@ class Dictation:
                 self._feed_update(reply=f"Chyba agenta: {sessions.summary(data['error'], 2, 200)}")
             if self._agent_state == "thinking":
                 self._set_agent_state(self._agent_rest())
+            if not self._confirm:  # its turn is over: a turn a session's message starts isn't Pepa's
+                self._agent_entry = ""
         elif kind in ("exit", "reset"):
             if self._confirm and self._confirm.get("kind") != "task":  # (a task's question isn't the agent's)
                 self._confirm = None
@@ -1902,6 +1944,7 @@ class Dictation:
             if kind == "exit" and self._agent_state in ("thinking", "confirm") and not self._confirm:
                 self._feed_update(reply="Agent se ukončil, zkus to prosím znovu.")
                 self._set_agent_state(self._agent_rest())
+            self._agent_entry = ""
 
     @staticmethod
     def _readable(text: str) -> str:
@@ -2093,6 +2136,47 @@ class Dictation:
         log.info("Relace v oblíbené složce %s se neotevřela", Path(folder).name)
         self._notify(text, error=True, title=f"Relace ve složce {Path(folder).name} se neotevřela")
 
+    # -- past sessions: the clock above the panel (pastsessions.py) ------------------------------
+
+    def open_past_sessions(self):
+        if self._bring_window(self.past_window):
+            return
+        if self.past_window is None:
+            self.past_window = SessionHistory(self.past_sessions, lambda: self.cfg["folder_colors"],
+                                              sessions.running_ids)
+            self.past_window.resume_requested.connect(self._resume_past)
+        self.past_window.show()
+        self._bring_window(self.past_window)
+
+    def _resume_past(self, session_id: str):
+        """A past session going on in its folder (claude --resume, a window like the +'s sessions). One that runs
+        right now gets its window to the front instead of opening a second time."""
+        past, window = self.past_sessions.get(session_id), self.past_window
+        if past is None:
+            return
+        if session_id in sessions.running_ids():
+            s = self.tracker.sessions.get(session_id)
+            if s and s.hwnd and sessions.focus(s):
+                window.say("Relace už běží, její okno je teď vepředu.")
+            else:
+                window.say("Relace už běží v jiném okně, podruhé ji neotevřu. Najdeš ji na liště.", warn=True)
+            return
+        log.info("Pokračuje minulá relace ve složce %s", past.folder)
+        window.say(f"Otevírám relaci ve složce {past.folder}…")
+
+        def run():
+            self.bridge.past_resumed.emit(session_id, *favorites.start_session(past.cwd, resume=session_id))
+        threading.Thread(target=run, daemon=True).start()
+
+    def _past_resumed(self, session_id: str, ok: bool, text: str):
+        past = self.past_sessions.get(session_id)
+        folder = past.folder if past else "?"
+        if not ok:
+            log.info("Minulá relace ve složce %s se neotevřela", folder)
+            self._notify(text, error=True, title=f"Relace ve složce {folder} se neotevřela")
+        if self.past_window is not None and self.past_window.isVisible():
+            self.past_window.say(text if ok else f"Neotevřela se: {text}", warn=not ok)
+
     @staticmethod
     def _bring_window(window) -> bool:
         """An Orbit window that is already open to the front (True), or False when there is none."""
@@ -2278,6 +2362,7 @@ class Dictation:
         self._feed = {k: v for k, v in self._feed.items() if v}
         self.button.set_agent_feed(dict(self._feed))
         self.feed_timer.start()
+        self._feed_to_history()
 
     def _feed_expired(self):
         if self._agent_state != "idle":

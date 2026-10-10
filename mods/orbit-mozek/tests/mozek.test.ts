@@ -90,3 +90,43 @@ test('/mozek opens the pane and writes nothing into the conversation', async ($,
   expect(ran.text).toBeUndefined()
   expect(opened).toEqual(['mozek'])
 })
+
+// After each turn the engine hands over the limits the answers reported; the mod leaves them for Orbit's panel in
+// every Orbit data folder it finds (one with config.json), and nothing anywhere else.
+test('the limits go to Orbit, without asking anything', async ($, on) => {
+  mock.clock(on, { now: 1_760_000_000_000 })
+  engine(on)
+  on('session.measure', ($, e) => ({ changed: e.changed }))
+  on('session.id', () => ({ value: 'sess-1' }))
+  mock.env(on, { LOCALAPPDATA: 'C:\\Users\\jana\\AppData\\Local', USERPROFILE: 'C:\\Users\\jana' })
+  const norm = (path: string): string => path.replace(/\\/g, '/')
+  // only the checkout in ~/orbit is an Orbit data folder here (no installed Orbit)
+  on('fs.exists', ($, e) => ({ value: norm(e.path) === 'C:/Users/jana/orbit/config.json' }))
+  const written: { path: string; text: string }[] = []
+  on('fs.write', ($, e) => {
+    written.push({ path: norm(e.path), text: e.text })
+    return { value: undefined }
+  })
+  const context = { window: 200_000, tokens: 50_000, percent: 25 }
+
+  await $.session.start({ cwd: 'C:/projekt', surface: 'terminal', isInteractive: true })
+  await $.session.measure({ context, rateLimits: [], changed: ['context'] })
+  expect(written).toEqual([]) // no reading yet
+  await $.session.measure({
+    context,
+    rateLimits: [
+      { kind: 'five_hour', percentUsed: 23.5, resetsAt: '2025-10-09T14:00:00.000Z' },
+      { kind: 'seven_day', percentUsed: 41 },
+      { kind: 'spend_limit', percentUsed: 10 },
+    ],
+    changed: ['context', 'rateLimits'],
+  })
+  expect(written.map(w => w.path)).toEqual(['C:/Users/jana/orbit/sessions/status/sess-1.mod.json'])
+  const record = JSON.parse(written[0]!.text) as Record<string, unknown>
+  expect(record.session_id).toBe('sess-1')
+  expect(record.time).toBe(1_760_000_000)
+  expect(record.rate_limits).toEqual({
+    five_hour: { used_percentage: 23.5, resets_at: '2025-10-09T14:00:00.000Z' },
+    seven_day: { used_percentage: 41 },
+  })
+})
