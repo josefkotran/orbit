@@ -811,9 +811,11 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   V menu i „Vložit / Kopírovat poslední diktát“. Text, který skončil ve schránce (okno se změnilo), má bublinu „Nebo
   klikni sem a vložím ho, kam teď píšeš“.
 - **I věty pro agenta Orbit** (od 10. 10., Pepa: „přidej do historie diktátů i diktování botovi… ať je to tam
-  oddělené, vzhledově že to bylo pro AI agenta Orbit“): každá nahrávka pro agenta s textem (i „jo“ na otázku) je záznam
-  `kind: "agent"` (`history.AGENT`, `Dictation._remember_agent` z `_agent_heard`, jen s `take`: druhé volání z otázky
-  úkolu nic nepřidá). Odpověď agenta (`reply`) a řádek odeslání (`action`, „→ téma, složka · odesláno ✓“ + zpráva) se
+  oddělené, vzhledově že to bylo pro AI agenta Orbit“): každá nahrávka pro agenta s textem je záznam `kind: "agent"`
+  (`history.AGENT`, `Dictation._remember_agent` z `_agent_heard`, jen s `take`: druhé volání z otázky úkolu nic
+  nepřidá). Kromě holé odpovědi na otázku „Mám to poslat?“ (`agent.confirmation` je ano nebo ne: „jo“, „ano, pošli to“,
+  „ne“; Pepa: „ať se jo neukládá v historii diktátů“): ta se neukládá a stav odeslání dostane záznam věty, která
+  otázku vyvolala. „Ano, ale do jiné relace“ se ukládá (říká něco nového). Odpověď agenta (`reply`) a řádek odeslání (`action`, „→ téma, složka · odesláno ✓“ + zpráva) se
   doplňují z panelu (`_feed_update` → `_feed_to_history`), dokud tah agenta trvá; událost `done` (bez čekající otázky),
   `exit` a `reset` ho ukončí, tah, který začala zpráva od relace, tak k větě nic nepřipíše. S vypnutým
   `keep_history` se nezapisují (jediný záznam v paměti má zůstat poslední diktát). `History.last()` (Vlož to znovu,
@@ -1210,7 +1212,7 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   ```
   Whisper server při zabití aplikace skončí sám (Job object).
 - Kontrola kódu: `.venv\Scripts\python.exe -m pyflakes app Orbit.pyw tests`.
-- **Testy** (od 7. 10., stdlib `unittest`, 203 testů, ~45 s): `.venv\Scripts\python.exe -m unittest discover -s tests`
+- **Testy** (od 7. 10., stdlib `unittest`, 204 testů, ~45 s): `.venv\Scripts\python.exe -m unittest discover -s tests`
   (jen část: `-p "test_core*.py"`, `test_claude*`, `test_dist*`, `test_ui*`; `test_ui_*` zkouší metody `Dictation`
   na stubu a `VoiceAgent` s falešným procesem, bez Clauda). Samy si nastaví `ORBIT_DATA_DIR`/`ORBIT_CLAUDE_DIR`
   na dočasné složky a uklidí po sobě. Nespouští `claude` ani whisper-server (místo něj malý server v Pythonu), klávesy

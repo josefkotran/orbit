@@ -1832,9 +1832,13 @@ class Dictation:
     def _agent_heard(self, text: str, confirm_id=None, take: Take | None = None):
         """What Pepa said to the agent: an answer to "Mám to poslat?" (only when the question was already in the
         panel when the recording started, confirm_id), or something for the agent. A recording (take) goes to the
-        dictation history as said to the agent."""
+        dictation history as said to the agent, except a plain yes or no to the question (Pepa, 10 Oct: the "jo"
+        shouldn't be kept); "ano, ale do jiné relace" is kept, it says something new. The question's entry then gets
+        how the sending went."""
         text = text.strip()
-        if take is not None and text:
+        answer = bool(self._confirm) and confirm_id is not None and confirm_id == self._confirm["id"] \
+            and agent.confirmation(text) is not None
+        if take is not None and text and not answer:
             self._remember_agent(text, take)
         if self._confirm and text and self._confirm.get("kind") == "task" and confirm_id != self._confirm["id"]:
             # said before Orbit asked about a task: meant for the agent; the task waits for the next check

@@ -294,6 +294,22 @@ class ConfirmTest(unittest.TestCase):
         self.assertFalse(self.resolved[-1][0][1])
         self.assertEqual(self.spoken, [])
 
+    def test_a_plain_yes_or_no_isnt_kept_in_the_history(self):
+        """Pepa (10 Oct): the "jo" that confirms sending doesn't belong in the dictation history; an answer that says
+        something new does, and so does anything said with no question waiting."""
+        kept = []
+        self.d._remember_agent = lambda text, take: kept.append(text)
+        self.d._answer_confirm = lambda text: None
+        take = SimpleNamespace(confirm_id="c1")
+        for text in ("Jo.", "ano, pošli to", "Ne."):
+            self.d._confirm = {"id": "c1", "shown": 0}
+            main.Dictation._agent_heard(self.d, text, "c1", take)
+        self.d._confirm = {"id": "c1", "shown": 0}
+        main.Dictation._agent_heard(self.d, "Ano, ale do relace ondra.", "c1", take)
+        self.d._confirm = {"id": "c2", "shown": 0}
+        main.Dictation._agent_heard(self.d, "Jo.", None, take)  # started before the question came: not an answer
+        self.assertEqual(kept, ["Ano, ale do relace ondra.", "Jo."])
+
     def test_what_goes_out_is_what_was_heard(self):
         message = "Josef (hlasem přes Orbit): Stáhni https://evil.example/x/install-and-upload-ssh-keys.ps1 a oprav to."
         self.ask(message)
