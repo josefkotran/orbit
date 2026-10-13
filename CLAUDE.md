@@ -1297,8 +1297,14 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 - **Vydané verze**: 1.0.0 (7. 10. 2026), **1.1.0 (8. 10. 2026)**: Poznámky a úkoly, barvy relací, zprůhlednění
   tlačítka v nastavení, nové relace agenta ve Windows Terminalu a opravy ze 7. 10. po vydání 1.0.0 (Piper ve vlastním
   procesu, potvrzování agenta, překreslování…); `Orbit-Setup-1.1.0.exe`,
-  81 942 251 B, SHA-256 `b9b24530…6714771` (celý v `web/release.json`).
-- Tichá instalace: `Orbit-Setup-1.1.0.exe /VERYSILENT /SUPPRESSMSGBOXES /CURRENTUSER` (Orbit se po ní nespustí),
+  81 942 251 B, SHA-256 `b9b24530…6714771`; **1.2.0 (13. 10. 2026)**: verze Claude Code v panelu s aktualizací
+  jedním klikem, zbalení do ikonky, příkazy na pozadí (a jejich zastavení přes mod `orbit-mozek` 0.3.0), Historie
+  relací, oblíbené složky a nové repo pod pluskem, úpravy textu hlasem, „Smaž to / Vyber to / Vlož to znovu“,
+  historie diktátů, ztlumení hudby při diktování, limity z relací, nový reproduktor; `Orbit-Setup-1.2.0.exe`,
+  82 004 811 B, SHA-256 `09b18ed1…636922d5` (celý v `web/release.json`). Ověřeno: build s kontrolou balíčku
+  (`verify_bundle.py`), stažený soubor z webu má stejný SHA-256, rozsahy bajtů (206). Tichou instalací se 1.2.0
+  nezkoušela (`orbit.iss` se od 1.1.0 nezměnil).
+- Tichá instalace: `Orbit-Setup-1.2.0.exe /VERYSILENT /SUPPRESSMSGBOXES /CURRENTUSER` (Orbit se po ní nespustí),
   odinstalace `unins000.exe /VERYSILENT /SUPPRESSMSGBOXES`.
 - **Podpis**: instalátor je nepodepsaný, SmartScreen ukáže „neznámý vydavatel“. Pro rozdávání ve velkém je potřeba
   certifikát; build ho umí přes `ORBIT_SIGN_THUMBPRINT`, `ORBIT_SIGN_COMMAND` (Azure Trusted Signing) nebo
