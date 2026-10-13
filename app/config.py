@@ -48,6 +48,7 @@ DEFAULTS = {
     # other programs' sound while the microphone is open (ducking.py): "keep", "lower" (to a fifth) or "mute"
     "duck_audio": "keep",
     "show_button": True,
+    "collapsed": False,  # the button and its panel folded into a small Orbit icon in their place (a click unfolds)
     "fade_after_s": 3,  # idle this long -> the button and its panel turn almost transparent (0 = never)
     "show_usage": True,  # Claude plan usage panel above the mic button
     # where the limits come from: "statusline" (Orbit's status line in Claude Code) or "oauth" (the internal usage

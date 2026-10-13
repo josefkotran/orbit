@@ -450,10 +450,36 @@ section{position:relative}
 .w-speaker .bars i:nth-child(2){animation-delay:.15s}.w-speaker .bars i:nth-child(3){animation-delay:.3s}
 @keyframes eq{0%,100%{transform:scaleY(.27)}50%{transform:none}}
 .widget.off .dot,.widget.off .bars i{animation-play-state:paused}
+/* the fold button in the header's right corner, and Claude Code's version in a pill under the panel */
+.w-head #wNote{margin-left:auto}
+.w-head .w-fold{width:22px;height:22px;margin-right:-4px;border-radius:5px;justify-content:center;flex:none;transition:background-color .2s,color .2s,box-shadow .35s}
+.w-head .w-fold svg{width:14px;height:14px;color:inherit}
+.w-head .w-fold.lit{color:#E6E8EC;background:rgba(255,255,255,.08);box-shadow:0 0 0 4px rgba(var(--accent-rgb),.25)}
+.w-head .w-fold.press{background:rgba(255,255,255,.2)}
+.w-ver{display:flex;width:max-content;max-width:100%;align-items:center;margin-top:8px;padding:4px 4px 4px 13px;min-height:30px;border-radius:999px;background:rgba(24,30,44,.92);border:1px solid rgba(255,255,255,.11);font:14px/1 "Segoe UI",var(--text-font);color:#9AA1AD;white-space:nowrap}
+.w-ver .vt{padding-right:9px}
+.w-ver b{color:#E6E8EC;font-weight:600}
+.w-ver b.new{color:var(--busy)}
+.w-ver .ok{color:#3DD68C}
+.w-ver .vb{padding:5px 11px;border-radius:999px;background:var(--accent);color:var(--on-accent);font-weight:600;font-size:13px;transition:filter .2s,transform .2s}
+.w-ver .vb[hidden]{display:none}
+.w-ver .vb.press{filter:brightness(1.15);transform:scale(.94)}
+.w-ver.lit{box-shadow:0 0 0 5px rgba(var(--accent-rgb),.22)}
+.w-foot{margin-top:12px}
+/* folded: everything gives way to Orbit's icon where the mic is (only faded, so the page doesn't jump) */
+.widget .w-strip,.widget .w-panel,.widget .w-ver,.widget .w-speaker,.widget .w-buttons .mic,.widget .w-slot{transition:opacity .45s var(--ease),transform .5s var(--ease),background-color .3s,box-shadow .4s}
+.widget.folded .w-strip,.widget.folded .w-panel,.widget.folded .w-ver,.widget.folded .w-speaker,.widget.folded .w-buttons .mic,.widget.folded .w-slot{opacity:0;transform:scale(.94);pointer-events:none}
+.widget.folded .w-panel,.widget.folded .w-ver,.widget.folded .w-strip{transform-origin:20% 100%}
+.w-buttons{position:relative}
+.w-icon{position:absolute;left:87px;top:8px;width:52px;height:52px;border-radius:50%;opacity:0;transform:scale(.6);pointer-events:none;box-shadow:0 0 0 1px rgba(255,255,255,.14),0 18px 40px -14px #000;transition:opacity .45s var(--ease),transform .5s var(--ease)}
+.w-icon svg{width:100%;height:100%;display:block}
+.widget.folded .w-icon{opacity:1;transform:none}
+.widget.folded .w-icon.press{transform:scale(.9)}
 @media (prefers-reduced-motion:reduce){
   .w-ses .dot.pulse-dot,.w-speaker.reading .bars i{animation:none}
   .w-speaker .bars i:nth-child(1){transform:scaleY(.6)}.w-speaker .bars i:nth-child(2){transform:none}
   .w-bar i{transition:none}.w-slot .bubble{transform:none}
+  .widget .w-strip,.widget .w-panel,.widget .w-ver,.widget .w-speaker,.widget .w-buttons .mic,.widget .w-slot,.w-icon{transition:none}
 }
 .w-slot{position:relative;flex:1;min-width:0;min-height:118px}
 .w-slot .w-cap{padding-top:8px;max-width:34ch;transition:opacity .3s}

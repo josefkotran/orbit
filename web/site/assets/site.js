@@ -879,8 +879,21 @@
     s1: $("#s1"), s2: $("#s2"), s3: $("#s3"), s4: $("#s4"), status: $("#fStatus"), you: $("#fYou"), reply: $("#fReply"),
     target: $("#fTarget"), tName: $("#fTName"), tFolder: $("#fTFolder"), tStatus: $("#fTStatus"), msg: $("#fMsg"), url: $("#fUrl"),
     bubble: $("#bubble"), bIcon: $("#bIcon"), bTitle: $("#bTitle"), bNote: $("#bNote"), bText: $("#bText"), speaker: $("#wSpeaker"),
-    slot: $(".w-slot")
+    slot: $(".w-slot"), widget: $("#widget"), ver: $("#wVer"), verText: $("#wVerText"), verBtn: $("#wVerBtn"), fold: $("#wFold"),
+    icon: $("#wIcon")
   };
+  // Claude Code's version under the panel, as Orbit shows it: the newest, a newer one with Aktualizovat, updating
+  function version(state, v) {
+    W.verText.innerHTML = state === "new" ? "Claude Code <b>2.1.296</b> → <b class=\"new\">2.1.297</b>" :
+      state === "updating" ? "Aktualizuju Claude Code na <b>2.1.297</b>…" :
+      "Claude Code <b>" + v + "</b> <span class=\"ok\">✓ nejnovější</span>";
+    W.verBtn.hidden = state !== "new";
+    W.verBtn.classList.remove("press");
+  }
+  function fold(on) {  // folded into Orbit's icon where the mic is
+    W.widget.classList.toggle("folded", on);
+    W.fold.classList.remove("press"); W.icon.classList.remove("press");
+  }
   var SC = { working: ["#5B9DFF", "pracuje"], waiting: ["#F5A524", "čeká na tebe"], done: ["#3DD68C", "hotovo"] };
   function session(row, state, flash) {
     var dot = row.querySelector(".dot"), st = row.querySelector(".st");
@@ -916,13 +929,13 @@
     limits(42, 18); W.noteText.textContent = "2\u00a0h 14\u00a0min"; W.note.classList.remove("warn");
     [W.s1, W.s2, W.s3, W.s4].forEach(function (r) { clearTimeout(r.flashT); r.classList.remove("flash"); });  // a scene left mid-flash
     session(W.s1, "working"); session(W.s2, "waiting"); session(W.s3, "working"); W.s4.hidden = true;
-    feed(keepFeed ? IDLE_FEED : null); bubble(null);
+    feed(keepFeed ? IDLE_FEED : null); bubble(null); version("current", "2.1.296"); fold(false);
   }
   function typeInto(tl, el, text, at, dur) {
     var o = { n: 0 };
     tl.to(o, { n: text.length, duration: dur || text.length * 0.028, ease: "none", onUpdate: function () { el.textContent = text.slice(0, Math.round(o.n)); } }, at);
   }
-  var ZONES = { limity: ["limits"], relace: ["sessions"], bubliny: ["sessions"], artefakty: [], agent: ["agent", "sessions"], chrome: ["agent"], poznamky: ["agent", "sessions"] };
+  var ZONES = { limity: ["limits"], relace: ["sessions"], bubliny: ["sessions"], artefakty: [], agent: ["agent", "sessions"], chrome: ["agent"], poznamky: ["agent", "sessions"], verze: [], zbalit: [] };
   var SCENES = {
     limity: function (tl) {
       tl.call(function () { limits(0, 0); });
@@ -991,9 +1004,29 @@
       tl.call(function () { bubble(null); W.agent.className = "w-agent"; W.status.textContent = ""; W.tStatus.textContent = "otevírám…"; W.tStatus.style.color = "#9AA1AD"; }, null, 4.95);
       tl.call(function () { W.tStatus.textContent = "otevřeno ✓"; W.tStatus.style.color = "#3DD68C"; W.s4.hidden = false; session(W.s4, "working", true); }, null, 6);
       tl.to({}, { duration: 2.6 });
+    },
+    // a newer Claude Code: Aktualizovat in the pill, the update in the background, the bubble when it's done
+    verze: function (tl) {
+      tl.call(function () { version("new"); }, null, 0.9);
+      tl.call(function () { W.verBtn.classList.add("press"); }, null, 2.9);
+      tl.call(function () { version("updating"); }, null, 3.15);
+      tl.call(function () {
+        version("current", "2.1.297");
+        bubble({ icon: "✓", color: "#3DD68C", title: "Claude Code je aktualizovaný", note: "", text: "Hotovo: 2.1.296 → 2.1.297. Běžící relace (3) jedou na staré verzi, dokud je neotevřeš znovu." });
+      }, null, 5.4);
+      tl.call(function () { bubble(null); }, null, 9.2);
+      tl.to({}, { duration: 0.8 });
+    },
+    // the fold button folds it all into Orbit's icon, a click on the icon unfolds it
+    zbalit: function (tl) {
+      tl.call(function () { W.fold.classList.add("press"); }, null, 1.0);
+      tl.call(function () { fold(true); }, null, 1.25);
+      tl.call(function () { W.icon.classList.add("press"); }, null, 4.3);
+      tl.call(function () { fold(false); }, null, 4.55);
+      tl.to({}, { duration: 2.2 });
     }
   };
-  var SNAP = { limity: 3, relace: 5, bubliny: 3, artefakty: 3, agent: 6, chrome: 5, poznamky: 3 };  // reduced motion: one still frame (s)
+  var SNAP = { limity: 3, relace: 5, bubliny: 3, artefakty: 3, agent: 6, chrome: 5, poznamky: 3, verze: 6, zbalit: 2.5 };  // reduced motion: one still frame (s)
   var feats = $$(".feat"), featWrap = $("#features"), sceneTl = null, activeScene = null, hoverScene = null, scrollScene = "limity";
   function playScene(name) {
     if (name === activeScene) return;
@@ -1003,6 +1036,8 @@
     $$(".w-zone", W.panel).forEach(function (z) { z.classList.toggle("lit", (ZONES[name] || []).indexOf(z.dataset.zone) >= 0); });
     W.panel.classList.toggle("focus", !!(ZONES[name] || []).length);
     W.notes.classList.toggle("lit", name === "poznamky");
+    W.ver.classList.toggle("lit", name === "verze");
+    W.fold.classList.toggle("lit", name === "zbalit");
     if (sceneTl) sceneTl.kill();
     var agentScene = name === "agent" || name === "chrome" || name === "poznamky";
     baseline(!agentScene);

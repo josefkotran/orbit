@@ -287,6 +287,8 @@ class Dictation:
         self.button.claude_update_clicked.connect(self.claude.update_claude)  # the panel itself shows it running
         self.button.set_usage_visible(self.cfg["show_usage"])
         self.button.set_fade_after(self.cfg["fade_after_s"])
+        self.button.set_collapsed(self.cfg["collapsed"])
+        self.button.collapse_toggled.connect(self._set_collapsed)
         self._place_button()
         self._watch_screens()
 
@@ -309,6 +311,10 @@ class Dictation:
         self.toggle_action.setChecked(self.cfg["show_button"])
         self.toggle_action.toggled.connect(self._set_button_visible)
         self.menu.addAction(self.toggle_action)
+        self.collapse_action = QAction("Zbalit do ikonky", self.menu, checkable=True)  # the panel's fold button too
+        self.collapse_action.setChecked(self.cfg["collapsed"])
+        self.collapse_action.toggled.connect(self._set_collapsed)
+        self.menu.addAction(self.collapse_action)
         self.menu.addAction("Historie diktátů…", self.open_history)
         self.menu.addAction("Vložit poslední diktát", lambda: self._paste_last(from_menu=True))
         self.menu.addAction("Kopírovat poslední diktát", self._copy_last)
@@ -2747,6 +2753,15 @@ class Dictation:
         if self.toggle_action.isChecked() != visible:
             self.toggle_action.setChecked(visible)
         self.button.setVisible(visible)
+
+    def _set_collapsed(self, on: bool):
+        """Orbit folded into its icon or unfolded: the panel's fold button, a click on the icon, the menu."""
+        if self.cfg["collapsed"] != on:
+            self.cfg["collapsed"] = on
+            config.save(self.cfg)
+        if self.collapse_action.isChecked() != on:
+            self.collapse_action.setChecked(on)
+        self.button.set_collapsed(on)
 
     def _place_button(self):
         """At the saved place when both circles fit on a screen there, pulled onto the screen when they stick out

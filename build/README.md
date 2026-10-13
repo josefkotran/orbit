@@ -6,18 +6,18 @@ Instalátor funguje na čistých Windows 10 (1809+) a 11 x64. Nepotřebuje práv
 ## Jak sestavit
 
 ```powershell
-# 1) whisper-server pro jakékoli PC (stačí jednou a pak při změně verze whisper.cpp)
+# 1) whisper-server pro jakékoli PC (jen při nové verzi whisper.cpp; výsledek pak nahradí whisper\)
 .venv\Scripts\python.exe build\build_whisper.py          # -> whisper-next\
 
-# 2) instalátor
-.venv\Scripts\python.exe build\build_installer.py --whisper-dir whisper-next
+# 2) instalátor (whisper-server bere z whisper\, kde je od 3. 10. 2026 tenhle build pro jakékoli PC)
+.venv\Scripts\python.exe build\build_installer.py
 ```
 
 Volby `build_installer.py`:
 
 | Volba | Co dělá |
 |---|---|
-| `--whisper-dir <složka>` | odkud vzít whisper-server (výchozí `whisper\`, pro distribuci `whisper-next\`) |
+| `--whisper-dir <složka>` | odkud vzít whisper-server (výchozí `whisper\`, čerstvý build před výměnou `whisper-next\`) |
 | `--without-piper` | vynechá Piper (GPL-3.0) a onnxruntime, předčítat pak umí jen hlas Windows (viz Licence) |
 | `--no-installer` | jen sestaví a zkontroluje `build\dist\Orbit`, Inno Setup nespouští |
 | `--update-lock` | po změně `requirements.txt`: znovu vyřeší balíčky z PyPI a přepíše `BUNDLE_LOCK` ve skriptu (pak zkontrolovat git diff), nic nestaví |

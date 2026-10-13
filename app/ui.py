@@ -28,6 +28,7 @@ CHOOSE_GLYPH = chr(0xE762)  # "MultiSelect": "Vybrat složky…" in the +'s menu
 LOOP_GLYPH = chr(0xE8EE)  # "RepeatAll": a session running a /loop
 SHELL_GLYPH = chr(0xE756)  # "CommandPrompt": background shells it most likely doesn't need any more (shells.py)
 SPEAKER_GLYPH = chr(0xE767)  # "Volume"
+COLLAPSE_GLYPH = chr(0xE921)  # "ChromeMinimize": the panel's top right corner, Orbit folds into a small icon
 MUTE_GLYPH = chr(0xE74F)  # "Mute"
 WAVE_GLYPHS = (chr(0xE993), chr(0xE994), chr(0xE995))  # "Volume1"–"Volume3": the waves grow while Orbit reads
 
@@ -199,6 +200,7 @@ class FloatingButton(QWidget):
     connect_clicked = Signal()  # "Připojit Clauda" in the panel
     statusline_clicked = Signal()  # "Zapnout" in the panel: the yes to Orbit's status line in Claude Code
     claude_update_clicked = Signal()  # "Aktualizovat" in the version pill under the panel
+    collapse_toggled = Signal(bool)  # the user folded it into the icon (True) or unfolded it with a click (False)
 
     DIAMETER = 52
     MARGIN = 10
@@ -216,6 +218,8 @@ class FloatingButton(QWidget):
     FEED_LINE = 15  # a text line of the agent's part of the panel
     VER_PILL_H = 22  # Claude Code's version, in a pill between the panel and the circles
     VER_GAP = 5  # from the panel to the pill (the mic's square has its own margin on the other side)
+    ICON_D = 44  # folded: just Orbit's icon where the mic is (the mic's square, the rest of it gone)
+    COLLAPSE_W = 18  # the fold button in the panel's top right corner
     AGENT_STATUS = {"listening": "Poslouchám…", "transcribing": "Přepisuji…", "thinking": "Přemýšlím…",
                     "speaking": "Mluví", "confirm": "Mám? Řekni „jo“"}
     SEND_STATUS = {  # status of a message for a session: (label, colour or None = dim)
@@ -262,6 +266,8 @@ class FloatingButton(QWidget):
         # _claude_version_line), None = not shown
         self._version: dict | None = None
         self._version_hover = False  # the mouse is over its button
+        self._collapsed = False  # folded into Orbit's icon (set_collapsed)
+        self._collapse_hover = False  # the mouse is over the fold button
 
         self._show_usage = False
         self._claude: bool | None = None  # Claude connected (None = still finding out); not: a call to action
@@ -317,7 +323,7 @@ class FloatingButton(QWidget):
 
     @property
     def _has_panel(self) -> bool:
-        return self._show_usage or bool(self._sessions) or self._show_feed
+        return not self._collapsed and (self._show_usage or bool(self._sessions) or self._show_feed)
 
     @property
     def _show_feed(self) -> bool:
@@ -347,7 +353,11 @@ class FloatingButton(QWidget):
     def _relayout(self, keep_button_in_place: bool = True) -> None:
         anchor = self.button_pos()
         side, slot = self._side, self._slot
-        if not self._has_panel:
+        if self._collapsed:  # the icon in the mic's square: button_pos stays the same, so does the saved place
+            self._panel = QRectF()
+            self._btn_off = QPoint(0, 0)
+            self.setFixedSize(side, side)
+        elif not self._has_panel:
             self._panel = QRectF()
             self._btn_off = QPoint(slot, 0)
             self.setFixedSize(slot + side, side)
@@ -405,6 +415,8 @@ class FloatingButton(QWidget):
         return self._button_center() - QPointF(self.DIAMETER + self.GAP, 0)
 
     def _on_speaker(self, pos: QPointF) -> bool:
+        if self._collapsed:
+            return False
         d = pos - self._speaker_center()
         return math.hypot(d.x(), d.y()) <= self.DIAMETER / 2 + 2
 
@@ -549,6 +561,9 @@ class FloatingButton(QWidget):
     def bubble_anchor(self) -> tuple[QRect, str | None]:
         """Both circles (speaker and mic) in screen coordinates, and where the panel is ('above', 'below' or None)."""
         c = self.mapToGlobal(self._button_center().toPoint())
+        if self._collapsed:  # just the icon
+            r = self.ICON_D // 2
+            return QRect(c.x() - r, c.y() - r, 2 * r, 2 * r), None
         r = self.DIAMETER // 2
         panel = ("below" if self._below else "above") if self._has_panel else None
         left = c.x() - r - self.DIAMETER - self.GAP
@@ -604,6 +619,35 @@ class FloatingButton(QWidget):
             self._auto_align()
         self.update()
 
+    def set_collapsed(self, on: bool) -> None:
+        """Folded (Pepa, 13 Oct): the panel, its strip and both circles give way to Orbit's icon where the mic is; a
+        click on the icon unfolds it all again. Push-to-talk still works, the icon turns red while it listens."""
+        if on == self._collapsed:
+            return
+        self._collapsed = on
+        self._session_rows, self._feed_rect, self._cta_rect = [], QRectF(), QRectF()  # nothing of the panel to hit
+        self._speaker_hover = self._version_hover = self._collapse_hover = False
+        self._relayout()
+        self._auto_align()
+        self._wake()
+
+    def _collapse_rect(self) -> QRectF:
+        """The fold button: the panel's top right corner, in its header row."""
+        if not self._has_panel:
+            return QRectF()
+        top = self._panel.top() + self.PAD + (self.HEADER_H - self.COLLAPSE_W) / 2
+        return QRectF(self._panel.right() - 6 - self.COLLAPSE_W, top, self.COLLAPSE_W, self.COLLAPSE_W)
+
+    def _set_collapse_hover(self, on: bool) -> None:
+        if on != self._collapse_hover:
+            self._collapse_hover = on
+            self.update(self._collapse_rect().toAlignedRect().adjusted(-1, -1, 1, 1))
+
+    def _fold(self, on: bool) -> None:
+        """The user's click: fold or unfold, and say so (main saves it)."""
+        self.set_collapsed(on)
+        self.collapse_toggled.emit(on)
+
     def set_forecast(self, eta: datetime | None) -> None:
         """When the 5-hour limit runs out at the current pace (None = not before it resets)."""
         self._forecast = eta
@@ -640,6 +684,8 @@ class FloatingButton(QWidget):
 
     def _work_tick(self) -> None:
         self._work_phase = (self._work_phase + 0.55) % (2 * math.pi)
+        if self._collapsed:
+            return
         for rect in self._work_icons:
             self.update(rect.toAlignedRect())
 
@@ -651,6 +697,8 @@ class FloatingButton(QWidget):
         if on != self._attention:
             self._attention = on
             self._wake()
+            if self._collapsed:  # the icon's orange dot
+                self.update()
 
     def set_held(self, on: bool) -> None:
         if on != self._held:
@@ -708,7 +756,9 @@ class FloatingButton(QWidget):
         return QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r)
 
     def _speaker_area(self) -> QRect:
-        """What a repaint of the speaker alone covers: its circle and its outline."""
+        """What a repaint of the speaker alone covers: its circle and its outline (folded: nothing)."""
+        if self._collapsed:
+            return QRect()
         return self._speaker_rect().toAlignedRect().adjusted(-1, -1, 1, 1)
 
     def _update_speaker(self) -> None:
@@ -777,18 +827,29 @@ class FloatingButton(QWidget):
     def enterEvent(self, event):
         self._hovered = True
         self._wake()
+        if self._collapsed:  # the icon lights up
+            self.update()
         super().enterEvent(event)
 
     def leaveEvent(self, event):
         self._hovered = False
+        if self._collapsed:
+            self.update()
         self._set_speaker_hover(False)
         self._set_version_hover(False)
+        self._set_collapse_hover(False)
         self._wake()
         super().leaveEvent(event)
 
     # -- painting ---------------------------------------------------------------------------
 
     def paintEvent(self, event):
+        if self._collapsed:  # (the speaker's square reaches into the icon's: the short ways below don't apply)
+            p = QPainter(self)
+            p.setRenderHint(QPainter.Antialiasing)
+            self._paint_icon(p)
+            p.end()
+            return
         if self._work_icons and self._has_panel and self._only_work_icons(event.region()):
             self._paint_work_icons()
             return
@@ -900,6 +961,75 @@ class FloatingButton(QWidget):
                 p.setPen(QPen(QColor("#E6E8EC"), 1.5))
                 p.setBrush(Qt.NoBrush)
                 p.drawEllipse(c, r + 2.5, r + 2.5)
+
+    def _paint_fold(self, p: QPainter, rect: QRectF, text: QColor, dim: QColor) -> None:
+        """The fold button (a minimize line) in the panel's top right corner, lighter under the mouse."""
+        if rect.isEmpty():
+            return
+        if self._collapse_hover:
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(255, 255, 255, 30))
+            p.drawRoundedRect(rect, 4, 4)
+        font = QFont(theme.icon_font())
+        font.setPixelSize(10)
+        p.setFont(font)
+        p.setPen(text if self._collapse_hover else dim)
+        p.drawText(rect, Qt.AlignCenter, COLLAPSE_GLYPH)
+
+    def _paint_icon(self, p: QPainter) -> None:
+        """Folded: Orbit's icon (the website's favicon: a planet with a tilted orbit and a moon in the accent colour)
+        where the mic is. Red while it listens, with the level ring like the mic; the busy and loading arc; an orange
+        dot when a session waits for the user."""
+        c = self._button_center()
+        r = self.ICON_D / 2
+        listening = self._state == "recording" or self._agent_state == "listening"
+        if listening:
+            ring = r + 2 + self._level * (self.MARGIN - 2)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(229, 72, 77, 90))
+            p.drawEllipse(c, ring, ring)
+        bg = QColor(COLORS["recording"][0]) if listening else QColor(COLORS["error"][0]) \
+            if self._state == "error" else theme.tint("#0B1020")
+        if self._hovered and not listening:
+            bg = bg.lighter(150)
+        p.setPen(QPen(QColor(255, 255, 255, 50), 1))
+        p.setBrush(bg)
+        p.drawEllipse(c, r - 0.5, r - 0.5)
+        s = 2 * r / 32  # the favicon's 32 units
+        light, back = QColor("#EEF2FA"), bg
+        orbit = QRectF(-11.8 * s, -4.2 * s, 23.6 * s, 8.4 * s)
+        p.save()
+        p.translate(c)
+        p.rotate(-24)
+        faint = QColor(light)
+        faint.setAlphaF(0.55)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(faint, 1.6 * s))
+        p.drawArc(orbit, 0, 180 * 16)  # behind the planet
+        p.setPen(Qt.NoPen)
+        p.setBrush(light)
+        p.drawEllipse(QPointF(0, 0), 6 * s, 6 * s)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(back, 2.8 * s))
+        p.drawArc(orbit, 180 * 16, 180 * 16)  # in front of it, with a gap
+        p.setPen(QPen(light, 1.6 * s, Qt.SolidLine, Qt.RoundCap))
+        p.drawArc(orbit, 180 * 16, 180 * 16)
+        p.setPen(QPen(back, 1.2 * s))
+        p.setBrush(QColor(theme.ACCENT))
+        p.drawEllipse(QPointF(9 * s, 2.7 * s), 2 * s, 2 * s)  # the moon
+        p.restore()
+        if self._state in ("busy", "loading"):
+            pen = QPen(QColor(COLORS["busy"][0] if self._state == "busy" else COLORS["loading"][1]), 2.5)
+            pen.setCapStyle(Qt.RoundCap)
+            p.setPen(pen)
+            p.setBrush(Qt.NoBrush)
+            arc = QRectF(c.x() - r + 2, c.y() - r + 2, 2 * r - 4, 2 * r - 4)
+            p.drawArc(arc, int(-math.degrees(self._phase) * 16 * 2), 90 * 16)
+        if self._attention:  # a session waits for the user
+            dot = QPointF(c.x() + r * 0.72, c.y() - r * 0.72)
+            p.setPen(QPen(bg, 2))
+            p.setBrush(SESSION_COLORS["waiting"])
+            p.drawEllipse(dot, 5, 5)
 
     def _paint_version(self, p: QPainter) -> None:
         """Claude Code's version in a pill of the panel's style (readable on any wallpaper), with "Aktualizovat"
@@ -1092,8 +1222,10 @@ class FloatingButton(QWidget):
         p.setFont(bold)
         p.setPen(dim)
         p.drawText(header, Qt.AlignLeft | Qt.AlignVCenter, "Claude")
+        fold = self._collapse_rect()
         if self._show_usage and self._claude is not False:
-            self._paint_header_note(p, header, font, text, dim)
+            self._paint_header_note(p, header.adjusted(0, 0, -(right - fold.left()) - 4, 0), font, text, dim)
+        self._paint_fold(p, fold, text, dim)
         y += self.HEADER_H
         if self._show_usage:
             y = self._paint_limits(p, x, right, y, font, bold, text, dim)
@@ -1417,7 +1549,12 @@ class FloatingButton(QWidget):
         if event.type() == QEvent.ToolTip:
             pos = event.position() if hasattr(event, "position") else QPointF(event.pos())
             session, dot = self._session_at(pos), self._dot_at(pos)
-            if session:
+            if self._collapsed:
+                tip = ("Orbit je zbalený. Klikni a rozbalí se celý panel.\nDiktování jede dál, ikonka při něm "
+                       "zčervená. Tažením ji přesuneš, pravým klikem otevřeš menu.")
+            elif self._collapse_rect().contains(pos):
+                tip = "Zbalit Orbit do malé ikonky na tomhle místě. Klikem na ikonku se zase rozbalí."
+            elif session:
                 tip = session.tooltip()
             elif self._on_version(pos):
                 tip = (self._version or {}).get("tip", "")
@@ -1456,7 +1593,9 @@ class FloatingButton(QWidget):
             self._dragging = False
             d = event.position() - self._button_center()
             self._press_on_speaker = self._on_speaker(event.position())
-            self._press_on_button = not self._press_on_speaker and math.hypot(d.x(), d.y()) <= self._side / 2
+            # folded, the icon only unfolds (or moves): a press on it isn't push-to-talk
+            self._press_on_button = not self._collapsed and not self._press_on_speaker and \
+                math.hypot(d.x(), d.y()) <= self._side / 2
             if self._press_on_button:
                 self.pressed.emit()
             elif self._press_on_speaker:
@@ -1476,6 +1615,7 @@ class FloatingButton(QWidget):
         if self._press_global is None:  # just moving over it (mouse tracking): the speaker lights up under it
             self._set_speaker_hover(self._on_speaker(event.position()))
             self._set_version_hover(self._on_version_button(event.position()))  # so does the version's button
+            self._set_collapse_hover(self._collapse_rect().contains(event.position()))  # and the fold button
             return
         delta = event.globalPosition().toPoint() - self._press_global
         if not self._dragging and delta.manhattanLength() > 6:
@@ -1496,6 +1636,10 @@ class FloatingButton(QWidget):
         if self._dragging:
             self._auto_align()
             self.moved.emit(self.button_pos())
+        elif self._collapsed:
+            self._fold(False)
+        elif self._collapse_rect().contains(event.position()):
+            self._fold(True)
         elif self._press_on_button:
             self.released.emit()
         elif self._press_on_speaker:

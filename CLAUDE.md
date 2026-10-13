@@ -90,12 +90,12 @@ jen nad tím, viz Limity Clauda) a průvodce se mu neukáže (config.json existu
 | `cache/` | vygenerované zvuky (`*.wav`), šipka seznamů (`chevron.png`) a poslední limity z OAuth (`usage-oauth.json`), dají se kdykoli smazat – není v gitu |
 | `app/config.py` | výchozí nastavení, cesty v datové složce, kontrola hodnot při načtení, atomické ukládání, popisky modelů |
 | `app/winutil.py` | jedna instance (mutex), AppUserModelID, spouštění s Windows (registry), pípání a zvuky bublin |
-| `whisper/` | `whisper-server.exe` a co potřebuje: starý build je jeden exe s Vulkanem (59 MB) + `libwinpthread-1.dll`, nový (`whisper-next/`, `GGML_BACKEND_DL`) má vedle exe `ggml-*.dll` (Vulkan a varianty CPU); Orbit umí obojí. Licence whisper.cpp |
+| `whisper/` | `whisper-server.exe` a co potřebuje: od 3. 10. (commit 0f7a5c2) build pro jakékoli PC (`GGML_BACKEND_DL`, 76 MB), vedle exe `ggml-*.dll` (Vulkan a varianty CPU); Orbit umí i starý build (jeden exe s Vulkanem, 59 MB). Z něj je `whisper\` v instalátoru. Licence whisper.cpp |
 | `app/voice.py` | lokální české hlasy Piper (Jirka, Kasandra) pro předčítání místo Jakuba; Piper běží ve vlastním procesu (`_worker`) |
 | `models/` | `ggml-large-v3.bin` (3,1 GB), `ggml-large-v3-turbo.bin` (1,6 GB), `piper/` (hlasy Piperu) – nejsou v gitu ani v instalátoru, stahují se (`downloads.py`); rozestažené jako `*.part` |
 | `recordings/` | posledních 30 nahrávek (`.wav` + `.txt` s přepisem), když je zapnuté ukládání – nejsou v gitu |
 | `orbit.log` | log aplikace včetně přepisů (jen se zapnutým učením slovníku) a časů – první místo, kam se dívat; řeč agenta, předčítání a adresy jen jako délky (`ORBIT_DEBUG=1` i s texty); vedle něj `whisper-server.log` a `crash.log` (pád v nativním kódu) |
-| `whisper-next/` | whisper-server pro jakékoli PC (`GGML_BACKEND_DL`, 76 MB), z něj se dělá `whisper\` v instalátoru; Pepův běžící Orbit pořád používá starý `whisper\` |
+| `whisper-next/` | jen výstup `build_whisper.py` (nová verze whisper.cpp), pak nahradí `whisper\`; 13. 10. neexistovala |
 | `build/` | `build_whisper.py` (whisper-server přes portable MSYS2), `build_installer.py` (balíček + Inno Setup), `verify_bundle.py` (kontrola balíčku jeho vlastním Pythonem), `README.md`; `cache/`, `tools/`, `dist/`, `output/` nejsou v gitu |
 | `installer/` | `orbit.iss` (Inno Setup) a texty licencí GPL/LGPL, které jdou do instalace |
 | `tests/` | testy (stdlib `unittest`, od 7. 10.): `test_core_*` (přepis, Piper, klávesa, vkládání, config, povely a opravy, historie, oblíbené složky), `test_claude_*` (nástroje agenta, hledání programů), `test_dist_*` (build, instalátor), `test_ui_*` (potvrzování agenta, překreslování, relace, „Smaž to“ a úpravy na falešném textovém poli, plusko a jeho okna, tlačítko reproduktoru a předpověď limitu, verze a aktualizace Claude Code); viz Spuštění |
@@ -122,7 +122,7 @@ složce `diktovani`, řádek `command` v `pyvenv.cfg` je proto zastaralý, ale n
   Vedle exe musí být `libwinpthread-1.dll` z `ucrt64/bin`. Nástroje (např. `whisper-quantize`) je nutné spouštět
   z MSYS2 shellu, jinak nenajdou DLL. Tenhle build má `vulkan-1.dll` jako statický import a instrukce Pepova
   procesoru (`GGML_NATIVE`): na PC bez Vulkanu nebo se starším procesorem by nenaběhl. Pro rozdávání je nový build
-  s `GGML_BACKEND_DL` (`whisper-next/`: `ggml-vulkan.dll` se bez Vulkanu přeskočí, `ggml-cpu-*.dll` vybere variantu
+  s `GGML_BACKEND_DL` (od 3. 10. ve `whisper/`: `ggml-vulkan.dll` se bez Vulkanu přeskočí, `ggml-cpu-*.dll` vybere variantu
   podle procesoru). `whisper_server.py` funguje s oběma, nic nečeká, že je exe samostatné.
 - Server běží jako podproces na volném portu, čeká se na `GET /health`. Proces je přiřazený do **Job objectu
   s KILL_ON_JOB_CLOSE**, takže zemře i při pádu aplikace a neblokuje VRAM.
@@ -1203,6 +1203,23 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   `autoUpdatesProtectedForNative`, nebo `DISABLE_AUTOUPDATER`/`DISABLE_UPDATES`), box to u nové verze řekne.
 - Neověřeno: skutečná aktualizace z Orbitu (Pepa měl 13. 10. nejnovější verzi, `claude update` se v testech nespouští).
 
+### Zbalení do ikonky (od 13. 10.)
+- Pepa: „celé to okno … se bude dát minimalizovat a bude to jenom jako ikonka Orbitu … podle toho, kde to mám
+  umístěné, když na tu ikonku kliknu, tak se to celý zase rozbalí, ale někde bude ikonka zbalit“.
+- Zbalit: čárka (E921, `COLLAPSE_GLYPH`) v pravém horním rohu panelu, v řádku hlavičky (`_collapse_rect`, poznámka
+  o limitu se o ni zkrátí), nebo menu Orbitu „Zbalit do ikonky“ (zaškrtávací). Rozbalit: klik na ikonku, nebo totéž
+  v menu. `config.json` `collapsed` (výchozí false), vydrží restart (`Dictation._set_collapsed`).
+- Zbalený `FloatingButton` (`set_collapsed`, `_collapsed`): okno jen čtverec mikrofonu (`_side`, `_btn_off` 0,0),
+  takže `button_pos` a uložené místo se nemění a ikonka sedí přesně na středu mikrofonu; `_has_panel` je False
+  (pruh, tečky, čipy, pilulka verze, řádky relací nic nekreslí ani nechytají). Ikonka `ICON_D` 44 px = favicon webu
+  (planeta s nakloněnou dráhou, měsíc v barvě akcentu, `_paint_icon`). Červená s prstencem hlasitosti při diktování
+  i poslechu agenta (soukromí: je vidět, že mikrofon je otevřený), oblouk při přepisu/načítání, oranžová tečka, když
+  relace čeká na uživatele, pod myší světlejší. Stisk ikonky **není** push-to-talk (`_press_on_button` False),
+  tažení ji přesune (uloží se jako dřív), pravý klik = menu Orbitu. Bubliny míří na ikonku (`bubble_anchor`).
+- Pozor na zkratky v `paintEvent`: čtverec reproduktoru (`_speaker_area`) zasahuje 4 px do čtverce mikrofonu, zbalený
+  ho proto vrací prázdný a `paintEvent` zbaleného kreslí jen ikonku hned na začátku (jinak by vlny čtení kreslily kus
+  reproduktoru do ikonky). Testy `tests/test_ui_fold.py`.
+
 ### Export a import slovníku (od 3. 10.)
 - Pepa chtěl přenést svůj slovník na jiný počítač. V nastavení u „Slovník“ jsou tlačítka „Exportovat…“
   a „Importovat…“ (plní pole dialogu, projeví se po Uložit), v menu Orbitu (ikona u hodin i pravý klik na tlačítko)
@@ -1224,8 +1241,8 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   Podrobnosti stavby, verzí a ověřování jsou v `build/README.md`.
 - **Stavba** (z `.venv`, poprvé stahuje MSYS2, Python, wheely a Inno Setup do `build/cache` a `build/tools`):
   ```
-  .venv\Scripts\python.exe build\build_whisper.py        # jednou (a při nové verzi whisper.cpp): whisper-next\
-  .venv\Scripts\python.exe build\build_installer.py --whisper-dir whisper-next [--without-piper] [--no-installer]
+  .venv\Scripts\python.exe build\build_whisper.py        # jen při nové verzi whisper.cpp: whisper-next\ → whisper\
+  .venv\Scripts\python.exe build\build_installer.py [--without-piper] [--no-installer]   # whisper z whisper\
   ```
   Výstup `build\output\Orbit-Setup-<app/version.py>.exe`. Skript balíček zkontroluje (chybějící DLL proti čistým
   Windows, `verify_bundle.py` jeho vlastním Pythonem: importy, dialog nastavení offscreen, hlasy, hook) a teprve pak
@@ -1239,15 +1256,16 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 - `verify_bundle.py` zkouší i předčítání Piperem s balíčkem ve složce `Jiří Nový` (junction na balíček, hlas
   z `models\piper` zkopírovaný do tempu, text „.“: espeak naběhne, nic není slyšet). Verze 1.0.0 tam padala. Bez
   staženého hlasu se kontrola přeskočí.
-- **whisper-server pro cizí PC** (`whisper-next/`): starý `whisper\` je přeložený pro Pepův procesor (`GGML_NATIVE`)
+- **whisper-server pro cizí PC** (od 3. 10. ve `whisper/`, dřív `whisper-next/`): starý `whisper\` byl přeložený pro Pepův procesor (`GGML_NATIVE`)
   a s Vulkanem jako povinnou DLL, jinde by nenaběhl. Nový: whisper.cpp 1.9.4, `GGML_BACKEND_DL` +
   `GGML_CPU_ALL_VARIANTS` (14 `ggml-cpu-*.dll`, vybere se podle procesoru), `ggml-vulkan.dll` se bez Vulkanu přeskočí
-  (pak procesor). Na Pepových nahrávkách stejný text i rychlost jako starý (6/6, large-v3 i turbo). Repo `whisper\`
-  zůstává starý, dokud ho Pepa nevymění (běžící Orbit ho drží otevřený).
+  (pak procesor). Na Pepových nahrávkách stejný text i rychlost jako starý (6/6, large-v3 i turbo). Od commitu
+  0f7a5c2 (3. 10.) je tenhle build v repu jako `whisper\` a build instalátoru ho bere sám (`whisper-next\` 13. 10. už
+  nebyla a `--whisper-dir whisper-next` skončil chybou).
 - **Co instalátor dělá** (`installer/orbit.iss`): instalace jen pro uživatele do `%LOCALAPPDATA%\Programs\Orbit`
   (pevné `AppId`, česky, na anglických Windows anglicky): `runtime\` (Python 3.13.7 embeddable + balíčky, PySide6
-  zmenšený z 640 MB na 46 MB jen na moduly, které `app\` importuje), `app\`, `Orbit.pyw`, `assets\`, `whisper\`
-  (= `whisper-next`), `licenses\`, `THIRD_PARTY_NOTICES.md`; celkem ~294 MB (bez Piperu ~198 MB). Modely v něm
+  zmenšený z 640 MB na 46 MB jen na moduly, které `app\` importuje), `app\`, `Orbit.pyw`, `assets\`, `whisper\`,
+  `licenses\`, `THIRD_PARTY_NOTICES.md`; celkem ~294 MB (bez Piperu ~198 MB). Modely v něm
   nejsou, stahuje je průvodce do datové složky `%LOCALAPPDATA%\Orbit` (`paths.py`). Zástupce v nabídce Start,
   na ploše jen na přání, po instalaci „Spustit Orbit“ (ne při tiché instalaci). Aktualizace nejdřív smaže
   `runtime\Lib`, `app\`, `assets\`, `whisper\`, ať nezůstanou soubory, které nová verze nemá. Data zůstávají.
@@ -1429,6 +1447,14 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   `#s4`). Jako poslední karta nešla: sekce už končí, lepivý panel odjel nahoru a na 1280×720 byl sešit mimo obraz.
   Zmínky jsou i v úvodu, sekci Claude, soukromí (úkol dostane relace až po potvrzení, jinak zůstává v počítači),
   požadavcích, otázkách (bez Claude Code, hlas na internet, aktualizace, odinstalace) a v orrery bez videa.
+- **Verze Claude Code a zbalení na webu** (od 13. 10., verze 1.2.0): replika má pod panelem pilulku `#wVer` (jako
+  aplikace: „Claude Code 2.1.296 ✓ nejnovější“), v hlavičce panelu čárku `#wFold` a u mikrofonu skrytou ikonku
+  `#wIcon` (symbol `#i-orbit` = favicon). Dvě poslední karty: „Verze Claude Code“ (scéna `verze`: nová verze →
+  Aktualizovat → „Aktualizuju…“ → ✓ a bublina) a „Zbalit do ikonky“ (scéna `zbalit`: `.widget.folded` celou
+  repliku jen zprůhlední, ne vyjme z layoutu, aby stránka neposkočila, a ukáže ikonku na místě mikrofonu). Ověřeno
+  Playwrightem: 1440×900, 1280×720 (obě karty se při scrollu kolečkem rozsvítí a replika je celá vidět) i 390 px.
+  Ostatní novinky 1.2.0 (úpravy hlasem, „Smaž to“, historie diktátů a relací, plusko, příkazy na pozadí) na webu
+  zatím nejsou.
 - Stránka odkazuje na GitHub (menu, instalace, otázka „Kolik Orbit stojí?“, patička).
   Bez `--installer` se nahrají jen změněné soubory stránky. Podrobnosti a FTP (FTPS přes `ftp.m-tex.cz`, heslo
   v `~/m-tex/private/ftp.netrc`, Windows curl useknul soubory) v `web/README.md`.
@@ -1491,7 +1517,7 @@ Contributors na úvodní stránce repozitáře pak ještě 8. 10. ukazoval i `cl
 kopii `main` a zpět a kopii smazat; seznam se do 2 minut přepočítal. Kontrola: stránku vykreslit (Playwright), seznam
 se načítá dodatečně, v HTML není.
 `whisper-server.exe` má 59 MB, GitHub jen varuje (limit 100 MB);
-ve `whisper-next/` je největší `ggml-vulkan.dll` (56 MB). Výstupy buildu (`build/cache`, `tools`, `dist`, `output`)
+ve `whisper/` je největší `ggml-vulkan.dll` (56 MB). Výstupy buildu (`build/cache`, `tools`, `dist`, `output`)
 v gitu nejsou.
 
 ## Nápady na další práci (Pepa zatím nevybral)
