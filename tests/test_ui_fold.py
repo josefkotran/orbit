@@ -75,9 +75,6 @@ class Fold(unittest.TestCase):
         mic = self.b.mapToGlobal(self.b._button_center().toPoint())
         place, size = self.b.button_pos(), self.b.size()
         fold = self.b._collapse_rect()
-        self.assertTrue(self.b._panel.contains(fold))
-        self.assertLess(fold.top() - self.b._panel.top(), 14)  # the top right corner
-        self.assertLess(self.b._panel.right() - fold.right(), 10)
         self.click(fold.center())
         self.assertEqual(self.got, [("collapse_toggled", True)])
         self.assertEqual(self.b.size().width(), self.b._side)
@@ -92,17 +89,27 @@ class Fold(unittest.TestCase):
         self.assertEqual(self.got[-1], ("collapse_toggled", False))
         self.assertEqual((self.b.size(), self.b.button_pos()), (size, place))
 
-    def test_the_fold_button_is_a_visible_button(self):  # a thin grey dash read as punctuation, Pepa didn't find it
+    def test_its_own_chip_right_of_the_colours(self):
+        """Pepa, 13 Oct: "dej to vedle barev, ale samostatná bublinka, barvy posuň doleva" (in 1.2.0 a thin grey dash
+        in the panel's header read as punctuation after the countdown and wasn't found)."""
         if self.elsewhere:
             return
+        fold, panel, dots = self.b._collapse_rect(), self.b._panel, self.b._dots()
+        self.assertLessEqual(fold.bottom(), panel.top())  # in the strip above the panel, not in it
+        self.assertLessEqual(panel.right() - fold.right(), 3)  # at its right end
+        self.assertEqual(fold.center().y(), dots[0][1].y())
+        pill_right = dots[-1][1].x() + self.b.PILL_H / 2
+        self.assertLess(pill_right, fold.left())  # the colours moved left of it
+        chips = [self.b._agent_center(), self.b._history_center(), self.b._new_center()]
+        for c in [c for c in chips if c is not None]:
+            self.assertLess(c.x() + self.b.AGENT_D / 2, dots[0][1].x())  # and the chips with them, nothing overlaps
         image = self.b.grab().toImage()
-        fold = self.b._collapse_rect()
-        self.assertGreaterEqual((fold.width(), fold.height()), (24, 16))
         dash = image.pixelColor(fold.center().toPoint())
-        edge = image.pixelColor(QPointF(fold.left() + 0.5, fold.center().y()).toPoint())
-        panel = image.pixelColor(QPointF(fold.left() - 3, fold.center().y()).toPoint())
+        chip = image.pixelColor(QPointF(fold.left() + 6, fold.center().y()).toPoint())
         self.assertGreater(dash.lightness(), 190)  # the white dash
-        self.assertGreater(edge.lightness(), panel.lightness() + 12)  # its light edge on the panel
+        self.assertGreater(chip.alpha(), 200)  # on the chip's own disc
+        self.b.set_agent(True)
+        self.assertLess(self.b._agent_center().x() + self.b.AGENT_D / 2, dots[0][1].x())
 
     def test_a_press_on_the_icon_is_never_push_to_talk(self):
         if self.elsewhere:

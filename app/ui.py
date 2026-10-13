@@ -218,9 +218,6 @@ class FloatingButton(QWidget):
     VER_PILL_H = 22  # Claude Code's version, in a pill between the panel and the circles
     VER_GAP = 5  # from the panel to the pill (the mic's square has its own margin on the other side)
     ICON_D = 44  # folded: just Orbit's icon where the mic is (the mic's square, the rest of it gone)
-    # the fold button in the panel's top right corner: a real button (a thin grey dash there read as punctuation
-    # after the limit's countdown, Pepa didn't find it)
-    COLLAPSE_W, COLLAPSE_H = 26, 18
     AGENT_STATUS = {"listening": "Poslouchám…", "transcribing": "Přepisuji…", "thinking": "Přemýšlím…",
                     "speaking": "Mluví", "confirm": "Mám? Řekni „jo“"}
     SEND_STATUS = {  # status of a message for a session: (label, colour or None = dim)
@@ -422,13 +419,25 @@ class FloatingButton(QWidget):
         return math.hypot(d.x(), d.y()) <= self.DIAMETER / 2 + 2
 
     def _dots(self) -> list[tuple[str, QPointF]]:
-        """Centres of the theme colour dots: lined up with the panel's right end, just outside it."""
+        """Centres of the theme colour dots: in the strip just outside the panel, left of the fold chip at its right
+        end."""
         if not self._has_panel:
             return []
         gap = 4 + self.AGENT_D / 2  # from the panel to the strip's middle
         y = self._panel.bottom() + gap if self._below else self._panel.top() - gap
-        first = self._panel.right() - self.PILL_H / 2 - self.DOT_STEP * (len(theme.THEMES) - 1)
+        right = self._panel.right() - 2 - self.AGENT_D - 8  # the fold chip, then a gap like the agent's
+        first = right - self.PILL_H / 2 - self.DOT_STEP * (len(theme.THEMES) - 1)
         return [(name, QPointF(first + i * self.DOT_STEP, y)) for i, name in enumerate(theme.THEMES)]
+
+    def _fold_center(self) -> QPointF | None:
+        """The fold chip (Orbit into its icon): its own chip at the strip's right end, right of the colour pill
+        (Pepa, 13 Oct: "vedle barev, ale samostatná bublinka")."""
+        dots = self._dots()
+        return QPointF(self._panel.right() - 2 - self.AGENT_D / 2, dots[0][1].y()) if dots else None
+
+    def _on_fold(self, pos: QPointF) -> bool:
+        c = self._fold_center()
+        return c is not None and math.hypot(pos.x() - c.x(), pos.y() - c.y()) <= self.AGENT_D / 2 + 2
 
     def _dot_at(self, pos: QPointF) -> str | None:
         return next((name for name, c in self._dots()
@@ -633,11 +642,9 @@ class FloatingButton(QWidget):
         self._wake()
 
     def _collapse_rect(self) -> QRectF:
-        """The fold button: the panel's top right corner, in its header row."""
-        if not self._has_panel:
-            return QRectF()
-        top = self._panel.top() + self.PAD + (self.HEADER_H - self.COLLAPSE_H) / 2
-        return QRectF(self._panel.right() - 6 - self.COLLAPSE_W, top, self.COLLAPSE_W, self.COLLAPSE_H)
+        """The fold chip's square (what its repaint covers); empty without the panel."""
+        c, r = self._fold_center(), self.AGENT_D / 2
+        return QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r) if c else QRectF()
 
     def _set_collapse_hover(self, on: bool) -> None:
         if on != self._collapse_hover:
@@ -876,6 +883,7 @@ class FloatingButton(QWidget):
             self._paint_glyph_chip(p, self._dictations_center(), DICTATIONS_GLYPH, 14)
             self._paint_history_chip(p)
             self._paint_new_chip(p)
+            self._paint_fold_chip(p)
             self._paint_version(p)
         c = self._button_center()
         r = self.DIAMETER / 2
@@ -963,17 +971,18 @@ class FloatingButton(QWidget):
                 p.setBrush(Qt.NoBrush)
                 p.drawEllipse(c, r + 2.5, r + 2.5)
 
-    def _paint_fold(self, p: QPainter, rect: QRectF, text: QColor) -> None:
-        """The fold button in the panel's top right corner: a small key with a light edge and a bold white dash
-        (minimize), brighter under the mouse."""
-        if rect.isEmpty():
+    def _paint_fold_chip(self, p: QPainter) -> None:
+        """The fold chip, a chip like the history's with a bold white dash (minimize), lighter under the mouse.
+        (In 1.2.0 a thin grey dash in the panel's header: next to the limit's countdown it read as punctuation.)"""
+        c = self._fold_center()
+        if c is None:
             return
-        p.setPen(QPen(QColor(255, 255, 255, 90 if self._collapse_hover else 55), 1))
-        p.setBrush(QColor(255, 255, 255, 50 if self._collapse_hover else 22))
-        p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 5, 5)
-        c = rect.center()
-        p.setPen(QPen(text, 2, Qt.SolidLine, Qt.RoundCap))
-        p.drawLine(QPointF(c.x() - 5, c.y() + 0.5), QPointF(c.x() + 5, c.y() + 0.5))
+        r = self.AGENT_D / 2
+        p.setPen(QPen(QColor(255, 255, 255, 70 if self._collapse_hover else 28), 1))
+        p.setBrush(theme.tint("#2A3245" if self._collapse_hover else "#181B22"))
+        p.drawEllipse(c, r - 0.5, r - 0.5)
+        p.setPen(QPen(QColor("#E6E8EC"), 2, Qt.SolidLine, Qt.RoundCap))
+        p.drawLine(QPointF(c.x() - 5.5, c.y() + 0.5), QPointF(c.x() + 5.5, c.y() + 0.5))
 
     def _paint_icon(self, p: QPainter) -> None:
         """Folded: Orbit's icon (the website's favicon: a planet with a tilted orbit and a moon in the accent colour)
@@ -1221,10 +1230,8 @@ class FloatingButton(QWidget):
         p.setFont(bold)
         p.setPen(dim)
         p.drawText(header, Qt.AlignLeft | Qt.AlignVCenter, "Claude")
-        fold = self._collapse_rect()
         if self._show_usage and self._claude is not False:
-            self._paint_header_note(p, header.adjusted(0, 0, -(right - fold.left()) - 4, 0), font, text, dim)
-        self._paint_fold(p, fold, text)
+            self._paint_header_note(p, header, font, text, dim)
         y += self.HEADER_H
         if self._show_usage:
             y = self._paint_limits(p, x, right, y, font, bold, text, dim)
@@ -1551,7 +1558,7 @@ class FloatingButton(QWidget):
             if self._collapsed:
                 tip = ("Orbit je zbalený. Klikni a rozbalí se celý panel.\nDiktování jede dál, ikonka při něm "
                        "zčervená. Tažením ji přesuneš, pravým klikem otevřeš menu.")
-            elif self._collapse_rect().contains(pos):
+            elif self._on_fold(pos):
                 tip = "Zbalit Orbit do malé ikonky na tomhle místě. Klikem na ikonku se zase rozbalí."
             elif session:
                 tip = session.tooltip()
@@ -1614,7 +1621,7 @@ class FloatingButton(QWidget):
         if self._press_global is None:  # just moving over it (mouse tracking): the speaker lights up under it
             self._set_speaker_hover(self._on_speaker(event.position()))
             self._set_version_hover(self._on_version_button(event.position()))  # so does the version's button
-            self._set_collapse_hover(self._collapse_rect().contains(event.position()))  # and the fold button
+            self._set_collapse_hover(self._on_fold(event.position()))  # and the fold chip
             return
         delta = event.globalPosition().toPoint() - self._press_global
         if not self._dragging and delta.manhattanLength() > 6:
@@ -1637,7 +1644,7 @@ class FloatingButton(QWidget):
             self.moved.emit(self.button_pos())
         elif self._collapsed:
             self._fold(False)
-        elif self._collapse_rect().contains(event.position()):
+        elif self._on_fold(event.position()):
             self._fold(True)
         elif self._press_on_button:
             self.released.emit()

@@ -1206,10 +1206,12 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 ### Zbalení do ikonky (od 13. 10.)
 - Pepa: „celé to okno … se bude dát minimalizovat a bude to jenom jako ikonka Orbitu … podle toho, kde to mám
   umístěné, když na tu ikonku kliknu, tak se to celý zase rozbalí, ale někde bude ikonka zbalit“.
-- Zbalit: tlačítko v pravém horním rohu panelu, v řádku hlavičky (`_collapse_rect` 26×18 px, `_paint_fold`: světlý
-  podklad, rámeček a tučná bílá čárka; poznámka o limitu se o něj zkrátí), nebo menu Orbitu „Zbalit do ikonky“
-  (zaškrtávací). Ve verzi 1.2.0 to byla jen tenká šedá čárka (znak E921) a Pepa ji nenašel: vedle odpočtu limitu
-  vypadala jako pomlčka za větou. Test `test_the_fold_button_is_a_visible_button`. Rozbalit: klik na ikonku, nebo totéž
+- Zbalit: samostatná kulatá bublinka s tučnou bílou čárkou v pruhu nad panelem, úplně vpravo (pravým okrajem na
+  okraji panelu), hned vedle barev (`_fold_center`, `_on_fold`, `_paint_fold_chip`, pod myší světlejší), nebo menu
+  Orbitu „Zbalit do ikonky“ (zaškrtávací). Pilulka barev je proto o bublinku a mezeru 8 px vlevo (`_dots`) a s ní
+  agent, hodiny a plusko (počítají se od teček). Ve verzi 1.2.0 to byla tenká šedá čárka (znak E921) v hlavičce
+  panelu a Pepa ji nenašel (vedle odpočtu limitu vypadala jako pomlčka za větou), pak chtěl „vedle barev, ale
+  samostatná bublinka, barvy posuň doleva“. Test `test_its_own_chip_right_of_the_colours`. Rozbalit: klik na ikonku, nebo totéž
   v menu. `config.json` `collapsed` (výchozí false), vydrží restart (`Dictation._set_collapsed`).
 - Zbalený `FloatingButton` (`set_collapsed`, `_collapsed`): okno jen čtverec mikrofonu (`_side`, `_btn_off` 0,0),
   takže `button_pos` a uložené místo se nemění a ikonka sedí přesně na středu mikrofonu; `_has_panel` je False
@@ -1456,7 +1458,7 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   Zmínky jsou i v úvodu, sekci Claude, soukromí (úkol dostane relace až po potvrzení, jinak zůstává v počítači),
   požadavcích, otázkách (bez Claude Code, hlas na internet, aktualizace, odinstalace) a v orrery bez videa.
 - **Verze Claude Code a zbalení na webu** (od 13. 10., verze 1.2.0): replika má pod panelem pilulku `#wVer` (jako
-  aplikace: „Claude Code 2.1.296 ✓ nejnovější“), v hlavičce panelu čárku `#wFold` a u mikrofonu skrytou ikonku
+  aplikace: „Claude Code 2.1.296 ✓ nejnovější“), v pruhu za barvami bublinku s čárkou `#wFold` (jako aplikace) a u mikrofonu skrytou ikonku
   `#wIcon` (symbol `#i-orbit` = favicon). Dvě poslední karty: „Verze Claude Code“ (scéna `verze`: nová verze →
   Aktualizovat → „Aktualizuju…“ → ✓ a bublina) a „Zbalit do ikonky“ (scéna `zbalit`: `.widget.folded` celou
   repliku jen zprůhlední, ne vyjme z layoutu, aby stránka neposkočila, a ukáže ikonku na místě mikrofonu). Ověřeno
