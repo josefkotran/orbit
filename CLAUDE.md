@@ -1206,8 +1206,10 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 ### Zbalení do ikonky (od 13. 10.)
 - Pepa: „celé to okno … se bude dát minimalizovat a bude to jenom jako ikonka Orbitu … podle toho, kde to mám
   umístěné, když na tu ikonku kliknu, tak se to celý zase rozbalí, ale někde bude ikonka zbalit“.
-- Zbalit: čárka (E921, `COLLAPSE_GLYPH`) v pravém horním rohu panelu, v řádku hlavičky (`_collapse_rect`, poznámka
-  o limitu se o ni zkrátí), nebo menu Orbitu „Zbalit do ikonky“ (zaškrtávací). Rozbalit: klik na ikonku, nebo totéž
+- Zbalit: tlačítko v pravém horním rohu panelu, v řádku hlavičky (`_collapse_rect` 26×18 px, `_paint_fold`: světlý
+  podklad, rámeček a tučná bílá čárka; poznámka o limitu se o něj zkrátí), nebo menu Orbitu „Zbalit do ikonky“
+  (zaškrtávací). Ve verzi 1.2.0 to byla jen tenká šedá čárka (znak E921) a Pepa ji nenašel: vedle odpočtu limitu
+  vypadala jako pomlčka za větou. Test `test_the_fold_button_is_a_visible_button`. Rozbalit: klik na ikonku, nebo totéž
   v menu. `config.json` `collapsed` (výchozí false), vydrží restart (`Dictation._set_collapsed`).
 - Zbalený `FloatingButton` (`set_collapsed`, `_collapsed`): okno jen čtverec mikrofonu (`_side`, `_btn_off` 0,0),
   takže `button_pos` a uložené místo se nemění a ikonka sedí přesně na středu mikrofonu; `_has_panel` je False

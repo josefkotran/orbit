@@ -92,6 +92,18 @@ class Fold(unittest.TestCase):
         self.assertEqual(self.got[-1], ("collapse_toggled", False))
         self.assertEqual((self.b.size(), self.b.button_pos()), (size, place))
 
+    def test_the_fold_button_is_a_visible_button(self):  # a thin grey dash read as punctuation, Pepa didn't find it
+        if self.elsewhere:
+            return
+        image = self.b.grab().toImage()
+        fold = self.b._collapse_rect()
+        self.assertGreaterEqual((fold.width(), fold.height()), (24, 16))
+        dash = image.pixelColor(fold.center().toPoint())
+        edge = image.pixelColor(QPointF(fold.left() + 0.5, fold.center().y()).toPoint())
+        panel = image.pixelColor(QPointF(fold.left() - 3, fold.center().y()).toPoint())
+        self.assertGreater(dash.lightness(), 190)  # the white dash
+        self.assertGreater(edge.lightness(), panel.lightness() + 12)  # its light edge on the panel
+
     def test_a_press_on_the_icon_is_never_push_to_talk(self):
         if self.elsewhere:
             return

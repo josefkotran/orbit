@@ -452,10 +452,10 @@ section{position:relative}
 .widget.off .dot,.widget.off .bars i{animation-play-state:paused}
 /* the fold button in the header's right corner, and Claude Code's version in a pill under the panel */
 .w-head #wNote{margin-left:auto}
-.w-head .w-fold{width:22px;height:22px;margin-right:-4px;border-radius:5px;justify-content:center;flex:none;transition:background-color .2s,color .2s,box-shadow .35s}
-.w-head .w-fold svg{width:14px;height:14px;color:inherit}
-.w-head .w-fold.lit{color:#E6E8EC;background:rgba(255,255,255,.08);box-shadow:0 0 0 4px rgba(var(--accent-rgb),.25)}
-.w-head .w-fold.press{background:rgba(255,255,255,.2)}
+.w-head .w-fold{width:31px;height:22px;margin-right:-4px;border-radius:6px;justify-content:center;flex:none;color:#E6E8EC;background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.24);transition:background-color .2s,box-shadow .35s}
+.w-head .w-fold svg{width:17px;height:17px;color:inherit}
+.w-head .w-fold.lit{background:rgba(255,255,255,.16);box-shadow:0 0 0 4px rgba(var(--accent-rgb),.25)}
+.w-head .w-fold.press{background:rgba(255,255,255,.3)}
 .w-ver{display:flex;width:max-content;max-width:100%;align-items:center;margin-top:8px;padding:4px 4px 4px 13px;min-height:30px;border-radius:999px;background:rgba(24,30,44,.92);border:1px solid rgba(255,255,255,.11);font:14px/1 "Segoe UI",var(--text-font);color:#9AA1AD;white-space:nowrap}
 .w-ver .vt{padding-right:9px}
 .w-ver b{color:#E6E8EC;font-weight:600}

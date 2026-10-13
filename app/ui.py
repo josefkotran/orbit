@@ -28,7 +28,6 @@ CHOOSE_GLYPH = chr(0xE762)  # "MultiSelect": "Vybrat složky…" in the +'s menu
 LOOP_GLYPH = chr(0xE8EE)  # "RepeatAll": a session running a /loop
 SHELL_GLYPH = chr(0xE756)  # "CommandPrompt": background shells it most likely doesn't need any more (shells.py)
 SPEAKER_GLYPH = chr(0xE767)  # "Volume"
-COLLAPSE_GLYPH = chr(0xE921)  # "ChromeMinimize": the panel's top right corner, Orbit folds into a small icon
 MUTE_GLYPH = chr(0xE74F)  # "Mute"
 WAVE_GLYPHS = (chr(0xE993), chr(0xE994), chr(0xE995))  # "Volume1"–"Volume3": the waves grow while Orbit reads
 
@@ -219,7 +218,9 @@ class FloatingButton(QWidget):
     VER_PILL_H = 22  # Claude Code's version, in a pill between the panel and the circles
     VER_GAP = 5  # from the panel to the pill (the mic's square has its own margin on the other side)
     ICON_D = 44  # folded: just Orbit's icon where the mic is (the mic's square, the rest of it gone)
-    COLLAPSE_W = 18  # the fold button in the panel's top right corner
+    # the fold button in the panel's top right corner: a real button (a thin grey dash there read as punctuation
+    # after the limit's countdown, Pepa didn't find it)
+    COLLAPSE_W, COLLAPSE_H = 26, 18
     AGENT_STATUS = {"listening": "Poslouchám…", "transcribing": "Přepisuji…", "thinking": "Přemýšlím…",
                     "speaking": "Mluví", "confirm": "Mám? Řekni „jo“"}
     SEND_STATUS = {  # status of a message for a session: (label, colour or None = dim)
@@ -635,8 +636,8 @@ class FloatingButton(QWidget):
         """The fold button: the panel's top right corner, in its header row."""
         if not self._has_panel:
             return QRectF()
-        top = self._panel.top() + self.PAD + (self.HEADER_H - self.COLLAPSE_W) / 2
-        return QRectF(self._panel.right() - 6 - self.COLLAPSE_W, top, self.COLLAPSE_W, self.COLLAPSE_W)
+        top = self._panel.top() + self.PAD + (self.HEADER_H - self.COLLAPSE_H) / 2
+        return QRectF(self._panel.right() - 6 - self.COLLAPSE_W, top, self.COLLAPSE_W, self.COLLAPSE_H)
 
     def _set_collapse_hover(self, on: bool) -> None:
         if on != self._collapse_hover:
@@ -962,19 +963,17 @@ class FloatingButton(QWidget):
                 p.setBrush(Qt.NoBrush)
                 p.drawEllipse(c, r + 2.5, r + 2.5)
 
-    def _paint_fold(self, p: QPainter, rect: QRectF, text: QColor, dim: QColor) -> None:
-        """The fold button (a minimize line) in the panel's top right corner, lighter under the mouse."""
+    def _paint_fold(self, p: QPainter, rect: QRectF, text: QColor) -> None:
+        """The fold button in the panel's top right corner: a small key with a light edge and a bold white dash
+        (minimize), brighter under the mouse."""
         if rect.isEmpty():
             return
-        if self._collapse_hover:
-            p.setPen(Qt.NoPen)
-            p.setBrush(QColor(255, 255, 255, 30))
-            p.drawRoundedRect(rect, 4, 4)
-        font = QFont(theme.icon_font())
-        font.setPixelSize(10)
-        p.setFont(font)
-        p.setPen(text if self._collapse_hover else dim)
-        p.drawText(rect, Qt.AlignCenter, COLLAPSE_GLYPH)
+        p.setPen(QPen(QColor(255, 255, 255, 90 if self._collapse_hover else 55), 1))
+        p.setBrush(QColor(255, 255, 255, 50 if self._collapse_hover else 22))
+        p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 5, 5)
+        c = rect.center()
+        p.setPen(QPen(text, 2, Qt.SolidLine, Qt.RoundCap))
+        p.drawLine(QPointF(c.x() - 5, c.y() + 0.5), QPointF(c.x() + 5, c.y() + 0.5))
 
     def _paint_icon(self, p: QPainter) -> None:
         """Folded: Orbit's icon (the website's favicon: a planet with a tilted orbit and a moon in the accent colour)
@@ -1225,7 +1224,7 @@ class FloatingButton(QWidget):
         fold = self._collapse_rect()
         if self._show_usage and self._claude is not False:
             self._paint_header_note(p, header.adjusted(0, 0, -(right - fold.left()) - 4, 0), font, text, dim)
-        self._paint_fold(p, fold, text, dim)
+        self._paint_fold(p, fold, text)
         y += self.HEADER_H
         if self._show_usage:
             y = self._paint_limits(p, x, right, y, font, bold, text, dim)
