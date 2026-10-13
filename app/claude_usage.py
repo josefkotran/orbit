@@ -343,7 +343,12 @@ def forecast(samples: list[tuple[datetime, float]], resets_at: datetime | None) 
 def countdown(when: datetime | None) -> str:
     if when is None:
         return ""
-    minutes = int((when - datetime.now(timezone.utc)).total_seconds() // 60)
+    return span(when - datetime.now(timezone.utc))
+
+
+def span(length: timedelta) -> str:
+    """2 h 10 min, 45 min, 3 d 4 h ("teď" for nothing left)."""
+    minutes = int(length.total_seconds() // 60)
     if minutes <= 0:
         return "teď"
     hours, minutes = divmod(minutes, 60)
@@ -351,6 +356,23 @@ def countdown(when: datetime | None) -> str:
         days, hours = divmod(hours, 24)
         return f"{days} d {hours} h"
     return f"{hours} h {minutes} min" if hours else f"{minutes} min"
+
+
+def clock(when: datetime | None) -> str:
+    """15:51 in local time ("" for None)."""
+    if when is None:
+        return ""
+    local = when.astimezone()
+    return f"{local.hour}:{local.minute:02d}"
+
+
+def forecast_text(eta: datetime, resets_at: datetime | None) -> str:
+    """The forecast in a sentence (the panel's tooltip, the bubble): when the 5-hour limit runs out at this pace,
+    when it resets and how long that would leave to wait."""
+    text = f"Při tempu posledních 30 minut vyčerpáš limit 5 h v {clock(eta)}"
+    if resets_at is None:
+        return text + "."
+    return f"{text}, ale obnoví se až v {clock(resets_at)}: pak by se čekalo {span(resets_at - eta)}."
 
 
 _DAYS = ["po", "út", "st", "čt", "pá", "so", "ne"]

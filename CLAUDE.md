@@ -65,7 +65,7 @@ jen nad tím, viz Limity Clauda) a průvodce se mu neukáže (config.json existu
 | `app/ducking.py` | hudba a zvuk ostatních programů ztlumené nebo ztišené, dokud je otevřený mikrofon (Core Audio přes ctypes, vlastní vlákno, `<data>/ducked.json` pro návrat po pádu) |
 | `app/ui.py` | `FloatingButton` (mikrofon + panel limitů), `Bubble` (oznámení), `SettingsDialog` (nastavení), kreslení ikony; společné kusy nastavení a průvodce: `KeyAndMic`, `ClaudeBox`, `DownloadRow`, `scrolling` |
 | `app/onboarding.py` | průvodce prvním spuštěním (`Wizard`, 6 stránek) a dva pomocníci, které používá i nastavení: `ClaudeConnection` (stav, instalace, přihlášení) a `Downloads` (stahování na pozadí) |
-| `app/claude_setup.py` | Claude Code na tomhle PC (jen stdlib): kde je `claude.exe`, verze, `claude auth status --json`, oficiální instalátor a `claude auth login` ve viditelném okně |
+| `app/claude_setup.py` | Claude Code na tomhle PC (jen stdlib): kde je `claude.exe`, verze, `claude auth status --json`, oficiální instalátor a `claude auth login` ve viditelném okně, nejnovější verze na kanálu a `claude update` na pozadí |
 | `app/downloads.py` | stahování modelů a hlasů z Hugging Face (navazování, kontrola SHA-256, volné místo) a doporučení modelu podle grafiky (DXGI, Vulkan) |
 | `app/theme.py` | vzhled „noční signál“: barvy a tři barevné motivy, QSS, `Toggle` přepínač, `LevelWave` živá vlna, tmavý titulek přes DWM |
 | `app/claude_usage.py` | limity Clauda: ze souborů stavového řádku (výchozí), nebo z interního OAuth endpointu (jen `usage_source: "oauth"`); české texty pro odpočty |
@@ -75,12 +75,13 @@ jen nad tím, viz Limity Clauda) a průvodce se mu neukáže (config.json existu
 | `app/claude_cli.py` | společné volání `claude -p` (bez nástrojů, na předplatném) pro učení slovníku, souhrny artefaktů a úpravy textu (`Prepared`: proces spuštěný dřív, než je známé zadání); `claude.exe` a prostředí bere z `claude_setup` |
 | `app/learning.py` | učení slovníku: přepisy z logu + opravy uživatele (`<data>/corrections.json`) → `claude -p` → nová slova a opravy |
 | `app/artifacts.py` | předčítání artefaktů: záznam od hooku → text stránky → souhrn 7 vět od Clauda |
-| `app/sessions.py` | přehled relací Claude Code: stav z hook souborů, kontext ze stavového řádku (jinak odhad z přepisu), režim oprávnění, přepnutí okna |
+| `app/sessions.py` | přehled relací Claude Code: stav z hook souborů, kontext ze stavového řádku (jinak odhad z přepisu), režim oprávnění, příkazy na pozadí (`shells.py`), přepnutí okna |
 | `app/tasks.py` | vlastní úkoly uživatele (poznámky): `tasks.json` v datové složce, co nabídnout ke spuštění, zadání pro relaci, spuštění relace v samostatném procesu (bez Qt) |
 | `app/notebook.py` | okno Poznámky: sekce Aktivní / V plánu / Poznámky / Hotovo, úkol s názvem, složkou, kontextem a poznámkami, přetahování a šipky |
 | `app/favorites.py` | oblíbené složky pod pluskem nad panelem: seznam, názvy, nové repo (složka + `git init`), otevření relace v samostatném procesu (bez Qt) |
 | `app/favoritesview.py` | okna „Vybrat složky a barvy…“ (přepínač a barevná tečka u každé složky) a „Nové repo…“ |
 | `app/colors.py` | barvy relací podle složky (jména jako `/color` v Claude Code): proužek v panelu a obarvení pozadí terminálu relace (OSC 11, jen stdlib) |
+| `app/shells.py` | příkazy na pozadí relací (modré „2 shells“ v Claude Code): najde jejich procesy, pozná, jestli pracují, čekají, jsou to nepoužívané servery nebo visí; zastavení přes mod `orbit-mozek` (jen stdlib) |
 | `app/cc_hook.py` | hook, který Claude Code spouští (jen stdlib, rychlý): zapíše `<data>/sessions/<id>.<událost>.json` (i `permission_mode` a okno relace) |
 | `app/agent.py` | hlasový agent: trvalý `claude -p` (stream-json), přehled relací pro něj, potvrzování odeslání |
 | `app/agent_tools.py` | vlastní nástroje agenta jako MCP server (stdio): nová relace, hledání a otevření stránky |
@@ -97,7 +98,7 @@ jen nad tím, viz Limity Clauda) a průvodce se mu neukáže (config.json existu
 | `whisper-next/` | whisper-server pro jakékoli PC (`GGML_BACKEND_DL`, 76 MB), z něj se dělá `whisper\` v instalátoru; Pepův běžící Orbit pořád používá starý `whisper\` |
 | `build/` | `build_whisper.py` (whisper-server přes portable MSYS2), `build_installer.py` (balíček + Inno Setup), `verify_bundle.py` (kontrola balíčku jeho vlastním Pythonem), `README.md`; `cache/`, `tools/`, `dist/`, `output/` nejsou v gitu |
 | `installer/` | `orbit.iss` (Inno Setup) a texty licencí GPL/LGPL, které jdou do instalace |
-| `tests/` | testy (stdlib `unittest`, od 7. 10.): `test_core_*` (přepis, Piper, klávesa, vkládání, config, povely a opravy, historie, oblíbené složky), `test_claude_*` (nástroje agenta, hledání programů), `test_dist_*` (build, instalátor), `test_ui_*` (potvrzování agenta, překreslování, relace, „Smaž to“ a úpravy na falešném textovém poli, plusko a jeho okna); viz Spuštění |
+| `tests/` | testy (stdlib `unittest`, od 7. 10.): `test_core_*` (přepis, Piper, klávesa, vkládání, config, povely a opravy, historie, oblíbené složky), `test_claude_*` (nástroje agenta, hledání programů), `test_dist_*` (build, instalátor), `test_ui_*` (potvrzování agenta, překreslování, relace, „Smaž to“ a úpravy na falešném textovém poli, plusko a jeho okna, tlačítko reproduktoru a předpověď limitu, verze a aktualizace Claude Code); viz Spuštění |
 | `THIRD_PARTY_NOTICES.md` | licence všeho, co instalátor nese nebo Orbit stahuje |
 | `web/` | stránka https://orbit.easya.cz se stažením instalátoru, `publish.py` ji sestaví a nahraje (viz `web/README.md`) |
 | `video/` | úvodní video webu v Remotionu, hotové soubory jdou do `web/site/assets/video` (viz `video/README.md`) |
@@ -355,7 +356,34 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   ukládá `background` (`type`, `what`). Stop s nějakou = stav „pracuje“, žádné oznámení ani předčítání, pravidlo
   „seznam relací hlásí idle = přerušeno“ se nepoužije; tooltip řádku „Na pozadí běží: příkaz, 2× podagent“ + popisy,
   agent to má v přehledu. Práce na pozadí se relaci ohlásí a ta dělá další tah; teprve Stop bez práce na pozadí
-  ohlásí „Hotovo“. Pozor: příkaz, který běží napořád (dev server spuštěný na pozadí), drží relaci ve stavu „pracuje“.
+  ohlásí „Hotovo“. Výjimka od 11. 10.: servery a visící příkazy (viz další bod) relaci ve stavu „pracuje“ nedrží.
+- **Příkazy na pozadí: pracují, nebo běží zbytečně?** (od 11. 10., `app/shells.py`; Pepa: „dole modře třeba dva
+  shell, ale ve skutečnosti nic nedělají“, v relaci m-tex hodinu stál náhled PHP a MariaDB a Orbit ji hodinu ukazoval
+  jako „pracuje“). Hook od Stopu ukládá u každé úlohy i `id` a `command`. `shells.Watch` každých 5 s (`SAMPLE_S`,
+  ~11 ms, výpis procesů ~5 ms jednou pro všechny relace) najde shell mezi dětmi `claude.exe` relace: Git Bash podle
+  příkazu v `bash -c "… eval '<příkaz>' …"` (`'` je tam `'"'"'`, `"` je `\"`, `command_of` přes `CommandLineToArgvW`),
+  PowerShell podle výstupního souboru v příkazové řádce `cmd /c "powershell … > …\tasks\<id>.output"` (skript je
+  v proměnné prostředí). Příkazová řádka cizího procesu přes `NtQueryInformationProcess` (třída 60). Sleduje celý
+  strom procesů: čas procesoru (víc než 20 ms za 5 s = něco dělá; nečinné `php -S` i `mysqld` mají 0 ms za 30 s),
+  výstupní soubor (`%TEMP%\claude\<projekt>\<relace>\tasks\<id>.output`, `php -S` do něj loguje požadavky), porty, na
+  kterých poslouchá, a připojené klienty (`GetExtendedTcpTable`). Verdikt (`Shell.kind`): pracuje, čeká (sleep nebo
+  smyčka se sleep: skončí a relaci ohlásí), server (`server (php) na :8770, používá se` / `nikdo ho nepoužil 48
+  min`), teď nic nedělá, nic nedělá (15 min, `IDLE_S`: visí, třeba `git push` čekající na heslo), proces nenalezen.
+  **Nepotřebný** = nic nedělá, nebo server nepoužitý 30 min (`SERVER_IDLE_S`). Program, který nic nepíše (mysqld), je
+  nečinný až od chvíle, kdy ho Orbit poprvé viděl, ne od startu. Servery a visící příkazy relaci nedrží ve stavu
+  „pracuje“ (nikdy samy neskončí): Stop jen s nimi = „hotovo“ i s oznámením (`SessionTracker._look_at_shells`).
+- V panelu je za názvem relace s nepotřebným příkazem oranžová ikona příkazového řádku (E756) a počet, když je jich víc;
+  tooltip má u každé úlohy, co dělá. **Pravý klik na relaci** nabídne „Zastavit: <popis> (<co dělá>)“ u každého
+  příkazu a „Zastavit nepotřebné (N)“. Agent to má v přehledu (zastavit sám neumí, řekne, ať pravý klik).
+- **Zastavení jde přes Claude Code** (ověřeno 11. 10.): příkaz ukončený zvenku Claude Code ohlásí relaci jako
+  „failed with exit code 1“ a relace začne nový tah (může ho třeba pustit znovu), kdežto `TaskStop` ji neprobudí
+  (úloha „stopped“, žádný tah). Orbit proto zapíše `<data>/sessions/stop/<relace>.<úloha>.json` a mod `orbit-mozek`
+  (od 0.3.0) v té relaci ho do 2 s najde, zavolá `$.tool.call({tool: 'TaskStop'})` a odpoví `….done.json`
+  (`shells.Stopper`, Orbit oba soubory smaže). Ověřeno se skutečným `claude -p` (haiku) a modem 0.3.0: server
+  `python -m http.server` byl rozpoznán jako server, zastaven za 1,2–2 s, procesy i port do 1 s pryč, relace bez
+  nového tahu. Bez odpovědi do 6 s (relace bez modu 0.3, třeba spuštěná před aktualizací) bublina nabídne ukončení
+  natvrdo (`Watch.kill`, celý strom od programu po shell, s kontrolou času startu proti recyklovaným PID).
+  Zastavené úlohy si Orbit pamatuje (`Watch.stopped`): Claude Code o nich další Stop neposílá.
 - **Režim oprávnění relace** (`Session.mode`, `mode_class`): z hooku (`permission_mode`), jinak z přepisu
   (`"permissionMode"` u záznamů uživatele). Třída jako u Claude Code: „bypass“ = `bypassPermissions`, nebo `plan`
   u relace, která někdy běžela v bypass (`bypass_seen`); jinak „prompting“. `sessions.bypass_in_use()` = rozhodne
@@ -467,11 +495,34 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 - **Tlačítko reproduktoru** vlevo od mikrofonu, stejně velké (Pepa chtěl nejdřív ikonu vedle mikrofonu, malý
   satelit 24 px mu byl malý). `button_pos` je dál levý horní roh čtverce mikrofonu, reproduktor je v pruhu vlevo
   (`_slot`), bublina míří na oba kruhy. **Od 1. 10. je to ztlumení celého Orbitu** (Pepa chtěl, aby po zmáčknutí
-  nebylo slyšet nic): klik přepne `muted`, bílý reproduktor (E767) = zvuky jdou, šedý přeškrtnutý (E74F) = ticho,
-  kruh v barvě akcentu = právě čte (tlačítko se mezitím nezprůhlední). Ztlumení vypne pípání start/stop, zvuky
-  bublin i předčítání (odpovědi i artefakty) a hned utne, co se čte. Bubliny se dál ukazují, souhrny artefaktů se
-  dál dělají. Výjimka: „Přečíst znovu poslední artefakt“ z menu čte i ztlumeně (výslovná žádost).
-  `read_artifacts` je teď jen v nastavení; jeho vypnutí utne čtený souhrn, odpověď relace ve frontě se přečte.
+  nebylo slyšet nic): klik přepne `muted`, bílý reproduktor (E767) = zvuky jdou, šedý přeškrtnutý (E74F) = ticho.
+  Ztlumení vypne pípání start/stop, zvuky bublin i předčítání (odpovědi i artefakty) a hned utne, co se čte.
+  Bubliny se dál ukazují, souhrny artefaktů se dál dělají. Výjimka: „Přečíst znovu…“ z menu čte i ztlumeně
+  (výslovná žádost). `read_artifacts` je teď jen v nastavení; jeho vypnutí utne čtený souhrn, odpověď relace ve
+  frontě se přečte.
+- **Od 10. 10. tlačítko reproduktoru jako každý čeká** (Pepa: „ať funguje tak, jak si každý myslí, že má“):
+  - **Klik během čtení jen zastaví čtení** (`stop_reading` → `Dictation._stop_reading`: `_stop_speech`, fronta
+    pryč), zvuky zůstanou zapnuté. Dřív klik během čtení Orbit ztlumil natrvalo: kdo chtěl utnout jednu odpověď,
+    neslyšel pak pípání ani další odpovědi, dokud nekliknul znovu. Rozhoduje, co tlačítko ukazovalo při stisku
+    (`_press_reading`), ne při puštění.
+  - **Čtení ukazuje všechno**, co Orbit čte (odpovědi relací, artefakty, agent, otázky), ne jen artefakty
+    (`_say_next` → `set_reading`): kruh v barvě akcentu a vlny, které rostou (E993 → E994 → E995 po 320 ms, kreslené
+    od stejného místa jako E767, jinak by reproduktor poskakoval). Pod myší místo vln bílý čtvereček stop.
+  - Pod myší světlejší kruh se světlým obrysem, při stisku tmavší (`setMouseTracking`, `_speaker_hover`,
+    `_speaker_down`). Po kliku se hned ukáže tooltip s novým stavem („Klikni a zvuky zapneš“…). Zapnutí zvuků zazní
+    tichým tónem „info“ (je slyšet, že zvuk jde), ztlumení je potichu.
+  - **Pravý klik na reproduktor = jeho menu** (`speaker_menu_requested` → `Dictation._show_speaker_menu`; jinde
+    v panelu dál menu Orbitu): Zastavit čtení (jen při čtení), Přečíst znovu poslední (`_last_speech`: poslední
+    přečtený text kromě otázek „Mám to poslat?“ a ukázky hlasu, čte i ztlumeně), Ztlumit Orbit, Pípnout při
+    nahrávání (`sounds`), Předčítat hotové odpovědi relací (`speak_answers`, jen s přehledem relací), Hlas pro
+    předčítání (jen hlasy, které tu jdou; volba hned zazní ukázkou; jestli má Windows Jakuba, se ptá až při otevření
+    podmenu, načte to řečový engine Windows) a Nastavení…. Když je otevřené nastavení, přepínače a hlasy v menu
+    nejsou (Uložit by je přepsalo).
+  - Animace i najetí myší překreslují jen čtverec reproduktoru (`paintEvent`: oblast uvnitř `_speaker_area` =
+    vymazat na průhlednou a nakreslit reproduktor, celý panel se nekreslí; v jeho čtverci nic jiného není).
+  - Kolečko myši na hlasitost záměrně není: Piper hraje ve vlastním procesu, Jakub přes WinRT a pípání přes
+    `winsound`, jedna hlasitost pro všechny by chtěla měnit hlasitost Orbitu ve směšovači Windows.
+  - Testy `tests/test_ui_speaker.py`.
 - Neumí artefakty z chatu na claude.ai / v aplikaci Claude (tam hook není) ani dokumenty přes konektor Claude Docs.
 
 ### Hlasový agent (`agent`, od 1. 10.)
@@ -741,6 +792,10 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   `rate_limits.five_hour/seven_day` `{used_percentage, resets_at}`) do každé datové složky Orbitu, kterou najde (má
   `config.json`): `ORBIT_DATA_DIR`, `ORBIT_TASK_DATA`, `%LOCALAPPDATA%\Orbit`, `~\orbit`; bez nalezené zkusí znovu
   po 10 min. Funguje i bez panelu `/mozek` (hook běží v každé relaci s modem). Fable v `rateLimits` není.
+- **Zastavení příkazu na pozadí** (od 11. 10., `orbit-mozek` 0.3.0): každé 2 s projde `<data>/sessions/stop/`
+  (`$.fs.list`), žádost své relace mladší než minuta (`STOP_FRESH_MS`) vyřídí jednou (`stopsSeen`: jméno + čas
+  souboru) přes `TaskStop` a vedle zapíše odpověď `{ok, text}` (viz Příkazy na pozadí). Mazat soubory mod neumí
+  (`$.fs` nemá remove), maže Orbit.
 - **`orbit-ukoly`**: v relaci s `ORBIT_TASK_ID` řádek nad promptem (úkol, složka, počet poznámek, tlačítka Poznámka,
   Hotovo, Skrýt), sekce systémového promptu „pracuješ na úkolu…“ (`prompt.compose`, ne když je úkol hotový) a nástroje
   `mcp__orbit-ukoly__task_note` a `task_done` (`isDeferred: false`). Úkol čte z `tasks.json` (znovu po 15 s), píše jen
@@ -752,7 +807,8 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   directory) a `claude plugin install orbit-mozek@orbit` + `orbit-ukoly@orbit` pro uživatele; v `settings.json` jsou
   `enabledPlugins` a `extraKnownMarketplaces`. **Nainstalovaný mod je kopie** v `~/.claude/plugins/cache/orbit/<mod>/
   <verze>` (`installed_plugins.json`), ne složka repa: po úpravě zvednout `version` v `plugin.json`, pak
-  `claude plugin marketplace update orbit` a `claude plugin update <mod>@orbit` (10. 10. tak 0.1.0 → 0.2.0); běžící
+  `claude plugin marketplace update orbit` a `claude plugin update <mod>@orbit` (10. 10. tak 0.1.0 → 0.2.0, 11. 10.
+  `orbit-mozek` 0.3.0); běžící
   relace ho načtou po restartu (nebo `/reload-plugins`). Ostatní:
   `/plugin install orbit-mozek --marketplace josefkotran/orbit` (až bude `mods/` na GitHubu).
 - Kontrola: `claude plugin validate mods/<mod>` a `claude plugin test mods/<mod>` (testy v `tests/*.test.ts` běží
@@ -855,7 +911,19 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   mikrofonu (`_finish_recording`, `_drop_recording`, Ukončit) se vrátí jen to, co je pořád na Orbitově hodnotě (když
   to uživatel mezitím ve směšovači změnil, nechá se). Co se mění, se nejdřív zapíše do `<data>/ducked.json`: když Orbit
   spadne uprostřed diktátu, další start to vrátí (podle instance relace, jinak podle programu). Běží ve vlastním vlákně
-  (pomalý ovladač nezdrží mikrofon). Ověřeno na skutečné relaci testovacího procesu (ztlumit, ztišit, vrátit, návrat
+  (pomalý ovladač nezdrží mikrofon).
+- **Relace, která během diktátu skončí** (od 11. 10., Pepa: „nefunguje mi zvuk na Chromu, na Spotify jo“): Windows si
+  ztlumení a hlasitost pamatují pro každý program a výstup (`HKCU\Software\Microsoft\Internet Explorer\LowRegistry\
+  Audio\PolicyConfig\PropertyStore`, hodnota `5` = ztlumení) a dají je jeho další relaci. Chrome si zvukový proces
+  (`--utility-sub-type=audio.mojom.AudioService`) vypíná, když nic nehraje: 10. 10. ve 12:31 ho Orbit ztlumil při
+  33s nahrávce pro agenta, proces mezitím skončil, Orbit hlásil „vrácen: 0 z 1“ a Chrome byl od té doby ztlumený na
+  reproduktorech (Realtek line-out) a Orbit ho bral jako ztlumený uživatelem. Teď: změna, jejíž relace zmizela, zůstane
+  jako dluh (`Ducker._owed`, v `ducked.json` i přes restart, s `seen` = relace z doby ztlumení) a každé 2 s
+  (`RETRY_S`, průchod relacemi ~1,5 ms CPU) se hledá nová relace téhož programu na tom výstupu, která tam při ztlumení
+  nebyla; ta dostane hodnotu zpět (jen když je pořád Orbitova), nejdéle týden (`GIVE_UP_S`). Stejně se při vracení
+  vezme i relace téhož programu, která vznikla během diktátu. Ověřeno na skutečném Core Audio: ztlumený přehrávač
+  ukončený, nový Windows spustily ztlumený, Orbit ho za 1,9 s vrátil. Log jmenuje program („Teď nehraje, zvuk mu
+  vrátím, až zase začne: chrome.exe“). Ověřeno na skutečné relaci testovacího procesu (ztlumit, ztišit, vrátit, návrat
   po „pádu“). Orbit z venvu má relaci pod PID skutečného `pythonw.exe` (ne spouštěče z venvu), a to je
   `os.getpid()`. Piper hraje ve vlastním procesu, ale při nahrávání stejně mlčí.
 - Ověřeno 8. 10.: v testovacím okně jiného procesu psaní, Backspace přesně o diktát, Shift+← výběr, Ctrl+Insert
@@ -913,7 +981,13 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 - **Token se jen čte, nikdy neobnovuje** (refresh by rotoval refresh token a mohl rozbít přihlášení Claude Code).
 - Bubliny potřebují `Qt.WA_AlwaysShowToolTips`, jinak se u neaktivního okna nezobrazí.
 - Předpověď: z odběrů 5h okna za posledních 30 min (aspoň 10 min a +1 bod) se spočítá, kdy dojde. Když dřív než
-  se okno obnoví, hlavička ukáže oranžově „dojde v 14:20“ a jednou za okno přijde bublina, pokud zbývá < 60 min.
+  se okno obnoví, jednou za okno přijde bublina, pokud zbývá < 60 min. **Hlavička panelu** (`FloatingButton._header_note`,
+  od 10. 10.; Pepa: „nevím, co znamená ‚dojde v 15:51‘, když vedle není, kdy se 5hodinový limit obnoví“, předpověď
+  dřív odpočet obnovení nahradila): oranžově „Při tomhle tempu vyčerpáš limit 5 h v 15:51“ a tlumeně „· obnoví se až
+  v 17:20“, vždy obojí; když se nevejde, kratší „Limit 5 h vyčerpáš asi v 15:51 · obnoví se v 17:20“ a „5 h dojde
+  v 15:51 · obnova 17:20“. Bez předpovědi ↻ „limit 5 h se obnoví v 17:20 (za 2 h 14 min)“ (dřív jen „2 h 14 min“).
+  Tooltip panelu i bublina mají větu `claude_usage.forecast_text`: „Při tempu posledních 30 minut vyčerpáš limit
+  5 h v 15:51, ale obnoví se až v 17:20: pak by se čekalo 1 h 29 min.“
 - Endpoint vrací 429, když se ptá moc často (např. několik restartů Orbitu za sebou; v Pepově logu ~20×). Po 429 se
   Orbit neptá aspoň 5 min (nebo podle `Retry-After`, max 1 h).
 - **Přes restart** (od 9. 10., Pepa: „nefungujou Claude limity“ po třech restartech za 20 min): poslední odpověď
@@ -1089,6 +1163,46 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   `HWND_NOTOPMOST`), jinak by zakrylo okno PowerShellu a prohlížeč. Průvodce navrchu není nikdy.
 - Tažení tlačítka mikrofonu už neruší nahrávání pro agenta (tlačítko spouští jen diktát).
 
+### Verze Claude Code a aktualizace (od 13. 10.)
+- Pepa chtěl vidět aktuální verzi Claude Code, jestli není potřeba aktualizace, a tlačítko na aktualizaci. Kde:
+  nastavení › Claude pod účtem („Claude Code 2.1.296 · nejnovější verze ✓“ zeleně, „… · je nová verze 2.1.297“
+  oranžově + „Aktualizovat Claude Code“) a menu Orbitu pod „Obnovit využití Clauda“ („Claude Code 2.1.296: nejnovější
+  verze“ šedě, nebo „Aktualizovat Claude Code na 2.1.297 (teď 2.1.296)“).
+- **V panelu pořád** (Pepa hned potom: „ať je pořád napsána verze, nějak čitelně, a možnost aktualizace“): pilulka
+  ve stylu panelu mezi panelem a kruhy reproduktoru a mikrofonu (`FloatingButton.set_claude_version`,
+  `_version_layout`, `_paint_version`; data z `Dictation._claude_version_line`). Vlastní pruh `VER_PILL_H` +
+  `VER_GAP` (27 px): panel se o něj posune, kruhy zůstanou na místě. Zarovnaná s okrajem panelu nad kruhy (vpravo,
+  vlevo, uprostřed jako panel), s panelem pod tlačítkem je pod kruhy. Stavy: „Claude Code 2.1.296 ✓ nejnovější“
+  (zeleně), „Claude Code 2.1.290 → 2.1.296“ (oranžově) + tlačítko v akcentu **Aktualizovat**, „Aktualizuju Claude
+  Code na 2.1.296…“, „… aktualizace se nepovedla“ + **Zkusit znovu**, bez známé nejnovější jen verze. Tooltip:
+  podrobnosti, důvod chyby, relace na staré verzi. Klik na tlačítko = `ClaudeConnection.update_claude` (bez bubliny na
+  začátku, panel to ukazuje; na konci bublina jako z menu). Bez panelu (vypnuté limity i relace) se neukazuje.
+  Protože je vidět pořád, ptá se Orbit na nejnovější verzi i každých 30 min (`RELEASE_CHECK_MS`). „Nová verze“ tak
+  občas chvíli svítí, než ji Claude Code (`autoUpdates`) nainstaluje sám.
+- **Nejnovější verze přesně jako ji zjišťuje Claude Code** (jeho vlastní návod v `claude.exe` 2.1.296,
+  `claude_setup.release`): kanál = `autoUpdatesChannel` v `settings.json` (jen `latest`/`stable`, nic jiného do
+  adresy nejde; bez něj `latest`), npm instalace (cesta přes `node_modules`, Pepa) → `registry.npmjs.org/
+  @anthropic-ai/claude-code/<kanál>` (to instaluje `claude update`), ostatní → `downloads.claude.ai/
+  claude-code-releases/<kanál>` (verze jako text). Odpověď musí vypadat jako verze, porovnává se jako semver bez
+  `+sha`. S `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` (prostředí nebo `env` v `settings.json`) se neptá. Spolu
+  s tím znovu `claude --version` (Claude Code se mezitím mohl aktualizovat sám), dohromady ~0,4 s. Ptá se po
+  připojení Clauda, každých 30 min, při otevření menu nejvýš jednou za hodinu (`RELEASE_STALE_S`), při otevření
+  nastavení po 10 min, „Zkontrolovat znovu“ hned. 13. 10.: latest 2.1.296 (Pepa ji má), stable 2.1.287.
+- **Aktualizace = `claude update` na pozadí** (`claude_setup.update`, `ClaudeConnection.update_claude`), bez okna:
+  na nic se neptá a trvá obvykle do minuty (limit 10 min). U winget instalace to, co spouští Claude Code sám
+  (`winget upgrade --id Anthropic.ClaudeCode --exact --silent --disable-interactivity`). Povedlo se = `claude
+  --version` je po ní vyšší (ne kód ukončení: s kódem 0 končí i „Another Claude process … try again“); jinak česká
+  věta podle výstupu (exe drží jiný program, aktualizuje se jinde, práva, síť, winget nic nemá), jinak poslední
+  řádek výstupu. Výstup jde do logu (posledních pár řádků). Z menu bublina na začátku a na konci (klik = nastavení),
+  s otevřeným nastavením jen v jeho boxu.
+- **Běžící relace zůstávají na staré verzi**: verze relace je v seznamu Claude Code (`~/.claude/sessions/<pid>.json`,
+  `version`, `sessions.running_versions`). Po aktualizaci box i bublina řeknou, kolik relací jede na starší, a že se
+  nová projeví po novém spuštění (Historie relací › Pokračovat v relaci). `/restart` (alias `/update`) Claude Code
+  na Windows nenabízí (jen macOS a Linux, ověřeno v `claude.exe`), proto se nezmiňuje.
+- Když jsou automatické aktualizace vypnuté (`autoUpdates: false` v `.claude.json`, u nativní instalace jen bez
+  `autoUpdatesProtectedForNative`, nebo `DISABLE_AUTOUPDATER`/`DISABLE_UPDATES`), box to u nové verze řekne.
+- Neověřeno: skutečná aktualizace z Orbitu (Pepa měl 13. 10. nejnovější verzi, `claude update` se v testech nespouští).
+
 ### Export a import slovníku (od 3. 10.)
 - Pepa chtěl přenést svůj slovník na jiný počítač. V nastavení u „Slovník“ jsou tlačítka „Exportovat…“
   a „Importovat…“ (plní pole dialogu, projeví se po Uložit), v menu Orbitu (ikona u hodin i pravý klik na tlačítko)
@@ -1212,7 +1326,7 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   ```
   Whisper server při zabití aplikace skončí sám (Job object).
 - Kontrola kódu: `.venv\Scripts\python.exe -m pyflakes app Orbit.pyw tests`.
-- **Testy** (od 7. 10., stdlib `unittest`, 204 testů, ~45 s): `.venv\Scripts\python.exe -m unittest discover -s tests`
+- **Testy** (od 7. 10., stdlib `unittest`, 268 testů, ~60 s): `.venv\Scripts\python.exe -m unittest discover -s tests`
   (jen část: `-p "test_core*.py"`, `test_claude*`, `test_dist*`, `test_ui*`; `test_ui_*` zkouší metody `Dictation`
   na stubu a `VoiceAgent` s falešným procesem, bez Clauda). Samy si nastaví `ORBIT_DATA_DIR`/`ORBIT_CLAUDE_DIR`
   na dočasné složky a uklidí po sobě. Nespouští `claude` ani whisper-server (místo něj malý server v Pythonu), klávesy
@@ -1240,7 +1354,7 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   instalátor by při běžícím Orbitu skončil a jinak by přepsal Pepův `Orbit.lnk`). Pak tiše `unins000.exe`.
 - Nepouštět v testech `claude auth login/logout`, instalátor Claude Code ani `claude update` (mění Pepovo přihlášení
   a instalaci); `claude_setup.install(…, visible=False)` / `login(exe=<falešný .cmd>, visible=False)` zkouší jen
-  spouštění.
+  spouštění, `claude_setup.update` se zkouší s nahrazeným `_run` (`tests/test_ui_claude_version.py`).
 - Testy se dělaly skripty po částech: přepis přes `WhisperServer` na vygenerované české řeči (`edge-tts`, hlasy
   `cs-CZ-AntoninNeural` / `cs-CZ-VlastaNeural`), vkládání do testovacího okna v jiném procesu, vzhled přes screenshot
   (`System.Drawing` nebo `QWidget.grab()` mimo obrazovku). **Klávesy posílat jen tehdy, když je testovací okno opravdu

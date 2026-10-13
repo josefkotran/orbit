@@ -18,9 +18,9 @@ from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication
 from PySide6.QtTextToSpeech import QTextToSpeech
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
 
-from . import (agent, artifacts, claude_cli, claude_settings, claude_usage, colors, config, downloads, ducking,
-               editing, favorites, history, hotkey, inserter, learning, pastsessions, paths, rewrite, sessions, tasks,
-               theme, vocab, voice, winutil)
+from . import (agent, artifacts, claude_cli, claude_settings, claude_setup, claude_usage, colors, config, downloads,
+               ducking, editing, favorites, history, hotkey, inserter, learning, pastsessions, paths, rewrite, sessions,
+               shells, tasks, theme, vocab, voice, winutil)
 from .favoritesview import FavoritesDialog, NewRepoDialog
 from .historyview import HistoryWindow
 from .inserter import Inserter
@@ -40,6 +40,7 @@ TAIL_MS = 250  # keep recording a moment after release – people let go while f
 KEEP_RECORDINGS = 30
 LIVE_FALLBACK_MS = 600  # if the mic sends only exact zeros (e.g. muted), start anyway after this
 STATUS_REFRESH_MS = 5_000  # the sessions' limits files (local, cheap); the OAuth endpoint: claude_usage.combined
+RELEASE_CHECK_MS = 30 * 60_000  # is there a newer Claude Code (an HTTP request and claude --version)
 SESSION_POLL_MS = 1000
 NOTIFY_TURN_S = 20  # a finished turn is announced only if Claude worked at least this long (else Pepa watched it)
 FORECAST_WARN = timedelta(minutes=60)  # warn when the 5-hour limit runs out sooner than this at the current pace
@@ -208,9 +209,12 @@ class Dictation:
         self.bubble: Bubble | None = None
         self.button.session_clicked.connect(self._focus_session)
         self.button.mute_toggled.connect(self._toggle_mute)
+        self.button.stop_reading.connect(self._stop_reading)
+        self.button.speaker_menu_requested.connect(self._show_speaker_menu)
         self.button.theme_chosen.connect(self._set_theme)
         self.button.set_muted(self.cfg["muted"])
         self.tracker = sessions.SessionTracker()
+        self.stopper = shells.Stopper()  # background shells to stop, through the session's mod orbit-mozek
         self.session_timer = QTimer(interval=SESSION_POLL_MS)
         self.session_timer.timeout.connect(self._poll_sessions)
         self.tts: QTextToSpeech | None = None
@@ -222,6 +226,7 @@ class Dictation:
         self.summarizer = artifacts.Summarizer()
         self._summary_lock = threading.Lock()  # one artifact after another
         self._artifact_speech = ""  # the last artifact summary, for reading it again
+        self._last_speech: tuple[str, str] = ("", "")  # the last text read aloud and its kind (the speaker's menu)
         self._usage_samples: list[tuple[datetime, float]] = []
         self._samples_window = None  # resets_at of the 5-hour window the samples belong to
         self._forecast_warned = None  # the 5-hour window we already warned about
@@ -279,6 +284,7 @@ class Dictation:
         self.button.set_notes_count(sum(t.status == "active" for t in self.tasks))
         self.button.connect_clicked.connect(lambda: self.open_wizard("claude"))
         self.button.statusline_clicked.connect(self._enable_statusline)
+        self.button.claude_update_clicked.connect(self.claude.update_claude)  # the panel itself shows it running
         self.button.set_usage_visible(self.cfg["show_usage"])
         self.button.set_fade_after(self.cfg["fade_after_s"])
         self._place_button()
@@ -309,6 +315,9 @@ class Dictation:
         self.retry_action = self.menu.addAction("Přepsat znovu poslední diktát", self._retry_dictation)
         self.retry_action.setEnabled(False)
         self.menu.addAction("Obnovit využití Clauda", lambda: self._fetch_usage(force=True))
+        # Claude Code's version, or its update on offer (_show_claude_version)
+        self.claude_version_action = self.menu.addAction("Claude Code", self._update_claude_from_menu)
+        self.claude_version_action.setVisible(False)
         self.menu.addAction("Naučit slovník z nových diktátů", lambda: self._maybe_learn(force=True))
         self.menu.addAction("Exportovat slovník…", self._export_vocabulary)
         self.menu.addAction("Importovat slovník…", self._import_vocabulary)
@@ -316,6 +325,7 @@ class Dictation:
         self.reread_action.setEnabled(False)
         self.menu.addSeparator()
         self.menu.addAction("Ukončit", QApplication.quit)
+        self.menu.aboutToShow.connect(self._menu_opening)
         self.tray = QSystemTrayIcon(self.icons["loading"])
         self.tray.setContextMenu(self.menu)
         self.tray.activated.connect(self._tray_activated)
@@ -351,6 +361,12 @@ class Dictation:
         self.usage_timer = QTimer(interval=STATUS_REFRESH_MS)
         self.usage_timer.timeout.connect(lambda: self._fetch_usage())
         self.claude.changed.connect(self._claude_changed)
+        self.claude.release_changed.connect(self._show_claude_version)
+        self.claude.updated.connect(self._claude_updated)
+        # the panel shows the version all the time: a newer one turns up there without opening a menu
+        self.release_timer = QTimer(interval=RELEASE_CHECK_MS)
+        self.release_timer.timeout.connect(lambda: self.claude.check_release(max_age=RELEASE_CHECK_MS / 1000 - 60))
+        self.release_timer.start()
         self.downloads.progress.connect(self._download_progress)
         self.downloads.finished.connect(self._download_finished)
 
@@ -528,6 +544,9 @@ class Dictation:
         What needs it is switched on or off only when "connected" itself changes."""
         connected = self.claude.connected
         self.button.set_claude(connected)
+        if connected:
+            self.claude.check_release()  # is there a newer Claude Code (at most once an hour)
+        self._show_claude_version()
         if connected == self._claude_was:
             return
         self._claude_was = connected
@@ -589,10 +608,7 @@ class Dictation:
         self.button.set_forecast(eta)
         if eta and eta - now <= FORECAST_WARN and self._forecast_warned != lim.resets_at:
             self._forecast_warned = lim.resets_at
-            local = eta.astimezone()
-            reset = claude_usage.reset_text(lim.resets_at)
-            self._notify(f"Při tomhle tempu ti 5hodinový limit dojde v {local.hour}:{local.minute:02d}"
-                         + (f", {reset}." if reset else "."), title="Limit Clauda")
+            self._notify(claude_usage.forecast_text(eta, lim.resets_at), title="Limit Clauda")
 
     def _usage_failed(self, msg, last=None):
         self._usage_inflight = False
@@ -1513,6 +1529,8 @@ class Dictation:
             threading.Thread(target=self._summarize_artifact, args=(pub,), daemon=True).start()
         if not self.cfg["show_sessions"]:
             return
+        for session_id, task, ok, text in self.stopper.answers():
+            self._shell_stopped(session_id, task, ok, text)
         changes = self.tracker.poll()
         current = sorted(self.tracker.sessions.values(), key=lambda s: (s.folder.lower(), s.started))
         self.button.set_sessions(current)
@@ -1541,10 +1559,14 @@ class Dictation:
             except OSError:
                 log.exception("Obarvení oken relací selhalo")
 
-    def _show_folder_menu(self, folder: str, pos: QPoint):
-        """A right click on a session in the panel: its folder's colour (the panel and, with tint_sessions, its
-        terminals), then Orbit's own menu."""
+    def _show_folder_menu(self, folder: str, session_id: str, pos: QPoint):
+        """A right click on a session in the panel: its background shells to stop, its folder's colour (the panel
+        and, with tint_sessions, its terminals), then Orbit's own menu."""
         menu = QMenu()
+        s = self.tracker.sessions.get(session_id)
+        if s and s.shells:
+            self._fill_shell_menu(menu, s)
+            menu.addSeparator()
         fill_color_menu(menu, folder, self.cfg["folder_colors"],
                         lambda color: self._set_folder_color(colors.key(folder), color))
         menu.addSeparator()
@@ -1552,6 +1574,58 @@ class Dictation:
         menu.addMenu(self.menu)
         self._folder_menu = menu  # (kept while it's open)
         menu.popup(pos)
+
+    def _fill_shell_menu(self, menu: QMenu, s: sessions.Session):
+        """Each background shell with what it does, a click stops it; the ones it most likely doesn't need at once."""
+        menu.addAction("Příkazy na pozadí").setEnabled(False)
+        whats = {t.get("id"): t.get("what", "") for t in s.background}
+        for shell in s.shells:
+            what = whats.get(shell.task) or shell.what or "příkaz"
+            what = what if len(what) <= 50 else what[:49] + "…"
+            if self.stopper.asked(s.id, shell.task):
+                menu.addAction(f"{what}: zastavuju…").setEnabled(False)
+                continue
+            action = menu.addAction(f"Zastavit: {what} ({shell.text})")
+            action.triggered.connect(lambda _=False, task=shell.task: self._stop_shells(s.id, [task]))
+        needless = [shell.task for shell in s.needless if not self.stopper.asked(s.id, shell.task)]
+        if len(needless) > 1:
+            menu.addAction(f"Zastavit nepotřebné ({len(needless)})").triggered.connect(
+                lambda: self._stop_shells(s.id, needless))
+
+    def _stop_shells(self, session_id: str, tasks: list[str]):
+        """Asks the session to stop them (its mod orbit-mozek calls TaskStop: Claude Code knows, the session isn't
+        woken up); the answer comes in _shell_stopped."""
+        s = self.tracker.sessions.get(session_id)
+        for task in tasks:
+            if self.stopper.ask(session_id, task):
+                log.info("Zastavuji příkaz na pozadí v relaci ve složce %s", s.folder if s else "?")
+
+    def _shell_stopped(self, session_id: str, task: str, ok: bool | None, text: str):
+        s = self.tracker.sessions.get(session_id)
+        if s is None:
+            return  # the session ended meanwhile, its shells with it
+        shell = next((shell for shell in s.shells if shell.task == task), None)
+        what = next((t.get("what") for t in s.background if t.get("id") == task), "") or "příkaz"
+        if ok or (ok is False and shell is not None and shell.kind == "gone"):  # stopped, or it had ended already
+            log.info("Příkaz na pozadí v relaci ve složce %s zastaven", s.folder)
+            self.tracker.watch.stopped.add((session_id, task))
+            s.announced = max(s.announced, s.since)  # its turn's end, once nothing waits, isn't news now
+        elif ok is None:
+            log.info("Relace ve složce %s na žádost o zastavení příkazu neodpověděla", s.folder)
+            self._notify(f"„{what}“ se nezastavil: relace na žádost neodpověděla (nemá mod orbit-mozek 0.3 nebo "
+                         f"novější). Klikni sem a ukončím ho natvrdo, relace se to ale dozví jako chybu příkazu "
+                         f"a ozve se.", title=s.name, kind="waiting", note="příkaz na pozadí",
+                         on_click=lambda: self._kill_shell(session_id, task))
+        else:
+            log.info("Claude Code příkaz na pozadí nezastavil: %s", text)
+            self._notify(f"Claude Code „{what}“ nezastavil: {text or 'neznámá chyba'}", title=s.name, error=True)
+
+    def _kill_shell(self, session_id: str, task: str):
+        if self.tracker.watch.kill(session_id, task):
+            log.info("Příkaz na pozadí ukončen natvrdo")
+            self._poll_sessions()
+        else:
+            self._notify("Ten příkaz už neběží.", title="Příkaz na pozadí")
 
     def _favorite_color(self, owner: QMenu, folder: str, pos: QPoint):
         """A right click on a folder under the + (or in Orbit's menu): its colours over that menu, which stays open
@@ -1602,8 +1676,9 @@ class Dictation:
 
     def _speak(self, text: str, wait: bool = False, kind: str = "", force: bool = False) -> bool:
         """Reads text aloud after whatever is being read now. While Pepa dictates it's dropped, or with `wait`
-        read once he's done. kind: "artifact" (lights up the speaker button), "agent" (its chip glows) or "confirm"
-        (the agent's question, see _ask_confirm); force: even when Orbit is muted (he asked for it).
+        read once he's done. kind: "artifact" (an artifact summary), "agent" (its chip glows), "confirm" (the
+        agent's question, see _ask_confirm) or "preview" (a voice sample); force: even when Orbit is muted (he asked
+        for it). Anything read lights up the speaker button.
         False when it won't be read at all (muted, a full-screen game, no Czech voice)."""
         if self.cfg["muted"] and not force:
             return False
@@ -1657,14 +1732,17 @@ class Dictation:
         self._speaking = bool(self._speech)
         text, kind = self._speech.pop(0) if self._speech else ("", "")
         self._reading_artifact = kind == "artifact"
-        self.button.set_reading(self._reading_artifact)
         if kind in ("agent", "confirm"):
             self._set_agent_state("speaking")
         elif self._agent_state == "speaking":
             self._set_agent_state(self._agent_rest())
         speaker = self._speaker() if text else None
+        # whatever is read, the speaker button shows it (and a click on it stops it, _stop_reading)
+        self.button.set_reading(speaker is not None)
         if speaker:
             self._said_at = time.monotonic()
+            if kind not in ("confirm", "preview"):  # a question to answer now, a voice sample: not worth again
+                self._last_speech = (text, kind)
             log.info("Čtu nahlas (%d znaků)", len(text))
             log.debug("Čtu: %s", text)
             speaker.say(text)
@@ -1708,7 +1786,7 @@ class Dictation:
         """The settings' "Poslechnout" button: a sample sentence in that voice (kept only if the settings are saved)."""
         self.cfg["voice"] = model
         self._stop_speech()
-        self._speak(voice.PREVIEW, force=True)
+        self._speak(voice.PREVIEW, kind="preview", force=True)
 
     # -- artifacts read aloud ---------------------------------------------------------------
 
@@ -1750,13 +1828,86 @@ class Dictation:
         self._speak(self._artifact_speech, kind="artifact", force=True)
 
     def _toggle_mute(self):
-        """The speaker button by the mic was clicked: no beeps, chimes or reading aloud (or all of them back)."""
+        """The speaker button by the mic was clicked: no beeps, chimes or reading aloud (or all of them back, with a
+        soft chime: that's how it sounds now)."""
         muted = self.cfg["muted"] = not self.cfg["muted"]
         config.save(self.cfg)
         log.info("Zvuky %s", "ztlumeny" if muted else "zapnuty")
         self.button.set_muted(muted)
         if muted:
             self._stop_speech()
+        else:
+            winutil.play("info")
+
+    def _stop_reading(self):
+        """The speaker button was clicked while Orbit read: silence now and forget what's queued. Not muting (until
+        10 Oct it did: a click to stop one answer left Orbit without beeps and reading until it was clicked again)."""
+        log.info("Čtení zastaveno tlačítkem reproduktoru")
+        self._stop_speech()
+        self.button.set_reading(False)
+
+    def _reread_last(self):
+        """The speaker's menu: the last text read aloud once more (a session's answer, an artifact, the agent's
+        reply), also when Orbit is muted (asked for)."""
+        text, kind = self._last_speech
+        if text:
+            self._stop_speech()
+            self._speak(text, kind="artifact" if kind == "artifact" else "", force=True)
+
+    def _show_speaker_menu(self, pos: QPoint):
+        """A right click on the speaker button: what's read now, the last text again, and Orbit's sound options."""
+        menu = QMenu()
+        if self._speaking:
+            menu.addAction("Zastavit čtení", self._stop_reading)
+        menu.addAction("Přečíst znovu poslední", self._reread_last).setEnabled(bool(self._last_speech[0]))
+        menu.addSeparator()
+        options = [("muted", "Ztlumit Orbit")]
+        if self.dialog is None:  # the open settings would put their own values back on Uložit
+            options.append(("sounds", "Pípnout při nahrávání"))
+            if self.claude.connected and self.cfg["claude_hooks"] and self.cfg["show_sessions"]:
+                options.append(("speak_answers", "Předčítat hotové odpovědi relací"))
+        for key, label in options:
+            action = menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(self.cfg[key])
+            action.triggered.connect(self._toggle_mute if key == "muted" else
+                                     lambda on, key=key: self._set_sound_option(key, on))
+        if self.dialog is None:
+            voices = menu.addMenu("Hlas pro předčítání")
+            voices.aboutToShow.connect(lambda: self._fill_voice_menu(voices))
+            self._fill_voice_menu(voices, ask_windows=False)  # (an empty submenu may not open at all)
+        menu.addSeparator()
+        menu.addAction("Nastavení…", self.open_settings)
+        self._speaker_menu = menu  # (kept while it's open)
+        menu.popup(pos)
+
+    def _fill_voice_menu(self, menu: QMenu, ask_windows: bool = True):
+        """The voices that can read here, the current one checked. Whether Windows has Jakub is asked only when the
+        submenu opens: that loads Windows' speech engine (~25 MB)."""
+        menu.clear()
+        current = voice.effective(self.cfg["voice"])
+        keys = voice.usable() if ask_windows else [current] if current else []
+        for key in keys:
+            action = menu.addAction(voice.VOICES[key])
+            action.setCheckable(True)
+            action.setChecked(key == current)
+            action.triggered.connect(lambda _=False, key=key: self._choose_voice(key))
+        if not keys:
+            menu.addAction("Žádný český hlas tu není").setEnabled(False)
+
+    def _set_sound_option(self, key: str, on: bool):
+        self.cfg[key] = on
+        config.save(self.cfg)
+        log.info("Zvuk %s: %s", key, on)
+
+    def _choose_voice(self, model: str):
+        """A voice from the speaker's menu: saved, and a sample sentence in it right away."""
+        self.cfg["voice"] = model
+        config.save(self.cfg)
+        log.info("Hlas pro předčítání: %s", model)
+        self._stop_speech()
+        self._prepare_voice()
+        self._speak(voice.PREVIEW, kind="preview", force=True)
 
     def _set_theme(self, name: str):
         """A colour dot above the panel was clicked."""
@@ -2513,6 +2664,83 @@ class Dictation:
     def _show_menu(self, pos: QPoint):
         self.menu.popup(pos)
 
+    def _menu_opening(self):
+        self.claude.check_release()  # at most once an hour; the item changes when the answer comes
+        self._show_claude_version()
+
+    def _show_claude_version(self):
+        """Claude Code's version in the panel (between it and the circles) and in the menu: whether it's the newest,
+        or the update on offer."""
+        self.button.set_claude_version(self._claude_version_line())
+        c, s = self.claude, self.claude.status
+        action = self.claude_version_action
+        action.setVisible(bool(s and s.installed))
+        if not action.isVisible():
+            return
+        r = c.release
+        name = f"Claude Code {r.installed if r and r.installed else s.version}".strip()
+        if c.updating:
+            text = "Aktualizuju Claude Code…"
+        elif r is not None and r.behind:
+            text = f"Aktualizovat Claude Code na {r.latest} (teď {r.installed})"
+        elif r is not None and r.latest:
+            text = f"{name}: nejnovější verze"
+        else:
+            text = f"{name}: zjišťuju novou verzi…" if c.checking_release else name
+        action.setText(text)
+        action.setEnabled(not c.updating and r is not None and r.behind)
+
+    def _claude_version_line(self) -> dict | None:
+        """What the panel's version pill shows (ui.FloatingButton.set_claude_version); None without Claude Code or
+        while its version isn't known."""
+        c, s = self.claude, self.claude.status
+        r = c.release
+        installed = (r.installed if r and r.installed else s.version) if s and s.installed else ""
+        if not installed:
+            return None
+        note, ok = c.update_note
+        state = "updating" if c.updating else "failed" if not ok and r and r.behind else \
+            "new" if r and r.behind else "current" if r and r.latest else "unknown"
+        if state == "updating":
+            tip = "Běží oficiální aktualizace Claude Code (claude update) na pozadí, obvykle do minuty."
+        elif state == "failed":
+            tip = f"{note}\nKlikni na Zkusit znovu."
+        elif state == "new":
+            tip = (f"Je nová verze Claude Code {r.latest} (teď máš {installed}).\nKlikni na Aktualizovat a spustím "
+                   "oficiální aktualizaci (claude update) na pozadí, obvykle do minuty. Běžící relace jedou dál na "
+                   "staré verzi, nová platí pro relace spuštěné potom.")
+            if not r.auto_updates:
+                tip += "\nAutomatické aktualizace má Claude Code vypnuté, proto sama nepřišla."
+        elif state == "current":
+            tip = f"Claude Code {installed} je nejnovější verze" + (
+                f" (kanál {r.channel})." if r.channel != "latest" else ".")
+        else:
+            tip = r.error if r and r.error else "Zjišťuju, jestli je novější verze."
+        if state != "updating" and (stale := claude_setup.stale_sessions_text(c.old_sessions)):
+            tip += "\n" + stale
+        return {"installed": installed, "latest": r.latest if r else "", "state": state, "target": c.updating,
+                "tip": tip}
+
+    def _update_claude_from_menu(self):
+        r = self.claude.release
+        self.claude.update_claude()
+        if self.claude.updating:
+            self._notify("Běží to na pozadí, obvykle do minuty. Ozvu se, až to bude hotové.",
+                         title=f"Aktualizuju Claude Code na {r.latest}" if r and r.behind else "Aktualizuju Claude Code")
+
+    def _claude_updated(self, result):
+        """How the update ended, in a bubble (open settings show it in their Claude box); a click opens the settings."""
+        if self.dialog is not None:
+            return
+        if not result.ok:
+            self._notify(result.text, title="Claude Code se neaktualizoval", error=True, on_click=self.open_settings)
+            return
+        stale = len(self.claude.old_sessions)
+        text = (f"Hotovo: {result.before} → {result.after}." if result.after != result.before else result.text) + (
+            f" Běžící relace ({stale}) jedou na staré verzi, dokud je neotevřeš znovu." if stale else "")
+        self._notify(text, title="Claude Code je aktualizovaný" if result.after != result.before else "Claude Code",
+                     kind="done", on_click=self.open_settings)
+
     def _set_button_visible(self, visible: bool):
         self.cfg["show_button"] = visible
         config.save(self.cfg)
@@ -2633,6 +2861,7 @@ class Dictation:
         self.bridge.captured.connect(dlg.on_captured)
         self.bridge.agent_captured.connect(dlg.on_agent_captured)
         self.claude.refresh()  # installed or logged in from a terminal since the last check
+        self.claude.check_release(max_age=600)
         dlg.show()
         dlg.raise_()
         dlg.activateWindow()

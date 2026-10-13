@@ -5,7 +5,7 @@ Claude Code 2.1.287 nebo novější. Fungují v terminálu i na kartě Code v ap
 
 | Mod | Co dělá |
 |---|---|
-| `orbit-mozek` | `/mozek` otevře vedle konverzace panel „Mozek“. Ukazuje, o čem Claude právě přemýšlí, co píše, které nástroje běží a jak dlouho, co dělají podagenti, „mozkovou vlnu“ (kolik napsal v každém kroku) a kontext rozdělený podle kategorií jako `/context`, s limity. Limity (5 h a týden) po každém tahu předá i panelu Orbitu: zapíše je do jeho datové složky v počítači, bez jediného dotazu na server. Nic se nikam neposílá. |
+| `orbit-mozek` | `/mozek` otevře vedle konverzace panel „Mozek“. Ukazuje, o čem Claude právě přemýšlí, co píše, které nástroje běží a jak dlouho, co dělají podagenti, „mozkovou vlnu“ (kolik napsal v každém kroku) a kontext rozdělený podle kategorií jako `/context`, s limity. Limity (5 h a týden) po každém tahu předá i panelu Orbitu: zapíše je do jeho datové složky v počítači, bez jediného dotazu na server. A když v panelu Orbitu zastavíš příkaz, který relace nechala zbytečně běžet na pozadí (server, který nikdo nepoužívá, visící příkaz), zastaví ho přes Claude Code (`TaskStop`), takže se relace neprobudí. Nic se nikam neposílá. |
 | `orbit-ukoly` | V relaci, kterou Orbit založil z úkolu v Poznámkách, je nad promptem řádek s úkolem a tlačítky **Poznámka** a **Hotovo**. Claude ví, na čem pracuje, a dostane dva nástroje: zapsat poznámku k úkolu a úkol dokončit. Orbit pak úkol přesune do Hotovo a ozve se bublinou. `/ukol` vypíše aktivní úkoly a relaci připojí k jednomu (`/ukol 2`), `/ukol odpojit` ji odpojí. |
 
 ## Instalace
@@ -32,6 +32,13 @@ restartu.
   (`{"task", "action": "note" | "done", "text", "from": "claude" | "user", "at"}`); Orbit je do 3 s převezme
   (`tasks.read_inbox`), soubor smaže a změní úkol. `tasks.json` tak zapisuje jen Orbit.
 - Poznámky od Clauda mají v Poznámkách na začátku „Claude:“.
+
+## Jak `orbit-mozek` zastaví příkaz na pozadí
+
+- Orbit zapíše žádost `<data>/sessions/stop/<relace>.<úloha>.json` (`{"session_id", "task_id", "time"}`). Mod ji do
+  2 s najde, zavolá `TaskStop` a vedle zapíše `<relace>.<úloha>.done.json` (`{"ok", "text"}`); oba soubory pak smaže
+  Orbit. Žádost starší než minuta se nevyřizuje.
+- Proč ne rovnou ukončit proces: Claude Code by to relaci ohlásil jako chybu příkazu a relace by začala nový tah.
 
 ## Vývoj
 

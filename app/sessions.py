@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import paths
+from . import paths, shells
 from .config import SESSIONS_DIR
 
 log = logging.getLogger(__name__)
@@ -286,9 +286,11 @@ class Session:
     mode: str = ""  # permission mode: default, acceptEdits, plan, auto, dontAsk, bypassPermissions ("" = not known)
     bypass_seen: bool = False  # it has run in bypassPermissions (so it was started with bypass allowed)
     loop: Loop | None = None  # a /loop running in it
-    # work the last turn left running (subagents, background shells, monitors, workflows): [{"type", "what"}]; while
-    # there is some, the session works on even though its turn ended (Claude Code reports it to the Stop hook)
+    # work the last turn left running (subagents, background shells, monitors, workflows): [{"type", "what", "id",
+    # "command"}]; while there is some, the session works on even though its turn ended (Claude Code reports it to the
+    # Stop hook), unless it's only servers and hung shells (shells.py)
     background: list = field(default_factory=list)
+    shells: list = field(default_factory=list)  # its background shells as Orbit sees them (shells.Shell)
 
     @property
     def folder(self) -> str:
@@ -320,13 +322,30 @@ class Session:
             kinds[kind] = kinds.get(kind, 0) + 1
         return ", ".join(f"{n}× {kind}" if n > 1 else kind for kind, n in kinds.items())
 
+    def background_notes(self, most: int = 6) -> list[str]:
+        """"Start local PHP preview: server (php) na :8770, nikdo ho nepoužil 48 min": each background task, a shell
+        with what it does."""
+        shells_by_task = {shell.task: shell for shell in self.shells}
+        notes = []
+        for task in self.background[:most]:
+            shell, what = shells_by_task.get(task.get("id", "")), task.get("what", "")
+            notes.append(f"{what}: {shell.text}" if shell and what else shell.text if shell else what)
+        return [note for note in notes if note]
+
+    @property
+    def needless(self) -> list:
+        """Its background shells that most likely aren't needed any more (shells.Shell.needless)."""
+        return [shell for shell in self.shells if shell.needless]
+
     def tooltip(self) -> str:
         lines = [f"{self.topic} ({self.folder})" if self.topic else self.folder,
                  STATE_LABELS[self.state] + (f": {summary(self.message, 1)}" if self.message and
                                              self.state in ("waiting", "error") else "")]
         if self.background:
             lines.append(f"Na pozadí běží: {self.background_text()}")
-            lines += [f"  · {task['what']}" for task in self.background[:4] if task.get("what")]
+            lines += [f"  · {note}" for note in self.background_notes()]
+            if self.needless:
+                lines.append("Co už nejspíš nepotřebuješ, zastavíš pravým klikem.")
         if self.context is not None:
             used = f"{self.context_tokens // 1000} tis. z {_size_text(self.context_size)} tokenů" \
                 if self.context_size else ""
@@ -352,6 +371,7 @@ class SessionTracker:
         self._transcript_cache: dict[str, tuple[float, int, str, str, bool]] = {}
         self._status_cache: dict[str, tuple[float, dict]] = {}  # session id -> (mtime, status line record)
         self._loops: dict[str, _LoopScan] = {}  # transcript path -> what it says about /loop so far
+        self.watch = shells.Watch()  # the sessions' background shells
         self._first = True
 
     def poll(self) -> list[tuple[Session, str]]:
@@ -403,6 +423,7 @@ class SessionTracker:
                     s.state = "idle"  # interrupted (Esc, "Stop."): Claude Code runs no Stop hook then
             else:  # no hook event yet: Claude Code's own busy/idle
                 s.state = "working" if reg.get("status") == "busy" else "idle"
+            self._look_at_shells(s)
             self._update_transcript(s)
             scan = self._loops.setdefault(s.transcript, _LoopScan())
             scan.read(s.transcript)
@@ -424,6 +445,7 @@ class SessionTracker:
             self.sessions[sid] = s
         for sid in set(self.sessions) - set(records) - set(running):
             del self.sessions[sid]
+        self.watch.forget(set(self.sessions))
         windows: dict[int, int] = {}
         for s in self.sessions.values():
             windows[s.hwnd] = windows.get(s.hwnd, 0) + 1
@@ -464,6 +486,20 @@ class SessionTracker:
                 s.state = "working"
         else:
             s.state = "idle"
+
+    def _look_at_shells(self, s: Session) -> None:
+        """Its background shells: what each does. The turn is over and nothing in the background will report back
+        when it's only servers and hung shells: then the session is done, not working (a dev server kept it
+        "pracuje" for hours)."""
+        waited = bool(s.background)
+        s.background = [t for t in s.background if (s.id, t.get("id")) not in self.watch.stopped]
+        tasks = [t for t in s.background if t.get("type") == "shell" and t.get("id")]
+        s.shells = self.watch.look(s.id, s.pid, tasks) if tasks else []
+        if not waited or s.state != "working":
+            return
+        shells_by_task = {shell.task: shell for shell in s.shells}
+        if all(t.get("id") in shells_by_task and not shells_by_task[t["id"]].keeps_working for t in s.background):
+            s.state = "done" if time.time() - s.since < DONE_FRESH_S else "idle"
 
     @staticmethod
     def _transcript_mtime(s: Session) -> float:
@@ -542,6 +578,12 @@ def _running() -> tuple[dict[str, dict], set[int]]:
 def running_ids() -> set[str]:
     """Ids of the interactive sessions running right now (the session history marks them "běží")."""
     return set(_running()[0])
+
+
+def running_versions() -> list[str]:
+    """The Claude Code version each interactive session running now was started with (after an update they stay on
+    the old one until they're started again)."""
+    return [str(entry["version"]) for entry in _running()[0].values() if entry.get("version")]
 
 
 def _find_transcript(session_id: str) -> str:

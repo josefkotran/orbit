@@ -173,9 +173,10 @@ def main() -> None:
     if "prompt" in record:
         record["prompt"] = str(record["prompt"])[:1000]  # for Orbit's voice agent; pasted text can be huge
     if isinstance(data.get("background_tasks"), list):  # Stop: work the turn left running (not "hotovo" yet)
-        record["background"] = [
+        record["background"] = [  # id and command: Orbit finds a shell's processes and output by them (shells.py)
             {"type": str(t.get("type") or ""),
-             "what": str(t.get("description") or t.get("command") or t.get("name") or "")[:160]}
+             "what": str(t.get("description") or t.get("command") or t.get("name") or "")[:160],
+             "id": str(t.get("id") or "")[:40], "command": str(t.get("command") or "")[:1000]}
             for t in data["background_tasks"][:12] if isinstance(t, dict)]
     pid = hwnd = 0
     try:  # the event counts even when its process or window can't be found

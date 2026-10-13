@@ -130,3 +130,43 @@ test('the limits go to Orbit, without asking anything', async ($, on) => {
     seven_day: { used_percentage: 41 },
   })
 })
+
+// Orbit asks the session to stop a background shell nobody needs: the mod finds the request in Orbit's data folder,
+// stops the shell with TaskStop (Claude Code knows, the session isn't woken up) and answers next to it. Another
+// session's request and one Orbit gave up on long ago are left alone.
+test('a shell Orbit asks to stop is stopped with TaskStop, and the answer goes back', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_760_000_000_000 })
+  engine(on)
+  on('session.id', () => ({ value: 'sess-1' }))
+  mock.env(on, { USERPROFILE: 'C:\\Users\\jana' })
+  const norm = (path: string): string => path.replace(/\\/g, '/')
+  const stopDir = 'C:/Users/jana/orbit/sessions/stop'
+  on('fs.exists', ($, e) => ({ value: norm(e.path) === 'C:/Users/jana/orbit/config.json' }))
+  const now = 1_760_000_000
+  const requests: Record<string, string> = {
+    'sess-1.bh3di8ppc.json': JSON.stringify({ session_id: 'sess-1', task_id: 'bh3di8ppc', time: now }),
+    'sess-2.bxfglwn8j.json': JSON.stringify({ session_id: 'sess-2', task_id: 'bxfglwn8j', time: now }),
+    'sess-1.bold0000.json': JSON.stringify({ session_id: 'sess-1', task_id: 'bold0000', time: now - 3600 }),
+  }
+  const file = (name: string) => ({ name, kind: 'file' as const, size: 80, mtimeMs: 1, isLink: false })
+  on('fs.list', ($, e) => ({ value: norm(e.path ?? '') === stopDir ? Object.keys(requests).map(file) : [] }) as never)
+  on('fs.read', ($, e) => ({ value: requests[norm(e.path).split('/').pop() ?? ''] ?? '' }) as never)
+  const written: { path: string; text: string }[] = []
+  on('fs.write', ($, e) => {
+    written.push({ path: norm(e.path), text: e.text })
+    return { value: undefined }
+  })
+  const stopped: string[] = []
+  on('tool.call', { tool: 'TaskStop' }, ($, e) => {
+    stopped.push(String((e as { task_id?: string }).task_id))
+    return { result: { message: 'Successfully stopped task' }, text: 'Successfully stopped task: bh3di8ppc' } as never
+  })
+
+  await $.session.start({ cwd: 'C:/projekt', surface: 'terminal', isInteractive: true })
+  await clock.advance(2_000)
+  expect(stopped).toEqual(['bh3di8ppc'])
+  expect(written.map(w => w.path)).toEqual([`${stopDir}/sess-1.bh3di8ppc.done.json`])
+  expect(JSON.parse(written[0]!.text)).toEqual({ ok: true, text: 'Successfully stopped task: bh3di8ppc' })
+  await clock.advance(4_000) // the same request again (Orbit hasn't removed it yet): not stopped twice
+  expect(stopped).toEqual(['bh3di8ppc'])
+})

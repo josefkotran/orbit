@@ -5,14 +5,14 @@ from pathlib import Path
 
 from PySide6.QtCore import (QEasingCurve, QEvent, QPoint, QPointF, QPropertyAnimation, QRect, QRectF, QSize,
                             QStandardPaths, Qt, QTimer, QUrl, Signal)
-from PySide6.QtGui import (QColor, QDesktopServices, QFont, QFontMetricsF, QGuiApplication, QIcon, QPainter,
-                           QPainterPath, QPen, QPixmap, QPolygonF, QRadialGradient, QRegion, QTextLayout)
+from PySide6.QtGui import (QColor, QCursor, QDesktopServices, QFont, QFontMetricsF, QGuiApplication, QIcon,
+                           QPainter, QPainterPath, QPen, QPixmap, QPolygonF, QRadialGradient, QRegion, QTextLayout)
 from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
                                QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QToolTip,
                                QVBoxLayout, QWidget)
 
-from . import colors, config, downloads, history, hotkey, theme, vocab, voice
-from .claude_usage import Usage, countdown, reset_text
+from . import claude_setup, colors, config, downloads, history, hotkey, theme, vocab, voice
+from .claude_usage import Usage, clock, countdown, forecast_text, reset_text
 from .config import MODEL_LABELS
 from .sessions import STATE_LABELS, Session
 from .theme import GLYPH_KEYBOARD, GLYPH_MOUSE, LISTEN, TEXT, LevelWave, Toggle, glyph_icon, style_titlebar
@@ -26,8 +26,10 @@ DICTATIONS_GLYPH = chr(0xE8BD)  # "Message" (a bubble with lines): the dictation
 ADD_GLYPH = chr(0xE710)  # "Add": the + above the panel, a new Claude Code session in a favourite folder
 CHOOSE_GLYPH = chr(0xE762)  # "MultiSelect": "Vybrat složky…" in the +'s menu
 LOOP_GLYPH = chr(0xE8EE)  # "RepeatAll": a session running a /loop
+SHELL_GLYPH = chr(0xE756)  # "CommandPrompt": background shells it most likely doesn't need any more (shells.py)
 SPEAKER_GLYPH = chr(0xE767)  # "Volume"
 MUTE_GLYPH = chr(0xE74F)  # "Mute"
+WAVE_GLYPHS = (chr(0xE993), chr(0xE994), chr(0xE995))  # "Volume1"–"Volume3": the waves grow while Orbit reads
 
 COLORS = {  # state: (background, glyph)
     "idle": ("#2F3542", "#FFFFFF"),
@@ -171,9 +173,10 @@ class FloatingButton(QWidget):
     """Always-on-top round mic button that never takes keyboard focus from the window you type into.
 
     Optionally shows a small Claude usage panel above (or below, near the top of the screen) the button.
-    A second circle of the same size left of the mic mutes all of Orbit's sounds. Three small colour dots outside
-    the panel's far right corner switch the colour theme; next to them sits the voice agent's chip (a planet with
-    a ring and a moon), and the agent's last exchange shows at the bottom of the panel.
+    A second circle of the same size left of the mic is the speaker: a click stops what's being read, otherwise it
+    mutes all of Orbit's sounds (or turns them back on); its right click has the sound options. Three small colour
+    dots outside the panel's far right corner switch the colour theme; next to them sits the voice agent's chip (a
+    planet with a ring and a moon), and the agent's last exchange shows at the bottom of the panel.
     """
 
     pressed = Signal()
@@ -181,9 +184,11 @@ class FloatingButton(QWidget):
     cancelled = Signal()
     moved = Signal(QPoint)  # new top-left of the button area, in screen coordinates
     menu_requested = Signal(QPoint)
-    folder_menu_requested = Signal(str, QPoint)  # a right click on a session: its folder
+    folder_menu_requested = Signal(str, str, QPoint)  # a right click on a session: its folder, its id
     session_clicked = Signal(str)
     mute_toggled = Signal()
+    stop_reading = Signal()  # the speaker clicked while Orbit reads: stop that, the sounds stay on
+    speaker_menu_requested = Signal(QPoint)  # a right click on the speaker: its menu at this point (global)
     theme_chosen = Signal(str)
     agent_clicked = Signal()
     notes_clicked = Signal()  # the notebook above the panel's left end: the user's tasks
@@ -193,6 +198,7 @@ class FloatingButton(QWidget):
     new_session_clicked = Signal(QPoint, bool)
     connect_clicked = Signal()  # "Připojit Clauda" in the panel
     statusline_clicked = Signal()  # "Zapnout" in the panel: the yes to Orbit's status line in Claude Code
+    claude_update_clicked = Signal()  # "Aktualizovat" in the version pill under the panel
 
     DIAMETER = 52
     MARGIN = 10
@@ -208,6 +214,8 @@ class FloatingButton(QWidget):
     AGENT_D = 30  # the voice agent's chip left of the pill
     STRIP_H = 40  # the chip (with its glow), the pill and the gap to the panel
     FEED_LINE = 15  # a text line of the agent's part of the panel
+    VER_PILL_H = 22  # Claude Code's version, in a pill between the panel and the circles
+    VER_GAP = 5  # from the panel to the pill (the mic's square has its own margin on the other side)
     AGENT_STATUS = {"listening": "Poslouchám…", "transcribing": "Přepisuji…", "thinking": "Přemýšlím…",
                     "speaking": "Mluví", "confirm": "Mám? Řekni „jo“"}
     SEND_STATUS = {  # status of a message for a session: (label, colour or None = dim)
@@ -226,6 +234,7 @@ class FloatingButton(QWidget):
         self.setAttribute(Qt.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WA_AlwaysShowToolTips)
         self.setCursor(Qt.PointingHandCursor)
+        self.setMouseTracking(True)  # the speaker lights up under the mouse (mouseMoveEvent)
         self._level_source = level_source
         self._level = 0.0
         self._state = "loading"
@@ -239,12 +248,20 @@ class FloatingButton(QWidget):
         self._dragging = False
         self._hovered = False
         self._muted = False  # no beeps, chimes or reading aloud
-        self._reading = False  # an artifact summary is being read right now
+        self._reading = False  # Orbit reads something aloud right now (a session's answer, an artifact, the agent)
+        self._speaker_hover = False  # the mouse is over the speaker (a lighter circle; while reading the stop sign)
+        self._speaker_down = False  # pressed on the speaker, not let go yet
+        self._press_reading = False  # it was reading when pressed: the click stops that
+        self._wave = 0  # which of WAVE_GLYPHS while reading
         self._agent_on = False  # the voice agent is enabled: its chip sits next to the colour dots
         self._agent_key = hotkey.binding_name({"kind": "mouse", "code": hotkey.MOUSE_X1})  # its button's name
         self._agent_state = "idle"  # idle / listening / transcribing / thinking / speaking / confirm
         self._agent_feed: dict | None = None  # its last exchange, shown at the bottom of the panel
         self._feed_rect = QRectF()
+        # Claude Code's version under the panel: {"installed", "latest", "state", "target", "tip"} (Dictation's
+        # _claude_version_line), None = not shown
+        self._version: dict | None = None
+        self._version_hover = False  # the mouse is over its button
 
         self._show_usage = False
         self._claude: bool | None = None  # Claude connected (None = still finding out); not: a call to action
@@ -275,6 +292,9 @@ class FloatingButton(QWidget):
         self._work_icons: list[QRectF] = []  # where they were painted last
         self._work_timer = QTimer(self, interval=80)
         self._work_timer.timeout.connect(self._work_tick)
+        # the speaker's waves while Orbit reads: only the speaker's square is repainted (paintEvent)
+        self._wave_timer = QTimer(self, interval=320)
+        self._wave_timer.timeout.connect(self._wave_tick)
         self._clock = QTimer(self, interval=30_000)  # keeps the reset countdown current
         self._clock.timeout.connect(self.update)
         self._clock.start()
@@ -315,6 +335,15 @@ class FloatingButton(QWidget):
             h += self.SEP_H + self.ROW_H + len(self._feed_rows()) * self.FEED_LINE
         return h
 
+    @property
+    def _has_version(self) -> bool:
+        return self._version is not None and self._has_panel
+
+    @property
+    def _version_h(self) -> int:
+        """The band between the panel and the circles that holds the version pill."""
+        return self.VER_PILL_H + self.VER_GAP if self._has_version else 0
+
     def _relayout(self, keep_button_in_place: bool = True) -> None:
         anchor = self.button_pos()
         side, slot = self._side, self._slot
@@ -323,7 +352,7 @@ class FloatingButton(QWidget):
             self._btn_off = QPoint(slot, 0)
             self.setFixedSize(slot + side, side)
         else:
-            ph = self._panel_height()
+            ph, vh = self._panel_height(), self._version_h
             if self._align == "center":  # both circles centered under the panel
                 w = max(self.PANEL_W, slot + side)
                 bx, px = (w - slot - side) // 2 + slot, (w - self.PANEL_W) // 2
@@ -334,10 +363,11 @@ class FloatingButton(QWidget):
                 px = 4
                 w = px + self.PANEL_W
                 bx = slot
-            by, py = (0, side) if self._below else (self.STRIP_H + ph, self.STRIP_H)  # dots on the far side
+            # dots on the far side, the version between the panel and the circles
+            by, py = (0, side + vh) if self._below else (self.STRIP_H + ph + vh, self.STRIP_H)
             self._btn_off = QPoint(bx, by)
             self._panel = QRectF(px, py, self.PANEL_W, ph)
-            self.setFixedSize(w, self.STRIP_H + ph + side)
+            self.setFixedSize(w, self.STRIP_H + ph + vh + side)
         if keep_button_in_place:
             self.move(anchor - self._btn_off)
         self.update()
@@ -363,7 +393,7 @@ class FloatingButton(QWidget):
         third = geo.width() / 6
         align = "right" if center.x() > geo.center().x() + third else \
             "left" if center.x() < geo.center().x() - third else "center"
-        below = self.button_pos().y() - self._panel_height() - self.STRIP_H < geo.top()
+        below = self.button_pos().y() - self._panel_height() - self.STRIP_H - self._version_h < geo.top()
         if (align, below) != (self._align, self._below):
             self._align, self._below = align, below
             self._relayout()
@@ -437,6 +467,64 @@ class FloatingButton(QWidget):
         c = self._notes_center()
         return c is not None and math.hypot(pos.x() - c.x(), pos.y() - c.y()) <= self.AGENT_D / 2 + 2
 
+    @staticmethod
+    def _version_fonts() -> tuple[QFont, QFont, QFont]:
+        """The pill's text, its version numbers, its button."""
+        font = QFont("Segoe UI")
+        font.setPixelSize(12)
+        bold = QFont(font)
+        bold.setWeight(QFont.DemiBold)
+        button = QFont(bold)
+        button.setPixelSize(11)
+        return font, bold, button
+
+    def _version_parts(self) -> tuple[list[tuple[str, str, bool]], str]:
+        """What the version pill says, [(text, colour, bold)], and its button's label ("" = none)."""
+        v = self._version or {}
+        dim, text = "#9AA1AD", "#E6E8EC"
+        state, installed = v.get("state"), v.get("installed", "")
+        name = [("Claude Code ", dim, False), (installed, text, True)]
+        if state == "updating":
+            target = v.get("target", "")
+            return ([("Aktualizuju Claude Code na ", dim, False), (target, text, True), ("…", dim, False)]
+                    if target and target != "?" else [("Aktualizuju Claude Code…", dim, False)]), ""
+        if state == "new":
+            return name + [("  →  ", dim, False), (v.get("latest", ""), "#F5A524", True)], "Aktualizovat"
+        if state == "failed":
+            return name + [("  aktualizace se nepovedla", "#F5A524", False)], "Zkusit znovu"
+        if state == "current":
+            return name + [("  ✓ nejnovější", "#3DD68C", False)], ""
+        return name, ""
+
+    def _version_layout(self) -> tuple[QRectF, QRectF]:
+        """The pill: between the panel and the circles, lined up with the panel's edge above the circles (centred
+        under a centred panel); and its button's rect (empty: no button)."""
+        if not self._has_version:
+            return QRectF(), QRectF()
+        parts, label = self._version_parts()
+        font, bold, button_font = self._version_fonts()
+        text_w = sum(QFontMetricsF(bold if b else font).horizontalAdvance(t) for t, _, b in parts)
+        button_w = QFontMetricsF(button_font).horizontalAdvance(label) + 18 if label else 0
+        w = min(self._panel.width(), 12 + text_w + (8 + button_w + 3 if label else 12))
+        h = self.VER_PILL_H
+        y = self._panel.top() - self.VER_GAP - h if self._below else self._panel.bottom() + self.VER_GAP
+        x = self._panel.right() - w if self._align == "right" else self._panel.left() if self._align == "left" \
+            else self._panel.center().x() - w / 2
+        pill = QRectF(x, y, w, h)
+        button = QRectF(pill.right() - 3 - button_w, pill.top() + 3, button_w, h - 6) if label else QRectF()
+        return pill, button
+
+    def _on_version(self, pos: QPointF) -> bool:
+        return self._version_layout()[0].contains(pos)
+
+    def _on_version_button(self, pos: QPointF) -> bool:
+        return self._version_layout()[1].contains(pos)
+
+    def _set_version_hover(self, on: bool) -> None:
+        if on != self._version_hover:
+            self._version_hover = on
+            self.update(self._version_layout()[0].toAlignedRect().adjusted(-1, -1, 1, 1))
+
     def _dictations_center(self) -> QPointF | None:
         """The dictation history's chip: right of the notebook's (no Claude needed)."""
         notes = self._notes_center()
@@ -503,6 +591,19 @@ class FloatingButton(QWidget):
         if connected != self._claude:
             self._resize_after(lambda: setattr(self, "_claude", connected))
 
+    def set_claude_version(self, version: dict | None) -> None:
+        """Claude Code's version in a pill between the panel and the circles (Pepa, 13 Oct: always in sight, with
+        the update when there's a newer one). version: {"installed", "latest", "state" (current / new / updating /
+        failed / unknown), "target" (the version being installed), "tip"}; None hides it."""
+        if version == self._version:
+            return
+        had = self._has_version
+        self._version = version
+        if self._has_version != had:
+            self._relayout()
+            self._auto_align()
+        self.update()
+
     def set_forecast(self, eta: datetime | None) -> None:
         """When the 5-hour limit runs out at the current pace (None = not before it resets)."""
         self._forecast = eta
@@ -513,7 +614,7 @@ class FloatingButton(QWidget):
         """What the rows show (_paint_sessions): a poll every second that changes none of it repaints nothing (one
         repaint of the layered window ~19 ms, half of Orbit's idle CPU)."""
         return tuple((s.id, s.state, s.name, s.folder, bool(s.topic), s.loop.label() if s.loop else "",
-                      None if s.context is None else round(s.context * 100)) for s in sessions)
+                      None if s.context is None else round(s.context * 100), len(s.needless)) for s in sessions)
 
     def set_sessions(self, sessions: list[Session]) -> None:
         # the tracker changes its Session objects in place: what the rows show is kept, not worked out again from
@@ -559,7 +660,7 @@ class FloatingButton(QWidget):
     def set_muted(self, on: bool) -> None:
         if on != self._muted:
             self._muted = on
-            self.update()
+            self._update_speaker()
 
     def set_agent(self, on: bool, key: str = "") -> None:
         """key: the name of the agent's button (for its tooltip)."""
@@ -588,10 +689,40 @@ class FloatingButton(QWidget):
         self.update()
 
     def set_reading(self, on: bool) -> None:
+        """Orbit reads aloud (anything: a session's answer, an artifact, the agent): the speaker in the accent colour
+        with growing waves, a stop sign under the mouse."""
         if on != self._reading:
             self._reading = on
-            self.update()
+            self._wave = 0
+            self._wave_timer.start() if on else self._wave_timer.stop()
+            self._update_speaker()
             self._wake()
+
+    def _wave_tick(self) -> None:
+        self._wave = (self._wave + 1) % len(WAVE_GLYPHS)
+        if not self._speaker_hover:  # the stop sign doesn't move
+            self._update_speaker()
+
+    def _speaker_rect(self) -> QRectF:
+        c, r = self._speaker_center(), self.DIAMETER / 2
+        return QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r)
+
+    def _speaker_area(self) -> QRect:
+        """What a repaint of the speaker alone covers: its circle and its outline."""
+        return self._speaker_rect().toAlignedRect().adjusted(-1, -1, 1, 1)
+
+    def _update_speaker(self) -> None:
+        """Repaints just the speaker (paintEvent's short way), and a tooltip that's showing says what a click does
+        now."""
+        self.update(self._speaker_area())
+        if self._speaker_hover and QToolTip.isVisible():
+            QToolTip.showText(QCursor.pos(), self._speaker_tooltip(), self)
+
+    def _set_speaker_hover(self, on: bool) -> None:
+        if on != self._speaker_hover:
+            self._speaker_hover = on
+            self._speaker_down = self._speaker_down and on
+            self.update(self._speaker_area())
 
     def _stale(self) -> bool:
         if self._usage is None:
@@ -650,6 +781,8 @@ class FloatingButton(QWidget):
 
     def leaveEvent(self, event):
         self._hovered = False
+        self._set_speaker_hover(False)
+        self._set_version_hover(False)
         self._wake()
         super().leaveEvent(event)
 
@@ -658,6 +791,17 @@ class FloatingButton(QWidget):
     def paintEvent(self, event):
         if self._work_icons and self._has_panel and self._only_work_icons(event.region()):
             self._paint_work_icons()
+            return
+        if event.region().subtracted(QRegion(self._speaker_area())).isEmpty():
+            # just the speaker (its waves, the mouse over it, a click): nothing else is under its square, so it's
+            # cleared and painted alone, not the whole panel
+            p = QPainter(self)
+            p.setRenderHint(QPainter.Antialiasing)
+            p.setCompositionMode(QPainter.CompositionMode_Source)
+            p.fillRect(self._speaker_area(), Qt.transparent)
+            p.setCompositionMode(QPainter.CompositionMode_SourceOver)
+            self._paint_speaker(p)
+            p.end()
             return
         self._work_icons = []
         p = QPainter(self)
@@ -670,6 +814,7 @@ class FloatingButton(QWidget):
             self._paint_glyph_chip(p, self._dictations_center(), DICTATIONS_GLYPH, 14)
             self._paint_history_chip(p)
             self._paint_new_chip(p)
+            self._paint_version(p)
         c = self._button_center()
         r = self.DIAMETER / 2
         if self._state == "recording":
@@ -688,25 +833,52 @@ class FloatingButton(QWidget):
         self._paint_speaker(p)
 
     def _paint_speaker(self, p: QPainter) -> None:
-        """The speaker circle, styled like the mic: speaker = Orbit makes sounds, grey crossed speaker = muted,
-        accent colour = reading aloud right now."""
-        c, r = self._speaker_center(), self.DIAMETER / 2
-        rect = QRectF(c.x() - r, c.y() - r, 2 * r, 2 * r)
-        p.setPen(QPen(QColor(0, 0, 0, 60), max(1.0, rect.width() / 40)))
-        p.setBrush(QColor(theme.ACCENT) if self._reading else theme.tint("#2F3542"))
+        """The speaker circle, styled like the mic: white speaker = Orbit makes sounds, grey crossed speaker =
+        muted, accent colour with growing waves = reading aloud right now (under the mouse a stop sign: that's what
+        a click does then). Lighter under the mouse, darker while pressed."""
+        rect = self._speaker_rect()
+        if self._reading:
+            bg = QColor(theme.ACCENT).lighter(112) if self._speaker_hover else QColor(theme.ACCENT)
+        else:
+            bg = theme.tint("#3B4356" if self._speaker_hover else "#2F3542")
+        if self._speaker_down:
+            bg = bg.darker(118)
+        outline = QColor(255, 255, 255, 60) if self._speaker_hover else QColor(0, 0, 0, 60)
+        p.setPen(QPen(outline, max(1.0, rect.width() / 40)))
+        p.setBrush(bg)
         p.drawEllipse(rect)
+        if self._reading and self._speaker_hover:  # stop
+            side = rect.width() * 0.27
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor("#FFFFFF"))
+            stop = QRectF(0, 0, side, side)
+            stop.moveCenter(rect.center())
+            p.drawRoundedRect(stop, 2.5, 2.5)
+            return
         font = QFont(theme.icon_font())
         font.setPixelSize(int(rect.height() * 0.46))
         p.setFont(font)
-        p.setPen(QColor("#8B96AD" if self._muted else "#FFFFFF"))
-        p.drawText(rect, Qt.AlignCenter, MUTE_GLYPH if self._muted else SPEAKER_GLYPH)
+        if self._reading:
+            # from where the whole speaker starts: centred, a glyph with fewer waves would move the speaker sideways
+            left = rect.center().x() - QFontMetricsF(font).horizontalAdvance(SPEAKER_GLYPH) / 2
+            p.setPen(QColor("#FFFFFF"))
+            p.drawText(QRectF(left, rect.top(), rect.right() - left, rect.height()), Qt.AlignLeft | Qt.AlignVCenter,
+                       WAVE_GLYPHS[self._wave])
+        elif self._muted:
+            p.setPen(QColor("#B5BED0" if self._speaker_hover else "#8B96AD"))
+            p.drawText(rect, Qt.AlignCenter, MUTE_GLYPH)
+        else:
+            p.setPen(QColor("#FFFFFF"))
+            p.drawText(rect, Qt.AlignCenter, SPEAKER_GLYPH)
 
     def _speaker_tooltip(self) -> str:
-        if self._muted:
-            return "Orbit je ztlumený: nepípá, bubliny jsou bez zvuku a nic nečte nahlas.\nKlikni a zvuky zapneš."
+        more = "\nPravým tlačítkem: přečíst znovu, pípání, hlas."
         if self._reading:
-            return "Čtu nahlas. Klikni a Orbit ztlumíš."
-        return "Zvuky jsou zapnuté: pípání, zvuky bublin a předčítání.\nKlikni a Orbit ztlumíš."
+            return "Čtu nahlas. Klikni a přestanu (zvuky zůstanou zapnuté)." + more
+        if self._muted:
+            return ("Orbit je ztlumený: nepípá, bubliny jsou bez zvuku a nic nečte nahlas.\nKlikni a zvuky zapneš."
+                    + more)
+        return "Zvuky jsou zapnuté: pípání, zvuky bublin a předčítání.\nKlikni a Orbit ztlumíš." + more
 
     def _paint_dots(self, p: QPainter) -> None:
         """Theme colour dots in a small pill of the panel's style; a ring marks the current one."""
@@ -728,6 +900,36 @@ class FloatingButton(QWidget):
                 p.setPen(QPen(QColor("#E6E8EC"), 1.5))
                 p.setBrush(Qt.NoBrush)
                 p.drawEllipse(c, r + 2.5, r + 2.5)
+
+    def _paint_version(self, p: QPainter) -> None:
+        """Claude Code's version in a pill of the panel's style (readable on any wallpaper), with "Aktualizovat"
+        in the accent colour when there's a newer one."""
+        pill, button = self._version_layout()
+        if pill.isEmpty():
+            return
+        parts, label = self._version_parts()
+        font, bold, button_font = self._version_fonts()
+        half = pill.height() / 2
+        p.setPen(QPen(QColor(255, 255, 255, 28), 1))
+        p.setBrush(self._panel_bg())
+        p.drawRoundedRect(pill.adjusted(0.5, 0.5, -0.5, -0.5), half, half)
+        x, room = pill.left() + 12, (button.left() - 8 if label else pill.right() - 12)
+        for text, color, is_bold in parts:
+            f = bold if is_bold else font
+            p.setFont(f)
+            p.setPen(QColor(color))
+            shown = QFontMetricsF(f).elidedText(text, Qt.ElideRight, max(0.0, room - x))
+            p.drawText(QRectF(x, pill.top(), max(0.0, room - x), pill.height()), Qt.AlignLeft | Qt.AlignVCenter,
+                       shown)
+            x += QFontMetricsF(f).horizontalAdvance(shown)
+        if label:
+            bg = QColor(theme.ACCENT)
+            p.setPen(Qt.NoPen)
+            p.setBrush(bg.lighter(115) if self._version_hover else bg)
+            p.drawRoundedRect(button, button.height() / 2, button.height() / 2)
+            p.setFont(button_font)
+            p.setPen(QColor(theme.ON_ACCENT))
+            p.drawText(button, Qt.AlignCenter, label)
 
     def _paint_notes_chip(self, p: QPainter) -> None:
         """The user's notebook (their own tasks): an empty spiral notebook in a chip like the agent's, with the
@@ -908,27 +1110,47 @@ class FloatingButton(QWidget):
             p.drawLine(QPointF(x, y + self.SEP_H / 2), QPointF(right, y + self.SEP_H / 2))
             self._paint_feed(p, x, right, y + self.SEP_H, font, bold, text, dim)
 
-    def _paint_header_note(self, p: QPainter, header: QRectF, font: QFont, text: QColor, dim: QColor) -> None:
-        """Right side of the header: when the 5-hour window resets – or when it runs out first at this pace."""
+    def _header_note(self, room: float, metrics: QFontMetricsF) -> tuple[str, str, bool]:
+        """Right side of the header, the longest wording that fits in room: (orange warning, dim rest, the refresh
+        icon before it). When the 5-hour limit resets – and when it runs out first at this pace, never one without
+        the other (Pepa, 10 Oct: a bare "dojde v 15:51" with the reset time gone said nothing)."""
         session = self._usage.get("session") if self._usage else None
-        note, refresh_icon = "", False
+        resets = session.resets_at if session else None
         if self._usage_error and self._stale():
-            note = "neaktuální"
-        elif self._forecast:
-            local = self._forecast.astimezone()
-            note = f"dojde v {local.hour}:{local.minute:02d}"
-            p.setPen(QColor("#F5A524"))
-        elif session and session.resets_at:
-            note, refresh_icon = countdown(session.resets_at), True
+            return "", "neaktuální", False
+        if self._forecast:
+            eta = clock(self._forecast)
+            wordings = [(f"Při tomhle tempu vyčerpáš limit 5 h v {eta}", f" · obnoví se až v {clock(resets)}"),
+                        (f"Limit 5 h vyčerpáš asi v {eta}", f" · obnoví se v {clock(resets)}"),
+                        (f"5 h dojde v {eta}", f" · obnova {clock(resets)}")] if resets else \
+                [(f"Při tomhle tempu vyčerpáš limit 5 h v {eta}", ""), (f"Limit 5 h vyčerpáš asi v {eta}", ""),
+                 (f"5 h dojde v {eta}", "")]
+            fits = [w for w in wordings if metrics.horizontalAdvance(w[0] + w[1]) <= room]
+            return (*(fits or wordings)[0], False)
+        if resets:
+            left = countdown(resets)
+            wordings = [f"limit 5 h se obnoví v {clock(resets)}" + (f" (za {left})" if left != "teď" else ""),
+                        f"5 h: obnova v {clock(resets)}", left]
+            return "", next((w for w in wordings if metrics.horizontalAdvance(w) + 18 <= room), wordings[-1]), True
+        return "", "", False
+
+    def _paint_header_note(self, p: QPainter, header: QRectF, font: QFont, text: QColor, dim: QColor) -> None:
+        metrics = QFontMetricsF(font)
+        room = header.width() - QFontMetricsF(p.font()).horizontalAdvance("Claude") - 16
+        warning, rest, refresh_icon = self._header_note(room, metrics)
         p.setFont(font)
-        p.drawText(header, Qt.AlignRight | Qt.AlignVCenter, note)
+        rest_w = metrics.horizontalAdvance(rest)
+        p.setPen(dim)
+        p.drawText(header, Qt.AlignRight | Qt.AlignVCenter, rest)
+        if warning:
+            p.setPen(QColor("#F5A524"))
+            p.drawText(header.adjusted(0, 0, -rest_w, 0), Qt.AlignRight | Qt.AlignVCenter, warning)
         if refresh_icon:
             icon_font = QFont(theme.icon_font())
             icon_font.setPixelSize(12)
             p.setFont(icon_font)
             p.setPen(text)
-            text_w = QFontMetricsF(font).horizontalAdvance(note)
-            p.drawText(QRectF(header.right() - text_w - 18, header.top(), 14, header.height()),
+            p.drawText(QRectF(header.right() - rest_w - 18, header.top(), 14, header.height()),
                        Qt.AlignCenter, REFRESH_GLYPH)
 
     def _paint_link_row(self, p: QPainter, row: QRectF, note: str, link: str, kind: str, font: QFont, bold: QFont,
@@ -990,8 +1212,9 @@ class FloatingButton(QWidget):
 
     def _paint_sessions(self, p: QPainter, x: float, right: float, y: float, font: QFont, bold: QFont,
                         text: QColor, dim: QColor) -> float:
-        """One row per Claude Code session: status dot, its topic (with a /loop: a mark and until when), its folder,
-        what it's doing, how full its context is."""
+        """One row per Claude Code session: status dot, its topic (with a /loop: a mark and until when; with
+        background shells it doesn't need: an orange mark and how many), its folder, what it's doing, how full its
+        context is."""
         pct_w, state_w, gap, icon_w = 34, 70, 10, 12
         metrics, bold_metrics = QFontMetricsF(font), QFontMetricsF(bold)
         icon_font = QFont(theme.icon_font())
@@ -1015,16 +1238,29 @@ class FloatingButton(QWidget):
                                row.width() - 13 - (folder_w + gap if folder_w else 0) - state_w - pct_w, row.height())
             loop = s.loop.label() if s.loop else ""
             loop_w = icon_w + 2 + metrics.horizontalAdvance(loop) if loop else 0.0
-            name = bold_metrics.elidedText(s.name, Qt.ElideRight, name_rect.width() - (loop_w + 6 if loop else 0))
+            needless = len(s.needless)
+            count = str(needless) if needless > 1 else ""
+            shell_w = icon_w + (2 + metrics.horizontalAdvance(count) if count else 0) if needless else 0.0
+            marks_w = (loop_w + 6 if loop else 0) + (shell_w + 6 if needless else 0)
+            name = bold_metrics.elidedText(s.name, Qt.ElideRight, name_rect.width() - marks_w)
             p.drawText(name_rect, Qt.AlignLeft | Qt.AlignVCenter, name)
+            left = name_rect.left() + bold_metrics.horizontalAdvance(name) + 6
             if loop:  # right after the name, in the accent colour
-                left = name_rect.left() + bold_metrics.horizontalAdvance(name) + 6
                 p.setPen(QColor(theme.ACCENT))
                 p.setFont(icon_font)
                 p.drawText(QRectF(left, row.top(), icon_w, row.height()), Qt.AlignCenter, LOOP_GLYPH)
                 p.setFont(font)
                 p.drawText(QRectF(left + icon_w + 2, row.top(), loop_w, row.height()), Qt.AlignLeft | Qt.AlignVCenter,
                            loop)
+                left += loop_w + 6
+            if needless:  # shells left running that nobody needs: the tooltip and the right click tell more
+                p.setPen(QColor("#F5A524"))
+                p.setFont(icon_font)
+                p.drawText(QRectF(left, row.top(), icon_w, row.height()), Qt.AlignCenter, SHELL_GLYPH)
+                p.setFont(font)
+                if count:
+                    p.drawText(QRectF(left + icon_w + 2, row.top(), shell_w, row.height()),
+                               Qt.AlignLeft | Qt.AlignVCenter, count)
             p.setFont(font)
             if folder_w and s.topic:
                 p.setPen(hue)
@@ -1171,9 +1407,8 @@ class FloatingButton(QWidget):
                 when = f" (údaj z {lim.at.astimezone().hour}:{lim.at.astimezone().minute:02d})" if old else ""
                 lines.append(f"{lim.title}: {lim.percent:.0f} %{when}" + (f" – {reset}" if reset else ""))
         if self._forecast:
-            local = self._forecast.astimezone()
-            lines.append(f"Při současném tempu 5hodinové okno dojde v {local.hour}:{local.minute:02d}, "
-                         "dřív než se obnoví.")
+            session = self._usage.get("session") if self._usage else None
+            lines.append(forecast_text(self._forecast, session.resets_at if session else None))
         if self._usage_error:
             lines.append(("⚠ " if lines else "") + self._usage_error)
         return "\n".join(lines) or "Načítám využití Clauda…"
@@ -1184,6 +1419,8 @@ class FloatingButton(QWidget):
             session, dot = self._session_at(pos), self._dot_at(pos)
             if session:
                 tip = session.tooltip()
+            elif self._on_version(pos):
+                tip = (self._version or {}).get("tip", "")
             elif self._feed_rect.contains(pos):
                 tip = self._feed_tooltip()
             elif self._has_panel and self._panel.contains(pos):
@@ -1222,20 +1459,30 @@ class FloatingButton(QWidget):
             self._press_on_button = not self._press_on_speaker and math.hypot(d.x(), d.y()) <= self._side / 2
             if self._press_on_button:
                 self.pressed.emit()
+            elif self._press_on_speaker:
+                self._speaker_hover = self._speaker_down = True
+                self._press_reading = self._reading
+                self.update(self._speaker_area())
         elif event.button() == Qt.RightButton:
-            if session := self._session_at(event.position()):  # its folder's colour (and Orbit's menu in it)
-                self.folder_menu_requested.emit(session.cwd or session.folder, event.globalPosition().toPoint())
+            if self._on_speaker(event.position()):  # the sound options
+                self.speaker_menu_requested.emit(event.globalPosition().toPoint())
+            elif session := self._session_at(event.position()):  # its folder's colour (and Orbit's menu in it)
+                self.folder_menu_requested.emit(session.cwd or session.folder, session.id,
+                                                event.globalPosition().toPoint())
             else:
                 self.menu_requested.emit(event.globalPosition().toPoint())
 
     def mouseMoveEvent(self, event):
-        if self._press_global is None:
+        if self._press_global is None:  # just moving over it (mouse tracking): the speaker lights up under it
+            self._set_speaker_hover(self._on_speaker(event.position()))
+            self._set_version_hover(self._on_version_button(event.position()))  # so does the version's button
             return
         delta = event.globalPosition().toPoint() - self._press_global
         if not self._dragging and delta.manhattanLength() > 6:
             self._dragging = True  # it's a drag, not push-to-talk
             if self._press_on_button:
                 self.cancelled.emit()
+            self._set_speaker_hover(False)
         if self._dragging:
             self.move(self._press_pos + delta)
 
@@ -1243,13 +1490,22 @@ class FloatingButton(QWidget):
         if event.button() != Qt.LeftButton or self._press_global is None:
             return
         self._press_global = None
+        if self._speaker_down:
+            self._speaker_down = False
+            self.update(self._speaker_area())
         if self._dragging:
             self._auto_align()
             self.moved.emit(self.button_pos())
         elif self._press_on_button:
             self.released.emit()
         elif self._press_on_speaker:
-            self.mute_toggled.emit()
+            # What it showed when pressed: waves = stop reading (not mute: then nothing would beep or read until it's
+            # turned back on), otherwise mute or unmute. The tooltip then says what the next click does.
+            (self.stop_reading if self._press_reading else self.mute_toggled).emit()
+            if self._speaker_hover:
+                QToolTip.showText(QCursor.pos(), self._speaker_tooltip(), self)
+        elif self._on_version_button(event.position()):
+            self.claude_update_clicked.emit()
         elif self._on_agent(event.position()):
             self.agent_clicked.emit()
         elif self._on_history(event.position()):
@@ -1734,14 +1990,20 @@ class ClaudeBox(QWidget):
         box.addLayout(head)
         self._sub = _label("", "dim", wrap=True)
         box.addWidget(self._sub)
+        self._version = _label("", "dim", wrap=True)  # "Claude Code 2.1.296 · nejnovější verze ✓"
+        box.addWidget(self._version)
+        self._version_note = _label("", "dim", wrap=True)  # auto-updates off, sessions on an old one, an update's end
+        box.addWidget(self._version_note)
         self._message = _label("", "warn", wrap=True)
         box.addWidget(self._message)
         buttons = QHBoxLayout()
         buttons.setSpacing(8)
         self._install = QPushButton("Nainstalovat Claude Code")
         self._login = QPushButton("Přihlásit se")
+        self._update_btn = QPushButton("Aktualizovat Claude Code")
         self._recheck = QPushButton("Zkontrolovat znovu")
-        for button, role in ((self._install, "primary"), (self._login, "primary"), (self._recheck, "small")):
+        for button, role in ((self._install, "primary"), (self._login, "primary"), (self._update_btn, "primary"),
+                             (self._recheck, "small")):
             button.setProperty("role", role)
             button.setCursor(Qt.PointingHandCursor)
             button.setAutoDefault(False)
@@ -1753,10 +2015,16 @@ class ClaudeBox(QWidget):
         if conn is not None:
             self._install.clicked.connect(conn.install)
             self._login.clicked.connect(conn.login)
-            self._recheck.clicked.connect(conn.refresh)
+            self._update_btn.clicked.connect(conn.update_claude)
+            self._recheck.clicked.connect(self._check_again)
             conn.changed.connect(self._update)
             conn.busy_changed.connect(self._update)
+            conn.release_changed.connect(self._update)
         self._update()
+
+    def _check_again(self):
+        self._conn.refresh()
+        self._conn.check_release(max_age=0)
 
     def _update(self, *_):
         s = self._conn.status if self._conn else None
@@ -1778,10 +2046,10 @@ class ClaudeBox(QWidget):
             sub = "Nainstaluje se oficiálním instalátorem od Anthropicu, bez práv správce. Uvidíš ho v okně PowerShellu."
         elif not s.logged_in:
             color, title, button = "#F5A524", "Claude Code není přihlášený", self._login
-            sub = (f"Verze {s.version}. " if s.version else "") + "Přihlas se svým předplatným Claude (Pro nebo Max)."
+            sub = "Přihlas se svým předplatným Claude (Pro nebo Max)."
         else:
             color, title = "#3DD68C", "Claude je připojený"
-            sub = s.describe() + (f" Claude Code {s.version}." if s.version else "")
+            sub = s.describe()
         self._dot.setStyleSheet(f"color: {color}; font-size: 12px;")
         self._title.setText(title)
         self._sub.setText(sub)
@@ -1789,10 +2057,56 @@ class ClaudeBox(QWidget):
         message = self._conn.message if self._conn else ""
         self._message.setText(message)
         self._message.setVisible(bool(message))
+        offer_update = self._show_version(s if s is not None and s.installed and not s.error and not busy else None)
         for b in (self._install, self._login):
             b.setVisible(b is button)
+        self._update_btn.setVisible(offer_update)
         self._recheck.setVisible(not busy and s is not None and not s.connected)
         self._privacy.setVisible(s is not None and not s.connected or bool(busy))
+
+    def _show_version(self, s) -> bool:
+        """The version line and its note (s None: hidden). True when the update button goes with it."""
+        conn = self._conn
+        self._version.setVisible(s is not None)
+        if s is None:
+            self._version_note.hide()
+            return False
+        r = conn.release
+        installed = r.installed if r and r.installed else s.version
+        name = f"Claude Code {installed}" if installed else "Claude Code"
+        role, offer, notes = "dim", False, []
+        if conn.updating:
+            text = f"Aktualizuju Claude Code na {conn.updating}…" if conn.updating != "?" else \
+                "Aktualizuju Claude Code…"
+            notes.append("Běží to na pozadí, obvykle do minuty. Relace můžou mezitím běžet dál.")
+        elif r is None:
+            text = f"{name} · zjišťuju, jestli je novější…" if conn.checking_release else name
+        elif r.behind:
+            text, role, offer = f"{name} · je nová verze {r.latest}", "warn", True
+            if not r.auto_updates:
+                notes.append("Automatické aktualizace má Claude Code vypnuté, proto sama nepřišla.")
+        elif r.latest:
+            text, role = f"{name} · nejnovější verze ✓", "ok"
+        else:
+            text, offer = f"{name} · {r.error[0].lower()}{r.error[1:]}" if r.error else name, bool(installed)
+        if r is not None and r.channel != "latest":
+            text += f" (kanál {r.channel})"
+        note, ok = conn.update_note
+        if note and not conn.updating:
+            notes.insert(0, note)
+        if not conn.updating and (stale := claude_setup.stale_sessions_text(conn.old_sessions)):
+            notes.append(stale)
+        self._version.setText(text)
+        _repolish(self._version, role=role)
+        self._version_note.setText(" ".join(notes))
+        self._version_note.setVisible(bool(notes))
+        _repolish(self._version_note, role="dim" if ok or conn.updating else "warn")
+        self._update_btn.setProperty("role", "primary" if r is not None and r.behind else "small")
+        self._update_btn.setText("Aktualizovat Claude Code" if r is not None and r.behind else "Zkusit aktualizovat")
+        self._update_btn.setToolTip("Spustí oficiální aktualizaci od Anthropicu (claude update) na pozadí. Běžící "
+                                    "relace jedou dál na staré verzi, nová platí pro relace spuštěné potom.")
+        _repolish(self._update_btn)
+        return offer and not conn.updating
 
 
 class DownloadRow(QWidget):

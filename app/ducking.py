@@ -7,6 +7,12 @@ Only what Orbit changed is put back, and only while it's still what Orbit set (t
 mixer meanwhile). What was changed is written to <data>/ducked.json before it's changed: if Orbit dies in the middle
 of a dictation, its next start puts it back. Orbit's own sounds (its process) and Windows' system sounds stay.
 
+Windows remembers each program's mute and volume per output and gives them to its next session. A session that ends
+while it's quiet (Chrome stops its audio process when nothing plays) thus leaves the program quiet for good: on 10 Oct
+Chrome stayed muted from then on. So a session that's gone when the microphone closes is put back once the program
+plays again (looked for every RETRY_S, over restarts too), and a session of the same program that started during the
+dictation (it came up quiet) is put back with it.
+
 Core Audio through ctypes (IMMDeviceEnumerator → IAudioSessionManager2 → ISimpleAudioVolume), in a worker thread of
 its own, so a slow audio driver never holds up the microphone. No Qt here."""
 import ctypes
@@ -14,6 +20,7 @@ import json
 import logging
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from ctypes import POINTER, byref, c_float, c_int, c_long, c_uint, c_void_p
 from ctypes import wintypes
@@ -24,16 +31,24 @@ log = logging.getLogger(__name__)
 
 KEEP, LOWER, MUTE = "keep", "lower", "mute"  # the setting's values
 LOWER_TO = 0.2  # "Ztiší se": a fifth of each program's own volume (about -14 dB)
+RETRY_S = 2.0  # a program whose session ended while it was quiet: how often to look whether it plays again (~1.5 ms)
+GIVE_UP_S = 7 * 24 * 3600  # ... and for how long
 
 
 @dataclass
 class Change:
     id: str  # the session's instance identifier (this run of that program)
-    group: str  # the session identifier (the program, the same after it restarts): a leftover after a crash
+    group: str  # the session identifier (the program on that output, the same after it restarts)
     pid: int
     mode: str  # LOWER or MUTE
     before: float  # its volume (LOWER), or 1.0 when it was muted (MUTE)
     set: float  # what Orbit set
+    at: float = 0.0  # when (time.time())
+
+
+def program(group: str) -> str:
+    """The program's file name from a session identifier (…|\\Device\\…\\chrome.exe%b{…}), for the log."""
+    return group.rpartition("|")[2].partition("%b")[0].rpartition("\\")[2] or "?"
 
 
 def plan(sessions, mode: str, keep_pids: set[int]) -> list[Change]:
@@ -214,7 +229,11 @@ class Ducker:
         self._state = state
         self._audio = audio or CoreAudio()
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ducking")
-        self._changes: list[Change] = []
+        self._changes: list[Change] = []  # what's quiet for this recording
+        self._owed: list[Change] = []  # made quiet, but its session ended before it could be put back
+        self._seen: set[str] = set()  # the sessions there were when it ducked: any other of a program is newer
+        self._timer: threading.Timer | None = None  # the next look for a program that owes (RETRY_S)
+        self._closed = False
 
     def duck(self, mode: str, keep_pids: set[int]) -> None:
         if mode in (LOWER, MUTE):
@@ -224,11 +243,16 @@ class Ducker:
         self._pool.submit(self._run, self._restore)
 
     def restore_leftover(self) -> None:
-        """At start: what a run that ended in the middle of a dictation left muted or turned down."""
+        """At start: what a run that ended in the middle of a dictation left muted or turned down, and what a run
+        still owed to a program that wasn't playing."""
         self._pool.submit(self._run, self._leftover)
 
     def shutdown(self) -> None:
-        """Quitting: back to normal before Orbit goes (waits for it)."""
+        """Quitting: back to normal before Orbit goes (waits for it). What's owed stays in ducked.json for the next
+        start."""
+        self._closed = True
+        if self._timer:
+            self._timer.cancel()
         self.restore()
         self._pool.shutdown(wait=True)
 
@@ -244,59 +268,137 @@ class Ducker:
             return
 
         def use(sessions):
+            self._settle(sessions)  # a program that plays again gets what's owed first
+            self._seen |= {s.id for s in sessions}
             changes = plan(sessions, mode, keep_pids)
             if not changes:
                 return
-            self._save(changes)  # first written down, then changed: a crash can't lose the way back
+            for change in changes:
+                change.at = time.time()
+            self._changes = list(changes)
+            self._write()  # first written down, then changed: a crash can't lose the way back
             by_id = {s.id: s for s in sessions}
             for change in changes:
                 try:
                     apply(by_id[change.id], change)
-                    self._changes.append(change)
                 except OSError:
+                    self._changes.remove(change)
                     log.debug("Relaci %d nejde ztlumit", change.pid, exc_info=True)
             log.info("Při diktování ztlumeno: %d programů (%s)", len(self._changes), mode)
-        self._audio.sessions(use)
-
-    def _restore(self, changes: list[Change] | None = None, leftover: bool = False) -> None:
-        changes = self._changes if changes is None else changes
-        if not changes:
-            return
-
-        def use(sessions):
-            by_id = {s.id: s for s in sessions}
-            by_group = {s.group: s for s in sessions} if leftover else {}
-            back = 0
-            for change in changes:
-                session = by_id.get(change.id) or by_group.get(change.group)
-                if session is None:  # the program has ended meanwhile
-                    continue
-                try:
-                    back += undo(session, change)
-                except OSError:
-                    log.debug("Relaci %d nejde vrátit", change.pid, exc_info=True)
-            log.info("Zvuk po diktování vrácen: %d z %d programů", back, len(changes))
         try:
             self._audio.sessions(use)
         finally:
-            self._changes = []
-            self._state.unlink(missing_ok=True)
+            self._write()
+            self._schedule()
+
+    def _restore(self) -> None:
+        if not self._changes:
+            return
+        changes, self._changes = self._changes, []
+        self._owed += changes  # until they're known to be back
+
+        def use(sessions):
+            back, gone = self._put_back(sessions, changes)
+            self._owed = [c for c in self._owed if c not in changes] + gone
+            log.info("Zvuk po diktování vrácen: %d z %d programů", back, len(changes))
+            if gone:
+                log.info("Teď nehraje, zvuk mu vrátím, až zase začne: %s", ", ".join(program(c.group) for c in gone))
+        try:
+            self._audio.sessions(use)
+        finally:
+            self._write()
+            self._schedule()
+
+    def _put_back(self, sessions, changes: list[Change]) -> tuple[int, list[Change]]:
+        """Puts back what's still as Orbit set it: the session Orbit changed, and any newer one of the same program
+        on the same output (Windows started it with Orbit's value). How many were put back, and the changes whose
+        program has no session now."""
+        back, gone = 0, []
+        for change in changes:
+            found = put = False
+            for s in sessions:
+                if s.id != change.id and (s.group != change.group or s.id in self._seen):
+                    continue
+                try:
+                    put = undo(s, change) or put
+                    found = True
+                except OSError:
+                    log.debug("Relaci %d nejde vrátit", change.pid, exc_info=True)
+            if found:
+                back += put
+            else:
+                gone.append(change)
+        return back, gone
+
+    def _settle(self, sessions) -> None:
+        """What's owed to programs that weren't playing: put back when one of their sessions is there again."""
+        if not self._owed:
+            return
+        _, gone = self._put_back(sessions, self._owed)
+        done = [c for c in self._owed if c not in gone]
+        if done:
+            log.info("Vrácen zvuk, který zůstal ztlumený nebo ztišený: %s", ", ".join(program(c.group) for c in done))
+        expired = [c for c in gone if time.time() - c.at > GIVE_UP_S]
+        if expired:
+            log.info("Zvuk nevrácen, program za týden nezačal hrát: %s", ", ".join(program(c.group) for c in expired))
+        self._owed = [c for c in gone if c not in expired]
+
+    def _retry(self) -> None:
+        self._timer = None
+        owed = len(self._owed)
+        try:
+            if self._owed:
+                self._audio.sessions(self._settle)
+        except OSError:
+            log.debug("Zvukové relace nejde projít", exc_info=True)
+        finally:
+            if len(self._owed) != owed:
+                self._write()
+            self._schedule()
+
+    def _schedule(self) -> None:
+        """Looks again in RETRY_S, while a program is owed something."""
+        if self._owed and self._timer is None and not self._closed:
+            self._timer = threading.Timer(RETRY_S, self._tick)
+            self._timer.daemon = True
+            self._timer.start()
+
+    def _tick(self) -> None:
+        try:
+            self._pool.submit(self._run, self._retry)
+        except RuntimeError:  # Orbit is quitting
+            pass
 
     def _leftover(self) -> None:
         try:
             data = json.loads(self._state.read_text(encoding="utf-8"))
-            changes = [Change(**item) for item in data.get("changes", [])]
+            owed = [Change(**item) for item in data.get("changes", [])]
+            seen = set(data.get("seen", []))
         except FileNotFoundError:
             return
         except Exception:
             log.exception("Záznam o ztlumení zvuku nejde přečíst")
             self._state.unlink(missing_ok=True)
             return
-        log.info("Vracím zvuk, který zůstal ztlumený z minulého běhu (%d programů)", len(changes))
-        self._restore(changes, leftover=True)
+        log.info("Vracím zvuk, který zůstal ztlumený z minulého běhu (%d programů)", len(owed))
+        for change in owed:
+            change.at = change.at or time.time()  # written before 11 Oct
+        self._owed, self._seen = owed, seen
+        try:
+            self._audio.sessions(self._settle)
+        finally:
+            self._write()
+            self._schedule()
 
-    def _save(self, changes: list[Change]) -> None:
+    def _write(self) -> None:
+        """<data>/ducked.json: what's quiet now and what's owed, with the sessions there were; none when nothing."""
+        changes = self._changes + self._owed
+        if not changes:
+            self._seen = set()
+            self._state.unlink(missing_ok=True)
+            return
         self._state.parent.mkdir(parents=True, exist_ok=True)
         tmp = self._state.with_name(self._state.name + ".tmp")
-        tmp.write_text(json.dumps({"changes": [asdict(c) for c in changes]}), encoding="utf-8")
+        tmp.write_text(json.dumps({"changes": [asdict(c) for c in changes], "seen": sorted(self._seen)}),
+                       encoding="utf-8")
         os.replace(tmp, self._state)

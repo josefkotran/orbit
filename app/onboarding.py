@@ -13,7 +13,7 @@ from PySide6.QtGui import QColor, QGuiApplication, QPainter
 from PySide6.QtWidgets import (QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton,
                                QStackedWidget, QVBoxLayout, QWidget)
 
-from . import claude_setup, config, downloads, hotkey, theme
+from . import claude_setup, config, downloads, hotkey, sessions, theme
 from .theme import style_titlebar
 from .ui import ClaudeBox, DownloadRow, KeyAndMic, _field, _label, _OptionRow, _repolish, mic_icon, scrolling
 
@@ -24,26 +24,40 @@ CANCELLED = "zrušeno"
 
 class ClaudeConnection(QObject):
     """Is Claude Code here and logged in (claude_setup.status in a worker thread), and Anthropic's own install and
-    login: started in a window the user watches, then checked every 2 s until done or the window is closed."""
+    login: started in a window the user watches, then checked every 2 s until done or the window is closed. Also its
+    version against the newest one, and Anthropic's own update in the background."""
 
     changed = Signal(object)  # claude_setup.Status, after every check
     busy_changed = Signal(str)  # "", "installing", "login"
+    release_changed = Signal()  # release, checking_release, updating, update_note, old_sessions
+    updated = Signal(object)  # claude_setup.Updated, when update_claude() is done
     _checked = Signal(object)
+    _released = Signal(object, object)
+    _update_done = Signal(object, object)
     POLL_MS = 2000
     RECHECK_MS = 5 * 60_000  # not connected: look again now and then (installed or logged in from a terminal)
     # The check failed or claude.exe was missing before it ever worked in this run (a slow start of Windows, Claude
     # Code updating itself): soon again, not only in 5 minutes with sessions, limits and the agent off till then
     QUICK_RECHECK_MS = (15_000, 30_000, 60_000)
+    RELEASE_STALE_S = 3600  # the newest version is asked again when the last answer is older (a menu, the settings)
 
     def __init__(self):
         super().__init__()
         self.status: claude_setup.Status | None = None
         self.busy = ""
         self.message = ""  # how the last install or login ended when it didn't work
+        self.release: claude_setup.Release | None = None  # the last check of the newest version
+        self.old_sessions: list[str] = []  # versions of the running sessions older than the installed one
+        self.updating = ""  # while the update runs: the version it should bring ("?" = not known)
+        self.update_note: tuple[str, bool] = ("", True)  # how the last update ended: text, whether it worked
         self._proc = None
         self._inflight = False
+        self._release_inflight = False
+        self._release_at = 0.0
         self._quick = 0  # quick rechecks used (QUICK_RECHECK_MS)
         self._checked.connect(self._on_checked)
+        self._released.connect(self._on_released)
+        self._update_done.connect(self._on_update_done)
         self._poll = QTimer(self, interval=self.POLL_MS)
         self._poll.timeout.connect(self.refresh)
         self._recheck = QTimer(self, interval=self.RECHECK_MS)
@@ -125,6 +139,78 @@ class ClaudeConnection(QObject):
             self.changed.emit(self.status)
             return
         self._set_busy(busy)
+
+    # -- the version and the update -------------------------------------------------------------------
+
+    @property
+    def checking_release(self) -> bool:
+        return self._release_inflight
+
+    def check_release(self, max_age: float | None = None) -> None:
+        """Is there a newer Claude Code? Asked only when the last answer is older than max_age seconds (an HTTP
+        request and `claude --version`, under a second, in a worker thread)."""
+        max_age = self.RELEASE_STALE_S if max_age is None else max_age
+        s = self.status
+        if self._release_inflight or self.updating or s is None or not s.installed or (
+                self.release is not None and time.monotonic() - self._release_at < max_age):
+            return
+        self._release_inflight = True
+        threading.Thread(target=self._check_release, args=(s.exe,), daemon=True).start()
+        self.release_changed.emit()
+
+    def _check_release(self, exe: str) -> None:
+        try:
+            r = claude_setup.release(exe)
+        except Exception as e:
+            log.exception("Zjištění nejnovější verze Claude Code selhalo")
+            r = claude_setup.Release(error=f"Novou verzi nejde zjistit: {e}")
+        try:
+            running = sessions.running_versions()
+        except Exception:
+            log.exception("Verze běžících relací nejde zjistit")
+            running = []
+        self._released.emit(r, running)
+
+    def _on_released(self, r: claude_setup.Release, running: list) -> None:
+        self._release_inflight = False
+        before, self.release, self._release_at = self.release, r, time.monotonic()
+        self.old_sessions = [v for v in running if claude_setup.older(v, r.installed)]
+        if before is None or (before.installed, before.latest) != (r.installed, r.latest):
+            log.info("Claude Code %s, nejnovější (%s): %s", r.installed or "?", r.channel, r.latest or r.error)
+        self.release_changed.emit()
+
+    def update_claude(self) -> None:
+        """Anthropic's own update (claude_setup.update) in a worker thread; `updated` says how it ended."""
+        s = self.status
+        if self.updating or self.busy or s is None or not s.installed:
+            return
+        self.updating = self.release.latest if self.release and self.release.behind else "?"
+        self.update_note = ("", True)
+        threading.Thread(target=self._update, args=(s.exe,), daemon=True).start()
+        self.release_changed.emit()
+
+    def _update(self, exe: str) -> None:
+        try:
+            result = claude_setup.update(exe)
+        except Exception as e:
+            log.exception("Aktualizace Claude Code selhala")
+            result = claude_setup.Updated(False, "", "", f"Aktualizace se nepovedla: {e}")
+        try:
+            running = sessions.running_versions()
+        except Exception:
+            log.exception("Verze běžících relací nejde zjistit")
+            running = []
+        self._update_done.emit(result, running)
+
+    def _on_update_done(self, result: claude_setup.Updated, running: list) -> None:
+        self.updating = ""
+        self.update_note = (result.text, result.ok)
+        if result.after:
+            self.old_sessions = [v for v in running if claude_setup.older(v, result.after)]
+        self.check_release(max_age=0)  # the version now, and which running sessions stay on the old one
+        self.refresh()
+        self.release_changed.emit()
+        self.updated.emit(result)
 
 
 class Downloads(QObject):

@@ -8,15 +8,20 @@ login itself happens on Anthropic's page in the browser, and Orbit only polls `c
 Standard library only: agent_tools.py imports this (through claude_cli) in its own process.
 """
 import base64
+import http.client
 import json
 import logging
 import os
 import re
 import shutil
 import subprocess
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+
+from . import paths
+from .version import VERSION as ORBIT_VERSION
 
 log = logging.getLogger(__name__)
 
@@ -225,3 +230,196 @@ def login(exe: str | None = None, visible: bool = True) -> subprocess.Popen:
         raise FileNotFoundError("Claude Code (claude.exe) nebyl nalezen.")
     log.info("Claude Code: spouštím přihlášení")
     return _start(login_script(exe), visible)
+
+
+# --- the version: the newest one on its release channel, and Anthropic's own update ---------------
+# The way Claude Code checks itself (its own instructions in claude.exe 2.1.296): the channel is autoUpdatesChannel
+# in settings.json (unset = latest, stable = a slower one); an npm install asks npm's dist-tag of that name (that's
+# what `claude update` installs there), anything else Anthropic's release file, which is the version as plain text.
+
+CHANNELS = ("latest", "stable")
+_RELEASES = "https://downloads.claude.ai/claude-code-releases/{}"
+_NPM_TAG = "https://registry.npmjs.org/@anthropic-ai/claude-code/{}"  # npm's public registry, never a project .npmrc
+_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+UPDATE_TIMEOUT_S = 600
+_BUSY = "Claude Code se zrovna aktualizuje jinde (třeba sám v některé relaci). Zkus to za chvíli."
+_UPDATE_PROBLEMS = (  # `claude update` (and winget) in English → what the user reads
+    ("is in use", "Soubor claude.exe drží jiný program. Zavři relace Claude Code (i ve VS Code) a zkus to znovu."),
+    ("another instance is currently performing an update", _BUSY),
+    ("another claude process", _BUSY),
+    ("insufficient permissions", "Na aktualizaci chybí práva. Zkus v terminálu příkaz claude update."),
+    ("failed to check for updates", "Novou verzi nejde zjistit. Je počítač připojený k internetu?"),
+    ("managed by a package manager", "Claude Code tu nainstaloval správce balíčků, aktualizuj ho v něm."),
+    ("no available upgrade", "Winget zatím novější verzi nenabízí. Zkus to později."),
+    ("no newer package", "Winget zatím novější verzi nenabízí. Zkus to později."),
+)
+
+
+def install_kind(exe: str) -> str:
+    """How this claude.exe got here: "npm" (npm install -g), "winget", or "native" (the official installer, and
+    whatever else: `claude update` sorts that out itself)."""
+    parts = [part.lower() for part in Path(exe).parts]
+    return "npm" if "node_modules" in parts else "winget" if "winget" in parts else "native"
+
+
+def _json_file(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _flag(name: str, settings: dict) -> bool:
+    """A Claude Code switch, set in the environment or in the env block of settings.json."""
+    env = settings.get("env") if isinstance(settings.get("env"), dict) else {}
+    value = os.environ.get(name) or str(env.get(name) or "")
+    return value.strip().lower() not in ("", "0", "false", "no", "off")
+
+
+def channel(settings: dict | None = None) -> str:
+    settings = _json_file(paths.claude_dir() / "settings.json") if settings is None else settings
+    value = settings.get("autoUpdatesChannel")
+    return value if value in CHANNELS else "latest"  # only a known name goes into a URL
+
+
+def auto_updates(kind: str, settings: dict | None = None) -> bool:
+    """Does Claude Code update itself in the background? Not with DISABLE_AUTOUPDATER / DISABLE_UPDATES, or with
+    autoUpdates false in .claude.json (which a native install ignores when autoUpdatesProtectedForNative is set)."""
+    settings = _json_file(paths.claude_dir() / "settings.json") if settings is None else settings
+    if _flag("DISABLE_AUTOUPDATER", settings) or _flag("DISABLE_UPDATES", settings):
+        return False
+    state = _json_file(paths.claude_json())
+    return state.get("autoUpdates") is not False or (kind == "native" and
+                                                     state.get("autoUpdatesProtectedForNative") is True)
+
+
+def version_key(text: str) -> tuple:
+    core, _, pre = text.split("+")[0].partition("-")
+    return tuple(int(part) for part in core.split(".")), (1,) if not pre else (0, pre)  # 2.1.3-beta before 2.1.3
+
+
+def older(a: str, b: str) -> bool:
+    """Is version a before version b? A "+sha" build suffix doesn't count; "" or junk is never older."""
+    if not (_VERSION_RE.match(a or "") and _VERSION_RE.match(b or "")):
+        return False
+    return version_key(a) < version_key(b)
+
+
+def latest_version(kind: str, chan: str = "latest", timeout: float = 10) -> str:
+    """The newest Claude Code on the channel. Raises OSError, ValueError or http.client.HTTPException."""
+    url = (_NPM_TAG if kind == "npm" else _RELEASES).format(chan if chan in CHANNELS else "latest")
+    request = urllib.request.Request(url, headers={"User-Agent": f"Orbit/{ORBIT_VERSION}"})
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        body = response.read(1 << 20).decode("utf-8", "replace")
+    if kind == "npm":
+        data = json.loads(body)
+        body = data.get("version") if isinstance(data, dict) else ""
+    text = str(body or "").strip()
+    if not _VERSION_RE.match(text):  # it only ever goes on screen; still, nothing but a version
+        raise ValueError(f"nečekaná odpověď z {url.split('/')[2]}")
+    return text
+
+
+@dataclass
+class Release:
+    """Claude Code's version against the newest one on its release channel (release())."""
+    installed: str = ""  # `claude --version` now ("" = it didn't answer)
+    latest: str = ""  # "" = not known, error says why
+    channel: str = "latest"
+    kind: str = ""  # install_kind()
+    auto_updates: bool = True  # Claude Code updates itself in the background
+    error: str = ""
+
+    @property
+    def behind(self) -> bool:
+        return older(self.installed, self.latest)
+
+
+def release(exe: str | None = None, timeout: float = 10) -> Release:
+    """Blocking (under a second): the installed version and the newest one on its channel, side by side."""
+    exe = exe or find_exe()
+    if not exe:
+        return Release(error="Claude Code tu není.")
+    settings = _json_file(paths.claude_dir() / "settings.json")
+    kind = install_kind(exe)
+    r = Release(channel=channel(settings), kind=kind, auto_updates=auto_updates(kind, settings))
+    with ThreadPoolExecutor(1) as pool:
+        found = pool.submit(version, exe)
+        if _flag("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", settings):  # Claude Code itself doesn't ask then
+            r.error = "Claude Code má vypnuté nepotřebné dotazy na internet, novou verzi proto nezjišťuju."
+        else:
+            try:
+                r.latest = latest_version(kind, r.channel, timeout)
+            except (OSError, ValueError, http.client.HTTPException) as e:
+                log.info("Claude Code: nejnovější verzi nejde zjistit (%s)", e)
+                r.error = "Novou verzi teď nejde zjistit."
+        r.installed = found.result()
+    return r
+
+
+def stale_sessions_text(versions: list[str]) -> str:
+    """"2 běžící relace jedou ještě na 2.1.290. …": sessions started before an update ("" = none). On Windows they
+    can't switch themselves (Claude Code's /restart is macOS and Linux only), they need to be started again."""
+    n = len(versions)
+    if not n:
+        return ""
+    distinct = sorted(set(versions), key=version_key)
+    on = distinct[0] if len(distinct) == 1 else f"{distinct[0]} až {distinct[-1]}"
+    who = "Jedna běžící relace jede" if n == 1 else f"{n} běžící relace jedou" if n < 5 else \
+        f"{n} běžících relací jede"
+    it = ("ní", "ji") if n == 1 else ("nich", "je")
+    return (f"{who} ještě na {on}. Nová verze se v {it[0]} projeví, až {it[1]} zavřeš a otevřeš znovu "
+            "(Historie relací › Pokračovat v relaci).")
+
+
+def update_command(exe: str, kind: str) -> list[str]:
+    """`claude update`; for a winget install the command Claude Code's own background update runs."""
+    if kind != "winget":
+        return [exe, "update"]
+    local = os.environ.get("LOCALAPPDATA")
+    winget = str(Path(local) / "Microsoft" / "WindowsApps" / "winget.exe") if local else "winget"
+    return [winget, "upgrade", "--id", "Anthropic.ClaudeCode", "--exact", "--silent", "--disable-interactivity"]
+
+
+@dataclass
+class Updated:
+    """How update() ended."""
+    ok: bool
+    before: str
+    after: str
+    text: str  # for the user
+
+
+def update(exe: str | None = None, timeout: float = UPDATE_TIMEOUT_S) -> Updated:
+    """Anthropic's own update in the background (no window, nothing to answer). Blocking, usually a minute or so.
+    Whether it worked says `claude --version` before and after; the output only explains why not."""
+    exe = exe or find_exe()
+    if not exe:
+        return Updated(False, "", "", "Claude Code tu není.")
+    kind, before = install_kind(exe), version(exe)
+    log.info("Claude Code: aktualizuji %s (%s)", before or "?", kind)
+    try:
+        proc = _run(update_command(exe, kind), timeout)
+        out, code = _ANSI_RE.sub("", f"{proc.stdout}\n{proc.stderr}"), proc.returncode
+    except subprocess.TimeoutExpired:
+        out, code = "", None
+    except OSError as e:
+        log.warning("Claude Code: aktualizace nejde spustit: %s", e)
+        return Updated(False, before, before, f"Aktualizace nejde spustit: {e}")
+    after = version(exe) or before
+    lines = [line.strip() for line in out.splitlines() if line.strip()]
+    log.info("Claude Code: aktualizace skončila (kód %s), %s → %s: %s", code, before or "?", after or "?",
+             " | ".join(lines[-4:])[:400])
+    if older(before, after):
+        return Updated(True, before, after, f"Claude Code je aktualizovaný: {before} → {after}.")
+    low = out.lower()
+    if code == 0 and "up to date" in low:
+        return Updated(True, before, after, f"Claude Code {after} je nejnovější, nebylo co aktualizovat.")
+    for needle, text in _UPDATE_PROBLEMS:
+        if needle in low:
+            return Updated(False, before, after, text)
+    if code is None:
+        return Updated(False, before, after, f"Aktualizace neskončila ani za {timeout / 60:.0f} minut.")
+    return Updated(False, before, after, "Aktualizace se nepovedla: " + (lines[-1][:200] if lines else f"kód {code}"))

@@ -3,6 +3,7 @@
 // of output tokens per request, and the context window as /context draws it (estimated locally, free), with limits.
 // The limits also go to Orbit's panel: after each turn the engine hands over what the answers reported, and this mod
 // leaves them in Orbit's data folder on this PC (reportLimits). Nothing is sent anywhere, nothing is asked for.
+// And Orbit can ask it to stop a background shell nobody needs any more (stopRequested).
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 
@@ -48,6 +49,8 @@ const CATEGORY: Record<string, string> = {
 
 const LIMIT: Record<string, string> = { five_hour: '5 h', seven_day: 'týden' }
 const SEEK_AGAIN_MS = 10 * 60 * 1000 // no Orbit data folder found: looked for again after this long
+const STOP_EVERY_MS = 2000 // Orbit's requests to stop a background shell are looked for this often
+const STOP_FRESH_MS = 60 * 1000 // an older request is left alone (Orbit gave up on it long ago)
 
 // Orbit's data folders (each has its config.json), found once per load: the folder Orbit was told to use, a task
 // session's, the installed Orbit's, a checkout in ~/orbit. Every one found gets the limits: whichever Orbit runs
@@ -56,6 +59,10 @@ let dataDirs: string[] | null = null
 let soughtAt = 0
 
 const trimSlash = (dir: string): string => dir.replace(/[\\/]+$/, '')
+
+let stopWatch: { cancel: () => void } | null = null
+let stopping = false
+const stopsSeen = new Set<string>() // request file name + its time: each request is acted on once
 
 // The working copy the stream writes into; the host's copy (`live`) is what the pane draws and what survives a reload.
 let cur: MozekLive | null = null
@@ -164,6 +171,41 @@ async function reportLimits($: EngineInterface, limits: SessionRateLimit[]): Pro
   }
 }
 
+/** Orbit (app/shells.py) asks to stop one of this session's background shells that nobody needs any more, a server
+ * nobody used for half an hour or a shell that hangs: <data>/sessions/stop/<session>.<task>.json. Stopped with TaskStop,
+ * as Claude would: Claude Code knows, and the session isn't woken up (a shell killed from outside reports to it as
+ * failed and starts a turn). The answer goes next to the request as <session>.<task>.done.json, Orbit removes both. */
+async function stopRequested($: EngineInterface): Promise<void> {
+  if (stopping) return
+  stopping = true
+  try {
+    const session = await $.session.id()
+    for (const dir of await orbitDataDirs($)) {
+      const folder = `${dir}/sessions/stop`
+      for (const entry of await $.fs.list(folder).catch(() => [])) {
+        const name = /^([\w-]{1,128})\.([a-z0-9]{4,32})\.json$/.exec(entry.name)
+        const seen = `${entry.name}@${entry.mtimeMs}`
+        if (!name || name[1] !== session || stopsSeen.has(seen)) continue
+        let request: { session_id?: unknown; task_id?: unknown; time?: unknown }
+        try {
+          request = JSON.parse(String(await $.fs.read(`${folder}/${entry.name}`))) as typeof request
+        } catch {
+          continue // being written
+        }
+        stopsSeen.add(seen)
+        const fresh = typeof request.time === 'number' && (await $.clock.now()) - request.time * 1000 < STOP_FRESH_MS
+        if (request.session_id !== session || request.task_id !== name[2] || !fresh) continue
+        const done = await $.tool.call({ tool: 'TaskStop', task_id: name[2] }).catch((error: unknown) => ({ deny: String(error) }))
+        const ok = done.deny === undefined && done.isError !== true
+        const text = String(done.deny ?? done.text ?? '').slice(0, 300)
+        await $.fs.write(`${folder}/${name[1]}.${name[2]}.done.json`, JSON.stringify({ ok, text })).catch(() => undefined)
+      }
+    }
+  } finally {
+    stopping = false
+  }
+}
+
 const tokens = (n: number): string =>
   n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1).replace('.', ',')} mil.` : n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`
 
@@ -199,6 +241,8 @@ export const register: Register = on => {
       name: 'mozek',
       description: 'Mozek relace: o čem Claude přemýšlí, co dělají nástroje a jak je plný kontext',
     })
+    stopWatch?.cancel()
+    stopWatch = $.clock.every(STOP_EVERY_MS, () => void stopRequested($).catch(() => undefined))
     return next(e)
   })
 

@@ -1,5 +1,6 @@
 """sessions._title_lines reads a transcript backwards: the same title as a forward read of the whole file, also with
-lines across block borders. A turn that leaves work in the background is no "hotovo" yet.
+lines across block borders. A turn that leaves work in the background is no "hotovo" yet, unless that work is only
+servers (they never end by themselves).
 
     .venv\\Scripts\\python.exe -m unittest discover -s tests -p "test_ui*.py"
 """
@@ -23,7 +24,7 @@ if "app.config" not in sys.modules:  # nothing a test does may touch the real da
     sys.path.insert(0, str(ROOT))
     logging.getLogger().addHandler(logging.NullHandler())  # the code's warnings aren't test output
 
-from app import sessions  # noqa: E402
+from app import sessions, shells  # noqa: E402
 
 
 def forward(path) -> str:  # the old way: every line of the file
@@ -104,6 +105,42 @@ class BackgroundWork(unittest.TestCase):
         changes = tracker.poll()
         self.assertEqual([(c[0].id, c[1]) for c in changes], [(self.SID, "done")])
         self.assertEqual((s.state, s.background, s.message), ("done", [], "Testy prošly."))
+
+    def servers(self, tracker, kinds: dict[str, str]):
+        """The tracker's shell watch answers these kinds (shells.py is tested on its own)."""
+        def look(session, pid, tasks, now=None):
+            return [shells.Shell(t["id"], t["what"], kind=kinds[t["id"]], ports=(8770,), known=True)
+                    for t in tasks]
+        tracker.watch.look = look
+
+    def test_a_server_left_running_doesnt_keep_it_working(self):
+        # Pepa 11 Oct: a PHP preview and a MariaDB kept the session "pracuje" (and no "hotovo") for an hour
+        tracker, now = sessions.SessionTracker(), time.time()
+        self.servers(tracker, {"php00001": "server", "db000001": "server"})
+        self.hook("UserPromptSubmit", now - 60, prompt="Spusť náhled")
+        tracker.poll()
+        self.hook("Stop", now - 10, last_assistant_message="Náhled běží na http://127.0.0.1:8770.",
+                  background=[{"type": "shell", "what": "Start local PHP preview", "id": "php00001", "command": "php"},
+                              {"type": "shell", "what": "Start MariaDB", "id": "db000001", "command": "mysqld"}])
+        changes = tracker.poll()
+        s = tracker.sessions[self.SID]
+        self.assertEqual([(c[0].id, c[1]) for c in changes], [(self.SID, "done")])
+        self.assertIn("· Start local PHP preview: server na :8770", s.tooltip())
+
+    def test_a_working_shell_beside_a_server_keeps_it_working(self):
+        tracker, now = sessions.SessionTracker(), time.time()
+        self.servers(tracker, {"php00001": "server", "test0001": "works"})
+        self.hook("UserPromptSubmit", now - 60, prompt="Otestuj to")
+        tracker.poll()
+        self.hook("Stop", now - 10, last_assistant_message="Testy běží.",
+                  background=[{"type": "shell", "what": "PHP", "id": "php00001", "command": "php"},
+                              {"type": "shell", "what": "npm test", "id": "test0001", "command": "npm test"}])
+        self.assertEqual(tracker.poll(), [])
+        self.assertEqual(tracker.sessions[self.SID].state, "working")
+        tracker.watch.stopped.add((self.SID, "test0001"))  # stopped from Orbit: Claude Code won't say so in a Stop
+        tracker.poll()
+        s = tracker.sessions[self.SID]
+        self.assertEqual((s.state, [t["id"] for t in s.background]), ("done", ["php00001"]))
 
 
 if __name__ == "__main__":
