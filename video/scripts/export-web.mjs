@@ -1,6 +1,8 @@
 // Encodes the rendered master (out/orbit-master.mp4) for the website: web/site/assets/video/
-//   orbit.mp4  – H.264 High, 2-pass ~2.3 Mbit/s, AAC 160k, faststart (plays everywhere)
-//   orbit.webm – VP9 2-pass ~1.9 Mbit/s, Opus 128k (smaller, for browsers that take it)
+//   orbit.mp4  – H.264 High, 2-pass ~1.95 Mbit/s, AAC 160k, faststart (plays everywhere)
+//   orbit.webm – VP9 2-pass ~1.65 Mbit/s, Opus 128k (smaller, for browsers that take it)
+// (the bitrates kept the 99 s video around 25 MB like the 76 s one was at 2.3 and 1.9 Mbit/s; the 115 s one of
+// 24 Oct 2026 keeps the quality at 29.0 and 24.7 MB)
 //   poster.jpg – the title frame (dark), shown before the video loads
 // Run: node scripts/export-web.mjs   (uses the ffmpeg that comes with Remotion; `npx remotion ffmpeg` would go
 // through cmd.exe on Windows, which mangles some arguments, so the binary is called directly)
@@ -33,11 +35,11 @@ const colour = [
   "-vf", "scale=in_range=pc:out_range=tv:in_color_matrix=bt601:out_color_matrix=bt709,format=yuv420p",
   "-color_range", "tv", "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
 ];
-const x264 = [...colour, "-c:v", "libx264", "-preset", "slower", "-profile:v", "high", "-pix_fmt", "yuv420p", "-b:v", "2300k", "-maxrate", "4000k", "-bufsize", "6000k", "-g", "60"];
+const x264 = [...colour, "-c:v", "libx264", "-preset", "slower", "-profile:v", "high", "-pix_fmt", "yuv420p", "-b:v", "1950k", "-maxrate", "3600k", "-bufsize", "6000k", "-g", "60"];
 ffmpeg(["-i", master, ...x264, "-pass", "1", "-passlogfile", passlog, "-an", "-f", "mp4", nul]);
 ffmpeg(["-i", master, ...x264, "-pass", "2", "-passlogfile", passlog, "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", path.join(outDir, "orbit.mp4")]);
 
-const vp9 = [...colour, "-c:v", "libvpx-vp9", "-b:v", "1900k", "-maxrate", "3500k", "-bufsize", "5000k", "-row-mt", "1", "-tile-columns", "2", "-g", "120", "-pix_fmt", "yuv420p"];
+const vp9 = [...colour, "-c:v", "libvpx-vp9", "-b:v", "1650k", "-maxrate", "3200k", "-bufsize", "5000k", "-row-mt", "1", "-tile-columns", "2", "-g", "120", "-pix_fmt", "yuv420p"];
 ffmpeg(["-i", master, ...vp9, "-pass", "1", "-passlogfile", passlog, "-deadline", "good", "-cpu-used", "4", "-an", "-f", "webm", nul]);
 ffmpeg(["-i", master, ...vp9, "-pass", "2", "-passlogfile", passlog, "-deadline", "good", "-cpu-used", "1", "-c:a", "libopus", "-b:a", "128k", path.join(outDir, "orbit.webm")]);
 

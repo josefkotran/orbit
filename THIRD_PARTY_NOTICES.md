@@ -33,7 +33,8 @@ keeps its own licence. In an installed Orbit (`%LOCALAPPDATA%\Programs\Orbit`) y
 | piper-tts 1.8.0 (left out of a `--without-piper` build) | **GPL-3.0-or-later** | `…\site-packages\piper` | github.com/OHF-Voice/piper1-gpl |
 | espeak-ng, compiled into `piper\espeakbridge.pyd`, plus `piper\espeak-ng-data` | **GPL-3.0-or-later** | `…\site-packages\piper` | github.com/espeak-ng/espeak-ng |
 | Piper's helper models: g2pW (Apache-2.0), Hebrew nakdimon (see `piper\hebrew\LICENSE`) | as stated | `…\site-packages\piper` | PyPI piper-tts |
-| onnxruntime 1.30.0 (left out without Piper) | MIT. Its own third-party notices are in `onnxruntime\ThirdPartyNotices.txt`. | site-packages | github.com/microsoft/onnxruntime |
+| onnxruntime 1.30.0 (left out without Piper; Piper and the second recognizer Canary run on it) | MIT. Its own third-party notices are in `onnxruntime\ThirdPartyNotices.txt`. | site-packages | github.com/microsoft/onnxruntime |
+| onnx-asr 0.12.0 (runs Canary, see below; it ships small ONNX models of its own feature extraction) | MIT, Copyright (c) Ilya Stupakov | `…\site-packages\onnx_asr` | github.com/istupakov/onnx-asr |
 | flatbuffers, protobuf, packaging, pathvalidate (Piper/onnxruntime dependencies) | Apache-2.0, BSD-3-Clause, Apache-2.0 OR BSD-2-Clause, MIT | site-packages | PyPI |
 | whisper.cpp 1.9.4 and ggml (`whisper-server.exe`, `libwhisper.dll`, `ggml*.dll`) | MIT, Copyright (c) 2023-2026 The ggml authors | `whisper\` | github.com/ggml-org/whisper.cpp |
 | Compiled into whisper-server: cpp-httplib (MIT, (c) Yuji Hirose), nlohmann/json 3.11.2 (MIT, (c) 2013-2022 Niels Lohmann), miniaudio/dr_wav (public domain or MIT-0, David Reid), Vulkan-Headers (Apache-2.0 / MIT) | as stated | `whisper\` | whisper.cpp source tree |
@@ -64,6 +65,7 @@ with the Windows voice only.
 | Whisper models large-v3 and large-v3-turbo (OpenAI), converted to ggml | MIT | huggingface.co/ggerganov/whisper.cpp |
 | Piper voice cs_CZ-jirka-medium | Dataset CC0 (OHF-Voice/voice-datasets). **However,** the voice is fine-tuned from the en_US "lessac" voice. lessac was trained on the Blizzard Challenge 2013 Lessac data, whose licence allows research use only and excludes any commercial use, including voice synthesis products. | huggingface.co/rhasspy/piper-voices |
 | Piper voice cs_CZ-kasandra-medium | Dataset CC BY 4.0, author Ondřej Šimek. **Attribution required.** | huggingface.co/rhasspy/piper-voices |
+| NVIDIA Canary-1B-v2 (the transcript check's second recognizer, only when switched on), ONNX export by Ilya Stupakov | CC BY 4.0, (c) NVIDIA Corporation. **Attribution required** (here and in the setting's text). | huggingface.co/istupakov/canary-1b-v2-onnx (from huggingface.co/nvidia/canary-1b-v2) |
 
 ## Used but not shipped
 

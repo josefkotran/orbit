@@ -151,12 +151,18 @@ class Widgets(unittest.TestCase):
         window = self.window(running={IDS[1]})
         self.assertEqual(window.resume.text(), "Přepnout do relace")  # the newest one runs
         asked = []
-        window.resume_requested.connect(asked.append)
+        window.resume_requested.connect(lambda session_id, model: asked.append((session_id, model)))
+        self.assertFalse(window.model.isEnabled())  # it runs: its window comes up, it isn't started again
         window.list.setCurrentRow(1)
         self.assertEqual(window.resume.text(), "Pokračovat v relaci")
+        self.assertTrue(window.model.isEnabled())
         window.resume.click()
         window.list.itemActivated.emit(window.list.currentItem())  # a double click or Enter
-        self.assertEqual(asked, [IDS[0], IDS[0]])
+        window.model.setCurrentIndex(window.model.findData("sonnet"))
+        window.resume.click()
+        self.assertEqual(asked, [(IDS[0], ""), (IDS[0], ""), (IDS[0], "sonnet")])  # "" = the model it ran on
+        window._copy()
+        self.assertEqual(QApplication.clipboard().text(), f"claude --resume {IDS[0]} --model sonnet")
 
         resumed, done = [], threading.Event()
         said = []
@@ -169,7 +175,7 @@ class Widgets(unittest.TestCase):
                 mock.patch.object(favorites, "start_session", return_value=(True, "Relace pokračuje.")) as start:
             main.Dictation._resume_past(d, IDS[0])
             self.assertTrue(done.wait(5))
-            start.assert_called_once_with(self.mtex, resume=IDS[0])
+            start.assert_called_once_with(self.mtex, resume=IDS[0], model="")
             self.assertEqual(resumed, [(IDS[0], True, "Relace pokračuje.")])
             focused = mock.patch.object(sessions, "focus", return_value=True)
             with focused as focus:

@@ -125,21 +125,22 @@ def _git_init(path: Path) -> str:
     return ""
 
 
-def start_session(folder: str, resume: str = "", timeout: float = 30) -> tuple[bool, str]:
+def start_session(folder: str, resume: str = "", timeout: float = 30, model: str = "") -> tuple[bool, str]:
     """A new Claude Code session in folder (agent_tools.open_folder: Windows Terminal like the user's own sessions,
     brought to the front), or with resume a past session going on there (agent_tools.resume_folder, the session
-    history), in a small process of its own. Blocking (a worker thread): (True, its message) or (False, why not)."""
+    history), in a small process of its own; model: its --model (an alias, "" = Claude Code's default, or with
+    resume the one it ran on). Blocking (a worker thread): (True, its message) or (False, why not)."""
     code = ("import json, sys; sys.path.insert(0, sys.argv[1]); from app import agent_tools\n"
             "try:\n"
-            "    r = {'ok': True, 'text': agent_tools.resume_folder(sys.argv[2], sys.argv[3]) if sys.argv[3:] else\n"
-            "         agent_tools.open_folder(sys.argv[2])}\n"
+            "    r = {'ok': True, 'text': agent_tools.resume_folder(sys.argv[2], sys.argv[3], sys.argv[4]) if\n"
+            "         sys.argv[3] else agent_tools.open_folder(sys.argv[2], sys.argv[4])}\n"
             "except Exception as e:\n"
             "    r = {'ok': False, 'text': str(e)}\n"
             "print(json.dumps(r))")
     python = Path(sys.executable).with_name("python.exe")
     try:
         run = subprocess.run([str(python if python.is_file() else sys.executable), "-I", "-c", code,
-                              str(Path(__file__).resolve().parent.parent), folder, *([resume] if resume else [])],
+                              str(Path(__file__).resolve().parent.parent), folder, resume, model],
                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
                              stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
         result = json.loads(run.stdout.strip().splitlines()[-1])

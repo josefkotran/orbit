@@ -3,14 +3,21 @@
     python web/publish.py --dry-run              # only render into web/dist, upload nothing
     python web/publish.py                        # render and upload the page (changed files only)
     python web/publish.py --installer PATH.exe   # upload a new installer first, then the page that offers it
+    python web/publish.py --admin-password       # new password for orbit.easya.cz/admin/ (only its hash goes up)
 
 The page lives in the folder easya_cz/orbit on the Blueboard FTP account that m-tex.cz uses (the hosting turns a
 folder in easya_cz/ into a subdomain). Uploads go only over FTPS with a verified certificate, through ftplib (Windows
 curl cut files short with "426"). The password is not in this repo: it is read from the m-tex project's netrc file
 (or ORBIT_FTP_NETRC).
+
+Besides the static page there are three small PHP files for the page's own visit statistics (api/hit.php,
+api/serve.php, admin/index.php; their code in lib/). What they write lives in data/ on the server and is never
+uploaded from here, except the admin password's hash (--admin-password).
 """
 import argparse
 import datetime
+import secrets
+import tempfile
 import ftplib
 import hashlib
 import json
@@ -34,6 +41,12 @@ FTP_HOST = "ftp.blueboard.cz"  # the certificate is *.blueboard.cz
 FTP_CONNECT = os.environ.get("ORBIT_FTP_CONNECT", "ftp.m-tex.cz")
 FTP_DIR = "/easya_cz/orbit/"
 NETRC = Path(os.environ.get("ORBIT_FTP_NETRC", Path.home() / "m-tex" / "private" / "ftp.netrc"))
+# --admin-password keeps the new password here (outside this public repo, beside the FTP login), never in the output
+ADMIN_SECRET = Path(os.environ.get("ORBIT_ADMIN_PASSWORD_FILE", Path.home() / "m-tex" / "private" / "orbit-admin.txt"))
+ADMIN_ITERATIONS = 400000  # PBKDF2-SHA256, as Admin::ITERATIONS in site/lib/admin.php
+# the owner's networks, one IP a line: their visits aren't measured (Stats::ownerIps). Outside the repository, which is
+# public; it goes to the server as data/owner.php
+OWNER_IPS = Path(os.environ.get("ORBIT_OWNER_IPS_FILE", Path.home() / "m-tex" / "private" / "orbit-owner-ips.txt"))
 # Mixed into the ?v= of every asset. Bump it when Cloudflare holds a bad copy (3 Oct 2026: videos cached gzipped).
 ASSET_SALT = "2"
 
@@ -94,8 +107,12 @@ def render(with_video: bool = True) -> dict:
     release = json.loads(RELEASE.read_text(encoding="utf-8")) if RELEASE.exists() else {}
     if DIST.exists():
         shutil.rmtree(DIST)
-    skip_video = None if with_video else (lambda folder, names: names if Path(folder).name == "video" else [])
-    shutil.copytree(SITE, DIST, ignore=skip_video)
+    def skip(folder, names):
+        here = Path(folder)
+        if here == SITE / "data":  # what the server writes (visits, password hash, key) is never uploaded from here
+            return [n for n in names if n != ".htaccess"]
+        return names if not with_video and here.name == "video" else []
+    shutil.copytree(SITE, DIST, ignore=skip)
     video = (DIST / "assets" / "video" / "orbit.mp4").is_file()
     html = (DIST / "index.html").read_text(encoding="utf-8")
     html = keep_block(html, "video", video)
@@ -122,7 +139,16 @@ def render(with_video: bool = True) -> dict:
     if release:  # what install.ps1 reads: which file to download and the SHA-256 it must have
         (DIST / "download").mkdir(exist_ok=True)
         (DIST / "download" / "latest.json").write_text(json.dumps(release, indent=2) + "\n", encoding="utf-8")
+    if OWNER_IPS.is_file():
+        (DIST / "data" / "owner.php").write_text(owner_file(OWNER_IPS.read_text(encoding="utf-8")), encoding="utf-8",
+                                                 newline="\n")
     return release
+
+
+def owner_file(text: str) -> str:
+    """data/owner.php for the owner's networks (one IP a line, # starts a comment), as Stats::ownerIps reads it."""
+    ips = [line.split("#")[0].strip() for line in text.splitlines()]
+    return "<?php exit; ?>\n" + json.dumps({"ips": [ip for ip in ips if ip]})
 
 
 class FTPS(ftplib.FTP_TLS):
@@ -209,6 +235,32 @@ def upload_installer(path: Path, version: str) -> dict:
     return release
 
 
+def admin_file(password: str) -> str:
+    """data/admin.php for this password, as Admin::account() in site/lib/admin.php reads it."""
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, ADMIN_ITERATIONS, 32)
+    record = {"salt": salt.hex(), "iter": ADMIN_ITERATIONS, "hash": digest.hex(),
+              "set": int(datetime.datetime.now().timestamp())}
+    return "<?php exit; ?>\n" + json.dumps(record)
+
+
+def set_admin_password() -> None:
+    """A new random password for orbit.easya.cz/admin/: its hash goes to data/admin.php on the server, the password
+    itself only into ADMIN_SECRET. Logs every browser out of the admin."""
+    password = secrets.token_urlsafe(18)
+    with tempfile.TemporaryDirectory() as tmp:
+        local = Path(tmp) / "admin.php"
+        local.write_text(admin_file(password), encoding="utf-8", newline="\n")
+        ftp = connect()
+        try:
+            put(ftp, local, "data/admin.php")
+        finally:
+            ftp.quit()
+    ADMIN_SECRET.parent.mkdir(parents=True, exist_ok=True)
+    ADMIN_SECRET.write_text(f"https://orbit.easya.cz/admin/\n{password}\n", encoding="utf-8")
+    print(f"Nové heslo do administrace je v souboru {ADMIN_SECRET} (na server šel jen jeho otisk).")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dry-run", action="store_true", help="jen vyrenderovat do web/dist")
@@ -216,7 +268,12 @@ def main() -> None:
     ap.add_argument("--version", help="verze instalátoru (výchozí z app/version.py)")
     ap.add_argument("--all", action="store_true", help="nahrát všechno, i nezměněné soubory")
     ap.add_argument("--no-video", action="store_true", help="bez videa (i když leží v site/assets/video), místo něj orrery")
+    ap.add_argument("--admin-password", action="store_true", help="nové heslo do orbit.easya.cz/admin/ (nic dalšího nenahraje)")
     args = ap.parse_args()
+
+    if args.admin_password:
+        set_admin_password()
+        return
 
     if args.installer and not args.dry_run:
         if not args.installer.is_file():
@@ -232,12 +289,11 @@ def main() -> None:
     files = [p for p in sorted(DIST.rglob("*")) if p.is_file()]
     hashes = {p.relative_to(DIST).as_posix(): sha256(p) for p in files}
     changed = [p for p in files if done.get(p.relative_to(DIST).as_posix()) != hashes[p.relative_to(DIST).as_posix()]]
-    page = DIST / "index.html"
-    rest = [p for p in changed if p != page]
+    page, rules = DIST / "index.html", DIST / ".htaccess"
+    rest = [p for p in changed if p not in (page, rules)]
     print(f"Nahrávám {len(changed)} z {len(files)} souborů…")
-    upload(rest)  # assets first, the page that points to them last
-    if page in changed:
-        upload([page])
+    # assets and PHP first, then the rules that send install.ps1 through api/serve.php, the page that points to it all last
+    upload(rest + [p for p in (rules, page) if p in changed])
     PUBLISHED.write_text(json.dumps(hashes, indent=1) + "\n", encoding="utf-8")
 
     with urllib.request.urlopen(urllib.request.Request(URL, headers={"Cache-Control": "no-cache", "User-Agent": "Mozilla/5.0 orbit-publish"}), timeout=30) as r:

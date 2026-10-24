@@ -146,6 +146,23 @@ class TrailTest(unittest.TestCase):
         trail.push(editing.Typed("b ", 5, at=2.0), self.same)
         self.assertEqual([t.text for t in trail.items], ["b "])
 
+    def test_a_space_after_the_last_dictation_belongs_to_it(self):
+        """Pepa has the trailing space off and types it between dictations: the trail goes on."""
+        trail = editing.Trail()
+        trail.push(editing.Typed("Ahoj.", 5, at=1.0), self.same)
+        trail.space_seen(2.0)
+        trail.push(editing.Typed("Jak se máš?", 5, at=3.0), self.same)
+        self.assertEqual([t.text for t in trail.items], ["Ahoj. ", "Jak se máš?"])
+        self.assertIs(trail.check(5, self.same)[0], trail.items[-1])
+        trail.input_seen(4.0)  # a click: the cursor may be anywhere, and a space after it says nothing
+        trail.space_seen(5.0)
+        self.assertEqual(trail.check(5, self.same), (None, "input"))
+        trail.push(editing.Typed("a", 5, at=6.0), self.same)
+        trail.items[-1].selected = True  # "Vyber to": a space would replace the selection
+        trail.space_seen(7.0)
+        self.assertEqual(trail.items[-1].text, "a")
+        self.assertEqual(trail.check(5, self.same), (None, "input"))
+
 
 class HookInput(unittest.TestCase):
     """PushToTalk.on_input: the user's own keys and clicks, not the binding, a modifier, Orbit's own window or
@@ -173,6 +190,24 @@ class HookInput(unittest.TestCase):
         self.key(0xA2)  # Left Ctrl alone moves nothing
         self.key(0x41, injected=True)  # Orbit's own typing
         self.assertEqual(len(self.seen), 1)
+
+    def test_a_plain_space_is_told_apart(self):
+        spaces = []
+        self.ptt._on_space = lambda: spaces.append(1)
+        held = {}
+        saved = hotkey._user32
+        hotkey._user32 = SimpleNamespace(GetAsyncKeyState=lambda vk: 0x8000 if held.get(vk) else 0)
+        try:
+            self.key(0x20)
+            self.assertEqual((len(spaces), len(self.seen)), (1, 0))
+            held[0x11] = True  # Ctrl+Space (an editor's completion, an input method): any other key
+            self.key(0x20)
+            self.assertEqual((len(spaces), len(self.seen)), (1, 1))
+        finally:
+            hotkey._user32 = saved
+        self.ptt._on_space = None  # without the callback Space is input like any key
+        self.key(0x20)
+        self.assertEqual(len(self.seen), 2)
 
     def test_clicks(self):
         self.click(hotkey.WM_LBUTTONDOWN)
@@ -261,12 +296,15 @@ class Rewrite(unittest.TestCase):
         self.assertIn("The user's name is Pepa.", rewrite.system_prompt("Pepa"))
 
     def test_prepared_while_the_user_talks(self):
-        """A stand-in for claude.exe: it gets the prompt on stdin only after it started, answers in Claude's JSON."""
+        """A stand-in for claude.exe: it gets the prompt on stdin only after it started (a stream-json message: Claude
+        Code gives up on plain stdin that comes after 3 s), answers with a stream's result event."""
         fake = ("import json,sys; sys.stdin.reconfigure(encoding='utf-8'); sys.stdout.reconfigure(encoding='utf-8'); "
-                "p=sys.stdin.read(); "
-                "print(json.dumps({'structured_output': {'text': 'OK: ' + p.split(chr(10))[0], 'problem': ''}}))")
+                "m=json.loads(sys.stdin.readline()); assert m['type'] == 'user'; p=m['message']['content']; "
+                "print(json.dumps({'type': 'system', 'subtype': 'init'})); "
+                "print(json.dumps({'type': 'result', 'structured_output': {'text': 'OK: ' + p.split(chr(10))[0], "
+                "'problem': ''}}))")
         saved = claude_cli._command
-        claude_cli._command = lambda *a: [sys.executable, "-I", "-c", fake]
+        claude_cli._command = lambda *a, **k: [sys.executable, "-I", "-c", fake]
         try:
             rw = rewrite.Rewriter()
             rw.start()
@@ -274,7 +312,7 @@ class Rewrite(unittest.TestCase):
             self.assertEqual(result.text, "OK: Spoken instruction: zkrať to")
             rw.start()
             rw.cancel()  # not needed after all: ended, nothing waits for it
-            claude_cli._command = lambda *a: [sys.executable, "-I", "-c", "print('rozbité')"]
+            claude_cli._command = lambda *a, **k: [sys.executable, "-I", "-c", "print('rozbité')"]
             with self.assertRaises(claude_cli.ClaudeError):
                 rewrite.Rewriter().run("zkrať to", "Text.", rewrite.LAST)
         finally:

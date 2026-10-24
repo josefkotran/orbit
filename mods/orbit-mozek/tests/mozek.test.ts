@@ -170,3 +170,103 @@ test('a shell Orbit asks to stop is stopped with TaskStop, and the answer goes b
   await clock.advance(4_000) // the same request again (Orbit hasn't removed it yet): not stopped twice
   expect(stopped).toEqual(['bh3di8ppc'])
 })
+
+// Orbit's Autopilot hands the session a prompt (a round of work, what the user said on the phone): the mod finds it in
+// Orbit's data folder, submits it as the user's own words and answers next to it. Another session's prompt and one
+// Orbit gave up on long ago are left alone; a session busy with a turn gets it queued, and Orbit hears so.
+test("a prompt from Orbit is submitted as the user's words, and the answer goes back", async ($, on) => {
+  const clock = mock.clock(on, { now: 1_760_000_000_000 })
+  engine(on)
+  on('session.id', () => ({ value: 'sess-1' }))
+  mock.env(on, { USERPROFILE: 'C:\\Users\\jana' })
+  const norm = (path: string): string => path.replace(/\\/g, '/')
+  const promptDir = 'C:/Users/jana/orbit/sessions/prompt'
+  on('fs.exists', ($, e) => ({ value: norm(e.path) === 'C:/Users/jana/orbit/config.json' }))
+  const now = 1_760_000_000
+  const requests: Record<string, string> = {
+    'sess-1.a1b2c3d4.json': JSON.stringify({ session_id: 'sess-1', id: 'a1b2c3d4', time: now, text: 'Autopilot: kolo 1' }),
+    'sess-2.e5f6a7b8.json': JSON.stringify({ session_id: 'sess-2', id: 'e5f6a7b8', time: now, text: 'cizí relace' }),
+    'sess-1.c0ffee00.json': JSON.stringify({ session_id: 'sess-1', id: 'c0ffee00', time: now - 3600, text: 'staré' }),
+  }
+  const file = (name: string) => ({ name, kind: 'file' as const, size: 80, mtimeMs: 1, isLink: false })
+  on('fs.list', ($, e) => ({ value: norm(e.path ?? '') === promptDir ? Object.keys(requests).map(file) : [] }) as never)
+  on('fs.read', ($, e) => ({ value: requests[norm(e.path).split('/').pop() ?? ''] ?? '' }) as never)
+  const written: { path: string; text: string }[] = []
+  on('fs.write', ($, e) => {
+    written.push({ path: norm(e.path), text: e.text })
+    return { value: undefined }
+  })
+  const submitted: { text: string; asUser?: boolean }[] = []
+  let busy = false
+  on('prompt.submit', async ($, e) => {
+    submitted.push({ text: e.text, asUser: e.origin.kind === 'plugin' ? e.origin.asUser : undefined })
+    if (busy) await clock.sleep(60_000) // a turn runs: the prompt waits for it
+    return { text: e.text, origin: e.origin }
+  })
+
+  await $.session.start({ cwd: 'C:/projekt', surface: 'terminal', isInteractive: true })
+  await clock.advance(2_000)
+  expect(submitted).toEqual([{ text: 'Autopilot: kolo 1', asUser: true }])
+  expect(written.map(w => w.path)).toEqual([`${promptDir}/sess-1.a1b2c3d4.done.json`])
+  expect(JSON.parse(written[0]!.text)).toEqual({ ok: true, text: 'started' })
+  await clock.advance(4_000) // the same request again (Orbit hasn't removed it yet): not submitted twice
+  expect(submitted.length).toBe(1)
+
+  busy = true
+  requests['sess-1.d00d1e55.json'] = JSON.stringify({ session_id: 'sess-1', id: 'd00d1e55', time: now + 6, text: 'kolo 2' })
+  await clock.advance(2_000)
+  await clock.advance(QUEUED)
+  expect(submitted.map(s => s.text)).toEqual(['Autopilot: kolo 1', 'kolo 2'])
+  expect(JSON.parse(written.at(-1)!.text)).toEqual({ ok: true, text: 'queued' })
+})
+
+const QUEUED = 1_600
+
+// Orbit switches the session to the model picked in its panel: the mod runs Claude Code's own /model with the alias,
+// says it took the request (.ack) and what came of it (.done, with the model the session runs on now). Another
+// session's request, one Orbit gave up on, and anything that isn't one of Orbit's aliases are left alone.
+test('a model switch from Orbit runs /model in the session and the answer goes back', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_760_000_000_000 })
+  engine(on)
+  on('session.id', () => ({ value: 'sess-1' }))
+  let model = 'claude-opus-5-5'
+  on('session.model', () => ({ value: model }))
+  mock.env(on, { USERPROFILE: 'C:\\Users\\jana' })
+  const norm = (path: string): string => path.replace(/\\/g, '/')
+  const modelDir = 'C:/Users/jana/orbit/sessions/model'
+  on('fs.exists', ($, e) => ({ value: norm(e.path) === 'C:/Users/jana/orbit/config.json' }))
+  const now = 1_760_000_000
+  const requests: Record<string, string> = {
+    'sess-1.a1b2c3d4e5f6.json': JSON.stringify({ session_id: 'sess-1', id: 'a1b2c3d4e5f6', time: now, model: 'sonnet' }),
+    'sess-2.e5f6a7b8c9d0.json': JSON.stringify({ session_id: 'sess-2', id: 'e5f6a7b8c9d0', time: now, model: 'haiku' }),
+    'sess-1.c0ffee00c0ff.json': JSON.stringify({ session_id: 'sess-1', id: 'c0ffee00c0ff', time: now - 3600, model: 'haiku' }),
+    'sess-1.bad0bad0bad0.json': JSON.stringify({ session_id: 'sess-1', id: 'bad0bad0bad0', time: now, model: 'haiku --x' }),
+  }
+  const file = (name: string) => ({ name, kind: 'file' as const, size: 80, mtimeMs: 1, isLink: false })
+  on('fs.list', ($, e) => ({ value: norm(e.path ?? '') === modelDir ? Object.keys(requests).map(file) : [] }) as never)
+  on('fs.read', ($, e) => ({ value: requests[norm(e.path).split('/').pop() ?? ''] ?? '' }) as never)
+  const written: { path: string; text: string }[] = []
+  on('fs.write', ($, e) => {
+    written.push({ path: norm(e.path), text: e.text })
+    return { value: undefined }
+  })
+  on('ui.toast', () => ({ value: undefined }))
+  const ran: { command: string; args: string }[] = []
+  on('command.run', ($, e) => {
+    ran.push({ command: e.command, args: e.args })
+    model = 'claude-sonnet-5-5'
+    return { text: 'Set model to `Sonnet 5.5` and saved as your default for new sessions' }
+  })
+
+  await $.session.start({ cwd: 'C:/projekt', surface: 'terminal', isInteractive: true })
+  await clock.advance(2_000)
+  expect(ran).toEqual([{ command: 'model', args: 'sonnet' }])
+  expect(written.map(w => w.path)).toEqual([
+    `${modelDir}/sess-1.a1b2c3d4e5f6.ack.json`, `${modelDir}/sess-1.a1b2c3d4e5f6.done.json`,
+  ])
+  expect(JSON.parse(written[1]!.text)).toEqual({
+    ok: true, text: 'Set model to `Sonnet 5.5` and saved as your default for new sessions', model: 'claude-sonnet-5-5',
+  })
+  await clock.advance(4_000) // the same request again (Orbit hasn't removed it yet): not run twice
+  expect(ran.length).toBe(1)
+})

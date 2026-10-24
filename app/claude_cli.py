@@ -28,15 +28,29 @@ def claude_exe() -> str:
     return exe
 
 
-def _command(system_prompt: str, schema: dict, model: str, effort: str) -> list[str]:
+def _command(system_prompt: str, schema: dict, model: str, effort: str, stream: bool = False) -> list[str]:
+    output = ["--input-format", "stream-json", "--output-format", "stream-json", "--verbose"] if stream else \
+        ["--output-format", "json"]
     return [claude_exe(), "-p", "--safe-mode", "--model", model, *(["--effort", effort] if effort else []),
-            "--tools", "", "--no-session-persistence", "--output-format", "json", "--json-schema", json.dumps(schema),
+            "--tools", "", "--no-session-persistence", *output, "--json-schema", json.dumps(schema),
             "--system-prompt", system_prompt]
 
 
-def _result(stdout: str, stderr: str, code: int | None) -> dict:
+def _streamed(stdout: str) -> dict | None:
+    """The result event of a stream-json run (one JSON object per line, the result last)."""
+    for line in reversed(stdout.splitlines()):
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict) and event.get("type") == "result":
+            return event
+    return None
+
+
+def _result(stdout: str, stderr: str, code: int | None, stream: bool = False) -> dict:
     try:
-        result = json.loads(stdout)
+        result = _streamed(stdout) if stream else json.loads(stdout)
     except json.JSONDecodeError:
         result = None
     if not isinstance(result, dict):
@@ -63,27 +77,32 @@ def ask(prompt: str, system_prompt: str, schema: dict, model: str = "sonnet", ef
 
 class Prepared:
     """`claude -p` started before its prompt is known (the user is still talking): its own start-up overlaps that,
-    answer() then only writes the prompt. One answer per process; cancel() ends one that isn't needed."""
+    answer() then only writes the prompt. One answer per process; cancel() ends one that isn't needed.
+
+    The prompt goes in as a stream-json message: with plain text on stdin Claude Code 2.1.310 gives up when nothing
+    has come within 3 s ("no stdin data received in 3s", then "Input must be provided"), and an edit by voice is
+    said and transcribed for longer than that (24 Oct: every edit through Claude would have failed). A stream waits."""
 
     def __init__(self, system_prompt: str, schema: dict, model: str = "sonnet", effort: str = ""):
         try:
-            self._proc = subprocess.Popen(_command(system_prompt, schema, model, effort), stdin=subprocess.PIPE,
-                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
-                                          errors="replace", cwd=ROOT, env=environment(),
+            self._proc = subprocess.Popen(_command(system_prompt, schema, model, effort, stream=True),
+                                          stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                          text=True, encoding="utf-8", errors="replace", cwd=ROOT, env=environment(),
                                           creationflags=subprocess.CREATE_NO_WINDOW)
         except OSError as e:
             raise ClaudeError(f"Claude Code nejde spustit: {e}")
 
     def answer(self, prompt: str, timeout: float = 120) -> dict:
         """Blocking: Claude's answer to `prompt`."""
+        message = json.dumps({"type": "user", "message": {"role": "user", "content": prompt}}, ensure_ascii=False)
         try:
-            stdout, stderr = self._proc.communicate(prompt, timeout=timeout)
+            stdout, stderr = self._proc.communicate(message + "\n", timeout=timeout)
         except subprocess.TimeoutExpired:
             self.cancel()
             raise ClaudeError(f"Claude neodpověděl do {int(timeout)} s.")
         except (OSError, ValueError) as e:  # ended meanwhile (cancel)
             raise ClaudeError(f"Claude Code skončil dřív, než odpověděl: {e}")
-        return _result(stdout, stderr, self._proc.returncode)
+        return _result(stdout, stderr, self._proc.returncode, stream=True)
 
     def cancel(self) -> None:
         """Ends it and lets go of its pipes (Orbit runs all day: every edit not needed would leave three)."""

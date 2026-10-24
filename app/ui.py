@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QDialog, QFileDialog, QF
                                QMenu, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QToolTip,
                                QVBoxLayout, QWidget)
 
-from . import claude_setup, colors, config, downloads, history, hotkey, theme, vocab, voice
+from . import canary, claude_setup, colors, config, downloads, foldfx, history, hotkey, models, theme, vocab, voice
 from .claude_usage import Usage, clock, countdown, forecast_text, reset_text
 from .config import MODEL_LABELS
 from .sessions import STATE_LABELS, Session
@@ -26,6 +26,7 @@ DICTATIONS_GLYPH = chr(0xE8BD)  # "Message" (a bubble with lines): the dictation
 ADD_GLYPH = chr(0xE710)  # "Add": the + above the panel, a new Claude Code session in a favourite folder
 CHOOSE_GLYPH = chr(0xE762)  # "MultiSelect": "Vybrat složky…" in the +'s menu
 LOOP_GLYPH = chr(0xE8EE)  # "RepeatAll": a session running a /loop
+PHONE_GLYPH = chr(0xE717)  # "Phone": the Autopilot's chip above the panel, and a session on it
 SHELL_GLYPH = chr(0xE756)  # "CommandPrompt": background shells it most likely doesn't need any more (shells.py)
 SPEAKER_GLYPH = chr(0xE767)  # "Volume"
 MUTE_GLYPH = chr(0xE74F)  # "Mute"
@@ -126,6 +127,91 @@ class FolderMenu(QMenu):
         super().mouseReleaseEvent(event)
 
 
+class ModelPicker(QWidget):
+    """Which model a new session starts with, at the top of the + menu (a QWidgetAction: a click picks one and the
+    menu stays open): "Model" and Fable, Opus, Sonnet, Haiku as segments. Claude Code's default is picked to start
+    with (models.default()); `chosen` is the family picked, models.launch_model turns it into --model."""
+    changed = Signal(str)
+    H, PAD, GAP = 34, 12, 4
+
+    def __init__(self, parent=None, chosen: str | None = None):
+        """chosen: the family picked before (the menu drawn again), None = Claude Code's default."""
+        super().__init__(parent)
+        self.default = models.family(models.default())
+        self.chosen = chosen if chosen is not None else self.default
+        self._hover = ""
+        self.setMouseTracking(True)
+        self.setFixedHeight(self.H)
+        widest = max(QFontMetricsF(self._font(bold=True)).horizontalAdvance(models.name(f)) for f in models.FAMILIES)
+        label = QFontMetricsF(self._font()).horizontalAdvance("Model")
+        self.setMinimumWidth(int(self.PAD * 2 + label + 10 + (widest + 18) * len(models.FAMILIES)
+                                 + self.GAP * (len(models.FAMILIES) - 1)))
+        self.setCursor(Qt.PointingHandCursor)
+
+    def _font(self, bold: bool = False) -> QFont:
+        font = QFont(theme.TEXT_FONT)
+        font.setPixelSize(12)
+        font.setBold(bold)
+        return font
+
+    def _segments(self) -> list[tuple[str, QRectF]]:
+        metrics = QFontMetricsF(self._font())
+        left = self.PAD + metrics.horizontalAdvance("Model") + 10
+        width = max(40.0, (self.width() - self.PAD - left - self.GAP * (len(models.FAMILIES) - 1)) / len(models.FAMILIES))
+        return [(f, QRectF(left + i * (width + self.GAP), 6, width, self.H - 12))
+                for i, f in enumerate(models.FAMILIES)]
+
+    def _at(self, pos) -> str:
+        return next((f for f, rect in self._segments() if rect.contains(QPointF(pos))), "")
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setFont(self._font())
+        p.setPen(QColor(theme.DIM))
+        p.drawText(QRectF(self.PAD, 0, 60, self.H), Qt.AlignLeft | Qt.AlignVCenter, "Model")
+        accent = QColor(theme.ACCENT)
+        for f, rect in self._segments():
+            picked, hover = f == self.chosen, f == self._hover
+            fill = QColor(accent)
+            fill.setAlpha(70 if picked else 28 if hover else 0)
+            p.setBrush(fill)
+            p.setPen(QPen(accent if picked else QColor(theme.LINE), 1))
+            p.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 6, 6)
+            p.setFont(self._font(bold=picked))
+            p.setPen(QColor(theme.TEXT) if picked or hover else QColor(theme.DIM))
+            p.drawText(rect, Qt.AlignCenter, models.name(f))
+
+    def mouseMoveEvent(self, event):
+        hover = self._at(event.position())
+        if hover != self._hover:
+            self._hover = hover
+            self.setToolTip(self.tip(hover) if hover else "")
+            self.update()
+
+    def leaveEvent(self, event):
+        self._hover = ""
+        self.update()
+
+    def mousePressEvent(self, event):
+        picked = self._at(event.position())
+        if picked and event.button() == Qt.LeftButton and picked != self.chosen:
+            self.chosen = picked
+            self.update()
+            self.changed.emit(picked)
+        event.accept()  # never the menu's: a click here picks a model, it doesn't close the menu
+
+    def mouseReleaseEvent(self, event):
+        event.accept()
+
+    def tip(self, f: str) -> str:
+        default = f == self.default
+        return (f"{models.name(f)}: {models.ABOUT[f]}\n" +
+                ("Výchozí model Claude Code pro nové relace." if default else
+                 "Jen pro relaci, kterou teď otevřeš (claude --model " + models.alias(f) + "). "
+                 "Výchozí model se nemění."))
+
+
 def mic_icon(state: str, size: int = 64, editing: bool = False) -> QIcon:
     pm = QPixmap(size, size)
     pm.fill(Qt.transparent)
@@ -134,6 +220,19 @@ def mic_icon(state: str, size: int = 64, editing: bool = False) -> QIcon:
     paint_mic(p, QRectF(1, 1, size - 2, size - 2), state, editing)
     p.end()
     return QIcon(pm)
+
+
+UNTITLED = "Nová relace"  # a session's row before Claude Code names it (its folder is in the next column)
+
+
+def model_tag(s: Session) -> str:
+    """After a session's name in the panel: its model by its exact name when that isn't Claude Code's default
+    ("Sonnet 5.5"), "→ Sonnet 5.5" while Orbit switches it, "" otherwise (most sessions run on the default: no noise
+    in the rows)."""
+    if s.model_switch:
+        return f"→ {s.model_switch}"
+    family = models.family(s.model)
+    return models.label(s.model) if family and family != models.family(models.default()) else ""
 
 
 def _bar_color(percent: float) -> QColor:
@@ -196,6 +295,7 @@ class FloatingButton(QWidget):
     sessions_history_clicked = Signal()  # the clock next to the agent: past Claude Code sessions to resume
     # the + next to the clock: the favourite folders' menu, opened at this point (global), upwards when True
     new_session_clicked = Signal(QPoint, bool)
+    autopilot_clicked = Signal()  # the phone left of the +: the Autopilot window
     connect_clicked = Signal()  # "Připojit Clauda" in the panel
     statusline_clicked = Signal()  # "Zapnout" in the panel: the yes to Orbit's status line in Claude Code
     claude_update_clicked = Signal()  # "Aktualizovat" in the version pill under the panel
@@ -266,6 +366,10 @@ class FloatingButton(QWidget):
         self._version_hover = False  # the mouse is over its button
         self._collapsed = False  # folded into Orbit's icon (set_collapsed)
         self._collapse_hover = False  # the mouse is over the fold button
+        self._fx: foldfx.FoldFx | None = None  # the fold animation playing over it
+        self._fx_hidden = False  # meanwhile it shows nothing (the animation shows it)
+        self._status = StatusChip()  # what it's busy with, in words next to the circles (set_status)
+        self._status_text = ""
 
         self._show_usage = False
         self._claude: bool | None = None  # Claude connected (None = still finding out); not: a call to action
@@ -279,6 +383,7 @@ class FloatingButton(QWidget):
         self._session_rows: list[tuple[QRectF, Session]] = []
         self._folder_colors: dict = {}  # config folder_colors: the user's colour per folder
         self._notes_active = 0  # tasks in Aktivní (the notebook's number)
+        self._autopilots = 0  # sessions on the Autopilot (the phone's number)
         self._attention = False  # a session waits for Pepa – don't fade out
         self._held = False  # a bubble points at the button – don't fade out either
         self._align = "right"  # which circle edge the panel lines up with
@@ -350,35 +455,39 @@ class FloatingButton(QWidget):
 
     def _relayout(self, keep_button_in_place: bool = True) -> None:
         anchor = self.button_pos()
+        self.setFixedSize(self._layout())
+        if keep_button_in_place:
+            self.move(anchor - self._btn_off)
+        self.update()
+
+    def _layout(self) -> QSize:
+        """Where the panel and the circles go in the window (self._panel, self._btn_off) and the window's size, for
+        the state as it is; the window itself doesn't change (_relayout)."""
         side, slot = self._side, self._slot
         if self._collapsed:  # the icon in the mic's square: button_pos stays the same, so does the saved place
             self._panel = QRectF()
             self._btn_off = QPoint(0, 0)
-            self.setFixedSize(side, side)
-        elif not self._has_panel:
+            return QSize(side, side)
+        if not self._has_panel:
             self._panel = QRectF()
             self._btn_off = QPoint(slot, 0)
-            self.setFixedSize(slot + side, side)
-        else:
-            ph, vh = self._panel_height(), self._version_h
-            if self._align == "center":  # both circles centered under the panel
-                w = max(self.PANEL_W, slot + side)
-                bx, px = (w - slot - side) // 2 + slot, (w - self.PANEL_W) // 2
-            elif self._align == "right":  # panel's right edge = the mic circle's
-                w = self.PANEL_W + self.MARGIN
-                bx, px = w - side, 0
-            else:  # panel's left edge = the speaker circle's
-                px = 4
-                w = px + self.PANEL_W
-                bx = slot
-            # dots on the far side, the version between the panel and the circles
-            by, py = (0, side + vh) if self._below else (self.STRIP_H + ph + vh, self.STRIP_H)
-            self._btn_off = QPoint(bx, by)
-            self._panel = QRectF(px, py, self.PANEL_W, ph)
-            self.setFixedSize(w, self.STRIP_H + ph + vh + side)
-        if keep_button_in_place:
-            self.move(anchor - self._btn_off)
-        self.update()
+            return QSize(slot + side, side)
+        ph, vh = self._panel_height(), self._version_h
+        if self._align == "center":  # both circles centered under the panel
+            w = max(self.PANEL_W, slot + side)
+            bx, px = (w - slot - side) // 2 + slot, (w - self.PANEL_W) // 2
+        elif self._align == "right":  # panel's right edge = the mic circle's
+            w = self.PANEL_W + self.MARGIN
+            bx, px = w - side, 0
+        else:  # panel's left edge = the speaker circle's
+            px = 4
+            w = px + self.PANEL_W
+            bx = slot
+        # dots on the far side, the version between the panel and the circles
+        by, py = (0, side + vh) if self._below else (self.STRIP_H + ph + vh, self.STRIP_H)
+        self._btn_off = QPoint(bx, by)
+        self._panel = QRectF(px, py, self.PANEL_W, ph)
+        return QSize(w, self.STRIP_H + ph + vh + side)
 
     def button_pos(self) -> QPoint:
         return self.pos() + self._btn_off
@@ -395,16 +504,21 @@ class FloatingButton(QWidget):
         """Keep the panel on screen: line it up with the circle edge that faces the screen's middle."""
         if not self._has_panel:
             return
-        center = self.button_pos() + QPoint(self._side // 2, self._side // 2)
+        wanted = self._wanted_align(self.button_pos())
+        if wanted != (self._align, self._below):
+            self._align, self._below = wanted
+            self._relayout()
+
+    def _wanted_align(self, pos: QPoint) -> tuple[str, bool]:
+        """With the mic square's top left at pos: which circle edge the panel lines up with (the one facing the
+        screen's middle), and whether it goes under the circles (no room above them)."""
+        center = pos + QPoint(self._side // 2, self._side // 2)
         screen = QGuiApplication.screenAt(center) or QGuiApplication.primaryScreen()
         geo = screen.availableGeometry()
         third = geo.width() / 6
         align = "right" if center.x() > geo.center().x() + third else \
             "left" if center.x() < geo.center().x() - third else "center"
-        below = self.button_pos().y() - self._panel_height() - self.STRIP_H - self._version_h < geo.top()
-        if (align, below) != (self._align, self._below):
-            self._align, self._below = align, below
-            self._relayout()
+        return align, pos.y() - self._panel_height() - self.STRIP_H - self._version_h < geo.top()
 
     def _button_center(self) -> QPointF:
         return QPointF(self._btn_off.x() + self._side / 2, self._btn_off.y() + self._side / 2)
@@ -479,6 +593,21 @@ class FloatingButton(QWidget):
     def _on_new(self, pos: QPointF) -> bool:
         c = self._new_center()
         return c is not None and math.hypot(pos.x() - c.x(), pos.y() - c.y()) <= self.AGENT_D / 2 + 2
+
+    def _phone_center(self) -> QPointF | None:
+        """The Autopilot's phone: left of the + (with Claude connected, like the +)."""
+        new = self._new_center()
+        return QPointF(new.x() - self.AGENT_D - 6, new.y()) if new else None
+
+    def _on_phone(self, pos: QPointF) -> bool:
+        c = self._phone_center()
+        return c is not None and math.hypot(pos.x() - c.x(), pos.y() - c.y()) <= self.AGENT_D / 2 + 2
+
+    def set_autopilot_count(self, count: int) -> None:
+        """How many sessions are on the Autopilot (a number on the phone)."""
+        if count != self._autopilots:
+            self._autopilots = count
+            self.update()
 
     def _notes_center(self) -> QPointF | None:
         """The notebook's chip: in the same strip as the colour dots, at the panel's left end (above "Claude")."""
@@ -567,6 +696,27 @@ class FloatingButton(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         _no_activate(self)
+        self._place_status()
+
+    def hideEvent(self, event):
+        self._end_fx()
+        self._status.say("")
+        super().hideEvent(event)
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        if self._status_text:  # dragged, or the panel changed size: the words go with the circles
+            self._place_status()
+
+    def set_status(self, text: str) -> None:
+        """What it's busy with after the key is let go, in words next to the circles (StatusChip); "" = nothing.
+        The circle's orange alone doesn't say it to everyone."""
+        if text != self._status_text:
+            self._status_text = text
+            self._place_status()
+
+    def _place_status(self) -> None:
+        self._status.say(self._status_text, self.bubble_anchor()[0] if self.isVisible() else None)
 
     def bubble_anchor(self) -> tuple[QRect, str | None]:
         """Both circles (speaker and mic) in screen coordinates, and where the panel is ('above', 'below' or None)."""
@@ -580,6 +730,8 @@ class FloatingButton(QWidget):
         return QRect(left, c.y() - r, c.x() + r - left, 2 * r), panel
 
     def set_state(self, state: str, editing: bool = False) -> None:
+        if state == "recording":
+            self._end_fx()  # the mic open is seen at once (red), not after the fold animation
         if state != self._state or editing != self._editing:
             self._state, self._editing = state, editing
             self.update()
@@ -629,17 +781,71 @@ class FloatingButton(QWidget):
             self._auto_align()
         self.update()
 
-    def set_collapsed(self, on: bool) -> None:
+    def set_collapsed(self, on: bool, animate: bool = False) -> None:
         """Folded (Pepa, 13 Oct): the panel, its strip and both circles give way to Orbit's icon where the mic is; a
-        click on the icon unfolds it all again. Push-to-talk still works, the icon turns red while it listens."""
+        click on the icon unfolds it all again. Push-to-talk still works, the icon turns red while it listens.
+        animate (a click, the menu; not at start): the fold animation plays over it (foldfx, Pepa 16 Oct), while it
+        already is what it turns into and shows nothing until the animation is over."""
         if on == self._collapsed:
             return
+        self._end_fx()  # (clicked again in the middle of one)
+        animate = animate and self.isVisible() and foldfx.animations_on()
+        anchor, shown = self.button_pos(), QRect(self.pos(), self.size())
+        shot = self._snapshot(shown.size()) if animate and on else None  # folding: the panel as it is now
         self._collapsed = on
         self._session_rows, self._feed_rect, self._cta_rect = [], QRectF(), QRectF()  # nothing of the panel to hit
         self._speaker_hover = self._version_hover = self._collapse_hover = False
-        self._relayout()
-        self._auto_align()
+        if not animate:
+            self._relayout()
+            self._auto_align()
+            self._wake()
+            self._place_status()
+            return
+        if not on and self._has_panel:  # (what _auto_align would do, before the window changes)
+            self._align, self._below = self._wanted_align(anchor)
+        size = self._layout()
+        place = QRect(anchor - self._btn_off, size)
+        if not on:  # unfolding: the panel as it's about to be (painting it also sets where its clicks go)
+            shot, shown = self._snapshot(size), place
+        self._fx = foldfx.FoldFx(shot, shown, QPointF(anchor) + QPointF(self._side / 2, self._side / 2), on,
+                                 self._paint_icon, self.ICON_D / 2, self.windowOpacity())
+        self._fx.finished.connect(self._fx_over)
+        self._fx.start()  # on the screen with what's there now, then the button hides: never neither of them
+        self._fx_hidden = True
+        self.repaint()
+        self.setFixedSize(size)
+        self.move(place.topLeft())
+        self.update()
         self._wake()
+        self._place_status()
+
+    def _snapshot(self, size: QSize) -> QPixmap:
+        """The window painted whole at this size, as paintEvent would (the fold animation's picture of it)."""
+        ratio = self.devicePixelRatioF()
+        shot = QPixmap(round(size.width() * ratio), round(size.height() * ratio))
+        shot.setDevicePixelRatio(ratio)
+        shot.fill(Qt.transparent)
+        p = QPainter(shot)
+        p.setRenderHint(QPainter.Antialiasing)
+        self._paint_whole(p)
+        p.end()
+        return shot
+
+    def _fx_over(self) -> None:
+        """The animation's last frame is what the button shows: the button shows itself again, then the animation's
+        window goes (a moment both on top of each other, never neither)."""
+        fx, self._fx = self._fx, None
+        self._fx_hidden = False
+        self.repaint()
+        if fx is not None:
+            fx.stop()
+            fx.close()
+            fx.deleteLater()
+
+    def _end_fx(self) -> None:
+        """The fold animation ends now (the mic opens, folded again, hidden)."""
+        if self._fx is not None:
+            self._fx_over()
 
     def _collapse_rect(self) -> QRectF:
         """The fold chip's square (what its repaint covers); empty without the panel."""
@@ -653,7 +859,7 @@ class FloatingButton(QWidget):
 
     def _fold(self, on: bool) -> None:
         """The user's click: fold or unfold, and say so (main saves it)."""
-        self.set_collapsed(on)
+        self.set_collapsed(on, animate=True)
         self.collapse_toggled.emit(on)
 
     def set_forecast(self, eta: datetime | None) -> None:
@@ -666,7 +872,8 @@ class FloatingButton(QWidget):
         """What the rows show (_paint_sessions): a poll every second that changes none of it repaints nothing (one
         repaint of the layered window ~19 ms, half of Orbit's idle CPU)."""
         return tuple((s.id, s.state, s.name, s.folder, bool(s.topic), s.loop.label() if s.loop else "",
-                      None if s.context is None else round(s.context * 100), len(s.needless)) for s in sessions)
+                      None if s.context is None else round(s.context * 100), len(s.needless), s.autopilot,
+                      model_tag(s)) for s in sessions)
 
     def set_sessions(self, sessions: list[Session]) -> None:
         # the tracker changes its Session objects in place: what the rows show is kept, not worked out again from
@@ -726,6 +933,8 @@ class FloatingButton(QWidget):
             self.update()
 
     def set_agent_state(self, state: str) -> None:
+        if state == "listening":
+            self._end_fx()
         if state != self._agent_state:
             self._resize_after(lambda: setattr(self, "_agent_state", state))
             self._wake()
@@ -852,6 +1061,8 @@ class FloatingButton(QWidget):
     # -- painting ---------------------------------------------------------------------------
 
     def paintEvent(self, event):
+        if self._fx_hidden:  # the fold animation shows it (foldfx): nothing until it's over
+            return
         if self._collapsed:  # (the speaker's square reaches into the icon's: the short ways below don't apply)
             p = QPainter(self)
             p.setRenderHint(QPainter.Antialiasing)
@@ -872,9 +1083,13 @@ class FloatingButton(QWidget):
             self._paint_speaker(p)
             p.end()
             return
-        self._work_icons = []
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
+        self._paint_whole(p)
+
+    def _paint_whole(self, p: QPainter) -> None:
+        """Everything (not folded): the panel with its strip and the version, the mic, the speaker."""
+        self._work_icons = []
         if self._has_panel:
             self._paint_panel(p)
             self._paint_dots(p)
@@ -883,6 +1098,7 @@ class FloatingButton(QWidget):
             self._paint_glyph_chip(p, self._dictations_center(), DICTATIONS_GLYPH, 14)
             self._paint_history_chip(p)
             self._paint_new_chip(p)
+            self._paint_phone_chip(p)
             self._paint_fold_chip(p)
             self._paint_version(p)
         c = self._button_center()
@@ -984,12 +1200,15 @@ class FloatingButton(QWidget):
         p.setPen(QPen(QColor("#E6E8EC"), 2, Qt.SolidLine, Qt.RoundCap))
         p.drawLine(QPointF(c.x() - 5.5, c.y() + 0.5), QPointF(c.x() + 5.5, c.y() + 0.5))
 
-    def _paint_icon(self, p: QPainter) -> None:
+    def _paint_icon(self, p: QPainter, c: QPointF | None = None, scale: float = 1.0, spin: float = 0.0,
+                    moon: float | None = None) -> None:
         """Folded: Orbit's icon (the website's favicon: a planet with a tilted orbit and a moon in the accent colour)
         where the mic is. Red while it listens, with the level ring like the mic; the busy and loading arc; an orange
-        dot when a session waits for the user."""
-        c = self._button_center()
-        r = self.ICON_D / 2
+        dot when a session waits for the user. The fold animation (foldfx) paints it at its centre c, bigger or
+        smaller (scale), turned (spin, degrees clockwise) and with the moon elsewhere on its orbit (moon: radians,
+        clockwise from the orbit's right end, behind the planet on the far side; None = where it sits)."""
+        c = self._button_center() if c is None else c
+        r = self.ICON_D / 2 * scale
         listening = self._state == "recording" or self._agent_state == "listening"
         if listening:
             ring = r + 2 + self._level * (self.MARGIN - 2)
@@ -1006,14 +1225,28 @@ class FloatingButton(QWidget):
         s = 2 * r / 32  # the favicon's 32 units
         light, back = QColor("#EEF2FA"), bg
         orbit = QRectF(-11.8 * s, -4.2 * s, 23.6 * s, 8.4 * s)
+        if moon is None:
+            moon_at, moon_r, behind = QPointF(9 * s, 2.7 * s), 2 * s, False
+        else:  # on the orbit, a touch bigger in front and smaller behind
+            moon_at = QPointF(11.8 * math.cos(moon) * s, 4.2 * math.sin(moon) * s)
+            moon_r = 2 * s * (1 + 0.15 * (math.sin(moon) - math.sin(foldfx.MOON_REST)))
+            behind = math.sin(moon) < 0
+
+        def paint_moon():
+            p.setPen(QPen(back, 1.2 * s))
+            p.setBrush(QColor(theme.ACCENT))
+            p.drawEllipse(moon_at, moon_r, moon_r)
+
         p.save()
         p.translate(c)
-        p.rotate(-24)
+        p.rotate(-24 + spin)
         faint = QColor(light)
         faint.setAlphaF(0.55)
         p.setBrush(Qt.NoBrush)
         p.setPen(QPen(faint, 1.6 * s))
         p.drawArc(orbit, 0, 180 * 16)  # behind the planet
+        if behind:
+            paint_moon()
         p.setPen(Qt.NoPen)
         p.setBrush(light)
         p.drawEllipse(QPointF(0, 0), 6 * s, 6 * s)
@@ -1022,9 +1255,8 @@ class FloatingButton(QWidget):
         p.drawArc(orbit, 180 * 16, 180 * 16)  # in front of it, with a gap
         p.setPen(QPen(light, 1.6 * s, Qt.SolidLine, Qt.RoundCap))
         p.drawArc(orbit, 180 * 16, 180 * 16)
-        p.setPen(QPen(back, 1.2 * s))
-        p.setBrush(QColor(theme.ACCENT))
-        p.drawEllipse(QPointF(9 * s, 2.7 * s), 2 * s, 2 * s)  # the moon
+        if not behind:
+            paint_moon()
         p.restore()
         if self._state in ("busy", "loading"):
             pen = QPen(QColor(COLORS["busy"][0] if self._state == "busy" else COLORS["loading"][1]), 2.5)
@@ -1109,6 +1341,25 @@ class FloatingButton(QWidget):
     def _paint_new_chip(self, p: QPainter) -> None:
         """The + for a new session in a favourite folder, a chip like the history's."""
         self._paint_glyph_chip(p, self._new_center(), ADD_GLYPH, 13)
+
+    def _paint_phone_chip(self, p: QPainter) -> None:
+        """The Autopilot: a phone in a chip like the +'s, with how many sessions are on it (in the accent colour)."""
+        c = self._phone_center()
+        self._paint_glyph_chip(p, c, PHONE_GLYPH, 14)
+        if c is None or not self._autopilots:
+            return
+        r = self.AGENT_D / 2
+        badge = QPointF(c.x() + r * 0.62, c.y() - r * 0.62)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(theme.ACCENT))
+        p.drawEllipse(badge, 6.5, 6.5)
+        font = QFont("Segoe UI")
+        font.setPixelSize(9)
+        font.setBold(True)
+        p.setFont(font)
+        p.setPen(QColor(theme.ON_ACCENT))
+        p.drawText(QRectF(badge.x() - 6.5, badge.y() - 6.5, 13, 13), Qt.AlignCenter,
+                   str(self._autopilots) if self._autopilots < 10 else "9+")
 
     def _paint_glyph_chip(self, p: QPainter, c: QPointF | None, glyph: str, size: int) -> None:
         if c is None:
@@ -1359,8 +1610,11 @@ class FloatingButton(QWidget):
         icon_font.setPixelSize(10)
         check_font = QFont(icon_font)
         check_font.setPixelSize(11)
-        folder_w = min(110.0, max(metrics.horizontalAdvance(s.folder) for s in self._sessions)) if any(
-            s.topic for s in self._sessions) else 0.0  # no topics: the names already are the folders
+        # its folder always in its own column, in its colour: a session Claude Code hasn't named yet (nothing asked in
+        # it so far) is "Nová relace" until it is, not its folder's name in the topic's place (with a model after it,
+        # "orbit Sonnet 5.5", the folder looked missing)
+        folder_w = min(110.0, max(metrics.horizontalAdvance(s.folder) for s in self._sessions)) \
+            if self._sessions else 0.0
         for s in self._sessions:
             row = QRectF(x, y, right - x, self.ROW_H)
             self._session_rows.append((row.adjusted(-6, 0, 6, 0), s))
@@ -1376,13 +1630,35 @@ class FloatingButton(QWidget):
                                row.width() - 13 - (folder_w + gap if folder_w else 0) - state_w - pct_w, row.height())
             loop = s.loop.label() if s.loop else ""
             loop_w = icon_w + 2 + metrics.horizontalAdvance(loop) if loop else 0.0
+            pilot = s.autopilot
+            pilot_w = icon_w + 2 + metrics.horizontalAdvance(pilot) if pilot else 0.0
             needless = len(s.needless)
             count = str(needless) if needless > 1 else ""
             shell_w = icon_w + (2 + metrics.horizontalAdvance(count) if count else 0) if needless else 0.0
-            marks_w = (loop_w + 6 if loop else 0) + (shell_w + 6 if needless else 0)
-            name = bold_metrics.elidedText(s.name, Qt.ElideRight, name_rect.width() - marks_w)
+            tag = model_tag(s)
+            tag_w = metrics.horizontalAdvance(tag) if tag else 0.0
+            marks_w = (loop_w + 6 if loop else 0) + (pilot_w + 6 if pilot else 0) + (shell_w + 6 if needless else 0) \
+                + (tag_w + 6 if tag else 0)
+            name_metrics = bold_metrics if s.topic else metrics
+            if not s.topic:
+                p.setFont(font)
+                p.setPen(dim)
+            name = name_metrics.elidedText(s.topic or UNTITLED, Qt.ElideRight, name_rect.width() - marks_w)
             p.drawText(name_rect, Qt.AlignLeft | Qt.AlignVCenter, name)
-            left = name_rect.left() + bold_metrics.horizontalAdvance(name) + 6
+            left = name_rect.left() + name_metrics.horizontalAdvance(name) + 6
+            if tag:  # another model than the default (or Orbit switching it): its name, dim; accent while switching
+                p.setFont(font)
+                p.setPen(QColor(theme.ACCENT) if s.model_switch else dim)
+                p.drawText(QRectF(left, row.top(), tag_w, row.height()), Qt.AlignLeft | Qt.AlignVCenter, tag)
+                left += tag_w + 6
+            if pilot:  # on the Autopilot: a phone and its round or the next call's time, in the accent colour
+                p.setPen(QColor(theme.ACCENT))
+                p.setFont(icon_font)
+                p.drawText(QRectF(left, row.top(), icon_w, row.height()), Qt.AlignCenter, PHONE_GLYPH)
+                p.setFont(font)
+                p.drawText(QRectF(left + icon_w + 2, row.top(), pilot_w, row.height()),
+                           Qt.AlignLeft | Qt.AlignVCenter, pilot)
+                left += pilot_w + 6
             if loop:  # right after the name, in the accent colour
                 p.setPen(QColor(theme.ACCENT))
                 p.setFont(icon_font)
@@ -1400,7 +1676,7 @@ class FloatingButton(QWidget):
                     p.drawText(QRectF(left + icon_w + 2, row.top(), shell_w, row.height()),
                                Qt.AlignLeft | Qt.AlignVCenter, count)
             p.setFont(font)
-            if folder_w and s.topic:
+            if folder_w:
                 p.setPen(hue)
                 p.drawText(QRectF(name_rect.right() + gap, row.top(), folder_w, row.height()),
                            Qt.AlignLeft | Qt.AlignVCenter, metrics.elidedText(s.folder, Qt.ElideRight, folder_w))
@@ -1576,6 +1852,11 @@ class FloatingButton(QWidget):
             elif self._on_new(pos):
                 tip = ("Nová relace Claude Code: klikni a vyber oblíbenou složku, relace se v ní otevře v novém "
                        "okně terminálu.\nTamtéž založíš nové repo a vybereš, které složky tu mají být.")
+            elif self._on_phone(pos):
+                tip = ("Autopilot: relace pracuje sama po kolech a po každém ti zavolá na telefon, co udělala a co "
+                       "navrhuje.\nTvoje odpověď v hovoru je její další zadání. Klikni a vyber relaci.")
+                if self._autopilots:
+                    tip += f"\nNa autopilotu: {self._autopilots}."
             elif self._on_dictations(pos):
                 tip = ("Historie diktátů: všechno, co se nadiktovalo, nejnovější nahoře.\nKlikni sem a diktát "
                        "zkopíruješ jedním klikem, vložíš znovu nebo opravíš.")
@@ -1665,6 +1946,8 @@ class FloatingButton(QWidget):
             # the menu opens away from the panel: up from a strip above it, down from one below it
             anchor = QPointF(c.x() - r, c.y() + (r + 4 if self._below else -r - 4))
             self.new_session_clicked.emit(self.mapToGlobal(anchor).toPoint(), not self._below)
+        elif self._on_phone(event.position()):
+            self.autopilot_clicked.emit()
         elif self._on_notes(event.position()):
             self.notes_clicked.emit()
         elif self._on_dictations(event.position()):
@@ -1855,6 +2138,138 @@ class Bubble(QWidget):
         for line in self._lines:
             p.drawText(QRectF(x, y, right - x, line_h), Qt.AlignLeft | Qt.AlignVCenter, line)
             y += line_h
+
+
+class StatusChip(QWidget):
+    """What Orbit is busy with once the key is let go, in words next to the circles: "Přepisuji…", "Claude kontroluje
+    přepis…" (Pepa 24 Oct: the orange mic is fine, but "někomu to nemusí docvaknout"). A pill in the panel's style
+    with a moon going round its orbit (the agent's "thinking"), on the side facing the screen's middle: where a
+    bubble comes, and a bubble covers it. Never takes focus or the mouse; FloatingButton places it (set_status)."""
+
+    H = 28
+    SHADOW = 6
+    GAP = Bubble.GAP + Bubble.TAIL  # from the circles: under a bubble's card, not its tail
+    DELAY_MS = 300  # a quick transcription shows no words (they'd only flash)
+    MOON = "#F5A524"  # the busy mic's orange
+
+    def __init__(self):
+        super().__init__(None, Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
+                         | Qt.WindowDoesNotAcceptFocus | Qt.WindowTransparentForInput)
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self._text = ""
+        self._circle: QRect | None = None
+        self._phase = 0.0
+        self._font = QFont("Segoe UI Variable Text")
+        self._font.setPixelSize(12)
+        self._timer = QTimer(self, interval=33)
+        self._timer.timeout.connect(self._tick)
+        self._delay = QTimer(self, singleShot=True, interval=self.DELAY_MS)
+        self._delay.timeout.connect(self._appear)
+        self._fade = QPropertyAnimation(self, b"windowOpacity", self)
+        self._fade.finished.connect(self._faded)
+
+    @property
+    def text(self) -> str:
+        return self._text
+
+    def say(self, text: str, circle: QRect | None = None) -> None:
+        """text next to circle (the circles on the screen: FloatingButton.bubble_anchor); "" or no circle hides it.
+        The same text again only moves it (the button was dragged)."""
+        text = text if circle is not None else ""
+        if not text:
+            self._text = ""
+            self._delay.stop()
+            if self.isVisible() and self._fade.endValue() != 0.0:
+                self._animate(0.0, 200)
+            return
+        changed = text != self._text
+        self._text, self._circle = text, circle
+        if self.isVisible() and self._fade.endValue() == 0.0:  # fading out: back at once
+            self._appear()
+        elif self.isVisible():
+            self._place()
+            if changed:
+                self.update()
+        elif not self._delay.isActive():
+            self._delay.start()
+
+    def _place(self) -> None:
+        circle, s = self._circle, self.SHADOW
+        # never wider than a bubble's card, which covers it
+        w = min(Bubble.W, round(10 + 14 + 8 + QFontMetricsF(self._font).horizontalAdvance(self._text) + 13))
+        screen = QGuiApplication.screenAt(circle.center()) or QGuiApplication.primaryScreen()
+        geo = screen.availableGeometry()
+        x = circle.left() - self.GAP - w if circle.center().x() > geo.center().x() else circle.right() + 1 + self.GAP
+        x = max(geo.left() + 4, min(x, geo.right() - 4 - w))
+        self.setFixedSize(w + 2 * s, self.H + 2 * s)
+        self.move(x - s, circle.center().y() - self.H // 2 - s)
+
+    def _appear(self) -> None:
+        if not self._text:
+            return
+        self._place()
+        if not self.isVisible():
+            self.setWindowOpacity(0.0)
+            self.show()
+            _no_activate(self)
+            # a bubble that's up stays on top of it (its card is where this goes)
+            for w in QApplication.topLevelWidgets():
+                if isinstance(w, Bubble) and w.isVisible():
+                    _put_on_top(w)
+        self._timer.start()
+        self._animate(1.0, 150)
+
+    def _animate(self, target: float, ms: int) -> None:
+        self._fade.stop()
+        self._fade.setDuration(ms)
+        self._fade.setStartValue(self.windowOpacity())
+        self._fade.setEndValue(target)
+        self._fade.start()
+
+    def _faded(self) -> None:
+        if self._fade.endValue() == 0.0:
+            self._timer.stop()
+            self.hide()
+
+    def _tick(self) -> None:
+        self._phase = (self._phase + 0.16) % (2 * math.pi)
+        self.update()
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        s = self.SHADOW
+        pill = QRectF(s, s, self.width() - 2 * s, self.H)
+        half = self.H / 2
+        p.setPen(Qt.NoPen)
+        for i in range(1, 4):  # a soft shadow, like the bubble's: readable on a light window too
+            p.setBrush(QColor(0, 0, 0, 14))
+            p.drawRoundedRect(pill.adjusted(-i, -i + 1, i, i + 1), half + i, half + i)
+        bg = theme.tint("#181B22")
+        bg.setAlpha(245)
+        p.setPen(QPen(QColor(255, 255, 255, 28), 1))
+        p.setBrush(bg)
+        p.drawRoundedRect(pill.adjusted(0.5, 0.5, -0.5, -0.5), half, half)
+        c = QPointF(pill.left() + 10 + 7, pill.center().y())
+        p.setPen(QPen(QColor(255, 255, 255, 55), 1.4))
+        p.setBrush(Qt.NoBrush)
+        p.drawEllipse(c, 6, 6)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(self.MOON))
+        p.drawEllipse(QPointF(c.x() + 6 * math.cos(self._phase), c.y() + 6 * math.sin(self._phase)), 2.6, 2.6)
+        p.setFont(self._font)
+        p.setPen(QColor("#E6E8EC"))
+        text = QRectF(c.x() + 7 + 8, pill.top(), pill.right() - 13 - (c.x() + 15), self.H)
+        p.drawText(text, Qt.AlignLeft | Qt.AlignVCenter,
+                   QFontMetricsF(self._font).elidedText(self._text, Qt.ElideRight, text.width() + 1))
+
+
+def _put_on_top(widget: QWidget) -> None:
+    """On top of the other topmost windows again, without activating it (Qt's raise_ could)."""
+    # HWND_TOPMOST; SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOOWNERZORDER
+    ctypes.windll.user32.SetWindowPos(ctypes.c_void_p(int(widget.winId())), ctypes.c_void_p(-1), 0, 0, 0, 0,
+                                      0x0001 | 0x0002 | 0x0010 | 0x0200)
 
 
 _NON_DEDICATED_VK = set(range(0x08, 0x0E)) | set(range(0x20, 0x5B)) | set(range(0x60, 0x70)) | set(range(0xBA, 0xE3))
@@ -2444,6 +2859,26 @@ class SettingsDialog(QDialog):
         self.learn = _OptionRow("Učit se z diktátů", "Po 10 diktátech pošle jejich text (ne zvuk) Claudovi a ten "
                                 "doplní slovník. Čerpá z tvých limitů.", cfg["learn_vocabulary"])
         transcript.addWidget(self.learn)
+        self.check = _OptionRow("Kontrola přepisu Claudem", "Pošle text diktátu (ne zvuk) Claudovi, ten najde "
+                                "špatně slyšená slova a Orbit je opraví. Klik na bublinu vrátí původní. Čerpá z tvých "
+                                "limitů.", cfg["check_transcripts"])
+        transcript.addWidget(self.check)
+        size = downloads.size_text(downloads.ITEMS[canary.KEY].size)
+        # (the model's name and licence in the text: CC BY asks for it, and a tooltip goes when Claude connects)
+        self.second = _OptionRow("S druhým rozpoznávačem", "NVIDIA Canary-1B-v2 (CC BY 4.0) přepíše diktát ještě "
+                                 "jednou, na procesoru a jen v počítači. Claude porovná obě verze a opraví zhruba "
+                                 f"dvakrát víc chyb. Stáhne {size}.", cfg["second_opinion"])
+        self.second_download = DownloadRow(downloads_, present="")  # shown while it's on and not downloaded
+        self.second.toggle.toggled.connect(lambda _: self._show_second())
+        self.check.toggle.toggled.connect(lambda _: self._show_second())
+        self.check_first = _OptionRow("Vložit až opravený text", "Kde se Whisper a druhý rozpoznávač shodnou, vloží "
+                                      "text hned, jinak počká na Clauda (asi 3 s) a napíše rovnou opravený. Vypnuté: "
+                                      "text se vloží hned a oprava se přepíše v okně.", cfg["check_first"])
+        transcript.addWidget(self.second)
+        transcript.addWidget(self.second_download)
+        transcript.addWidget(self.check_first)
+        if not canary.available():  # an Orbit without onnxruntime (built --without-piper)
+            self.second.hide()
         self.live = _OptionRow("Přepisovat už během mluvení", "Dlouhý diktát je hotový skoro hned po puštění, "
                                "občas o chlup méně přesně.", cfg["live_transcribe"])
         self.commands = _OptionRow("Hlasové povely", "„Nový řádek“, „(nový) odstavec“. Věta „Odešli.“ na konci "
@@ -2454,8 +2889,9 @@ class SettingsDialog(QDialog):
                                "e-mail“ Claude (dostane označený text, jinak poslední diktát).", cfg["voice_edit"])
         self.keep_history = _OptionRow("Historie diktátů", f"Posledních {history.MAX_ITEMS} jen v tomhle počítači, "
                                        "v menu Orbitu. Odtud je vložíš znovu nebo opravíš.", cfg["keep_history"])
-        self.keep = _OptionRow("Ukládat nahrávky", "Posledních 30 do složky recordings, pro ladění přesnosti "
-                               "a přehrání v historii.", cfg["keep_recordings"])
+        self.keep = _OptionRow("Ukládat nahrávky", f"Posledních {history.MAX_ITEMS} (asi 250 MB) do složky recordings: "
+                               "přehraješ je v historii a dá se na nich změřit, jak přesně Orbit rozumí tvému hlasu.",
+                               cfg["keep_recordings"])
         self.keep.setToolTip(str(config.RECORDINGS_DIR))
         transcript.addWidget(self.live)
         transcript.addWidget(self.commands)
@@ -2538,8 +2974,8 @@ class SettingsDialog(QDialog):
         behaviour.addWidget(self.agent_key_hint)
         self.agent.toggle.toggled.connect(lambda _: self._check_keys())
         self._show_agent_key()
-        self._claude_rows = (self.learn, self.show_sessions, self.tint, self.speak, self.artifacts, self.agent,
-                             self.agent_key_label, self.agent_key)
+        self._claude_rows = (self.learn, self.check, self.second, self.check_first, self.show_sessions, self.tint,
+                             self.speak, self.artifacts, self.agent, self.agent_key_label, self.agent_key)
 
         self.voice = _combo()
         self.voice.currentIndexChanged.connect(lambda _: self._show_voice_note())
@@ -2598,6 +3034,7 @@ class SettingsDialog(QDialog):
             claude.changed.connect(self._claude_changed)
             claude.busy_changed.connect(self._claude_busy)
         self._claude_changed()
+        self._show_second()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -2661,6 +3098,11 @@ class SettingsDialog(QDialog):
         for row in self._claude_rows:
             row.setEnabled(connected)
             row.setToolTip("" if connected else "Potřebuje připojeného Clauda (výš v sekci Claude).")
+
+    def _show_second(self):
+        """The second recognizer's download, while it's chosen (it's of use only with the check)."""
+        on = self.check.isChecked() and self.second.isChecked() and canary.available()
+        self.second_download.set_key(canary.KEY if on else None)
 
     def _label_models(self):
         advice = downloads.advise()
@@ -2772,7 +3214,9 @@ class SettingsDialog(QDialog):
         }
         if self._connected():
             sessions_on, artifacts_on = self.show_sessions.isChecked(), self.artifacts.isChecked()
-            values.update(learn_vocabulary=self.learn.isChecked(), show_sessions=sessions_on,
+            values.update(learn_vocabulary=self.learn.isChecked(), check_transcripts=self.check.isChecked(),
+                          second_opinion=self.second.isChecked(), check_first=self.check_first.isChecked(),
+                          show_sessions=sessions_on,
                           tint_sessions=self.tint.isChecked(),
                           speak_answers=self.speak.isChecked(), read_artifacts=artifacts_on,
                           agent=self.agent.isChecked() and not self._keys_clash(), agent_ptt=self._agent_binding,

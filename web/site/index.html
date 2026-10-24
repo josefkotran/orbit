@@ -38,6 +38,324 @@
 </script>
 </head>
 <body>
+<!-- preloader: the moon traces Orbit's orbit while the page loads, the word thickens into the nav's logo; then the
+     veil opens from the planet and mark and word fly into the nav (driven by the script below, site.js waits for it) -->
+<div class="preloader" id="preloader" aria-hidden="true">
+  <canvas class="pl-fx" id="plFx"></canvas>
+  <div class="pl-glow far" id="plGlowFar"></div><div class="pl-glow" id="plGlow"></div>
+  <svg class="pl-mark" id="plMark" viewBox="0 0 32 32">
+    <defs>
+      <mask id="plGap" maskUnits="userSpaceOnUse" x="-4" y="-4" width="40" height="40"><rect x="-4" y="-4" width="40" height="40" fill="#fff"/><path id="plGapPath" d="" fill="none" stroke="#000" stroke-width="1.6" stroke-linecap="round"/></mask>
+      <radialGradient id="plShadeG" cx=".36" cy=".3" r=".78"><stop offset=".45" stop-color="#0B1020" stop-opacity="0"/><stop offset="1" stop-color="#0B1020" stop-opacity=".5"/></radialGradient>
+    </defs>
+    <g transform="rotate(-24 16 16)" fill="none" stroke-linecap="round">
+      <path class="pl-dots b" d="M3 16a13 4.6 0 0 1 26 0"/>
+      <path class="pl-ring b" id="plRingB" d=""/>
+      <path class="pl-trail" id="plTB0" d=""/><path class="pl-trail" id="plTB1" d=""/><path class="pl-trail" id="plTB2" d=""/>
+      <circle class="pl-moon" id="plMoonB" cx="3" cy="16" r="0"/>
+      <circle class="pl-planet" id="plPlanet" cx="16" cy="16" r="0" mask="url(#plGap)"/>
+      <circle id="plShade" cx="16" cy="16" r="0" fill="url(#plShadeG)" mask="url(#plGap)"/>
+      <path class="pl-dots" d="M29 16a13 4.6 0 0 1-26 0"/>
+      <path class="pl-ring" id="plRingF" d=""/>
+      <path class="pl-trail" id="plTF0" d=""/><path class="pl-trail" id="plTF1" d=""/><path class="pl-trail" id="plTF2" d=""/>
+      <circle class="pl-moon f" id="plMoonF" cx="3" cy="16" r="0"/>
+    </g>
+  </svg>
+  <p class="pl-word" id="plWord"><span>O</span><span>r</span><span>b</span><span>i</span><span>t</span></p>
+  <div class="pl-foot" id="plFoot"><span>České diktování pro Windows</span><i class="pl-line"><i id="plFill"></i></i><b id="plCount">000</b></div>
+</div>
+<script>
+(function () {
+  "use strict";
+  var html = document.documentElement, el = document.getElementById("preloader");
+  var siteReady = false, readyAt = 0, revealed = true, finished = true, revealFns = [], doneFns = [];
+  // site.js holds its own intro until the veil opens (onReveal) and scrolling until the logo has landed (onDone)
+  var api = window.OrbitPreloader = {
+    active: false, covered: false,
+    ready: function () { if (!siteReady) { siteReady = true; readyAt = performance.now(); } },
+    onReveal: function (fn) { if (revealed) fn(); else revealFns.push(fn); },
+    onDone: function (fn) { if (finished) fn(); else doneFns.push(fn); }
+  };
+  if (!el) return;
+  if (!window.requestAnimationFrame || !window.matchMedia || matchMedia("(prefers-reduced-motion: reduce)").matches) { el.parentNode.removeChild(el); return; }
+  revealed = finished = false; api.active = api.covered = true;
+  html.classList.add("pl-run", "pl-brand");
+
+  var $ = function (id) { return document.getElementById(id); };
+  var cv = $("plFx"), ctx = cv.getContext && cv.getContext("2d"), mark = $("plMark"), word = $("plWord"), fillEl = $("plFill"), countEl = $("plCount");
+  var planet = $("plPlanet"), shade = $("plShade"), ringB = $("plRingB"), ringF = $("plRingF"), gapPath = $("plGapPath"), moonB = $("plMoonB"), moonF = $("plMoonF");
+  var trails = [[$("plTB0"), $("plTF0")], [$("plTB1"), $("plTF1")], [$("plTB2"), $("plTF2")]];
+  var TRAIL = [[1, 1.05, 0.12], [0.55, 1.5, 0.2], [0.24, 2.2, 0.36]];  // length share, width, opacity: a comet's head
+  var chars = [].slice.call(word.children);
+  if (ctx) el.classList.add("cv");
+  var PI = Math.PI, TAU = PI * 2, TILT = -24 * PI / 180, CT = Math.cos(TILT), ST = Math.sin(TILT), K = 4.6 / 13;
+  var clamp = function (v, a, b) { return v < a ? a : v > b ? b : v; };
+  var lerp = function (a, b, u) { return a + (b - a) * u; };
+  var smooth = function (u) { return u * u * (3 - 2 * u); };
+  var inOut = function (u) { return u < 0.5 ? 4 * u * u * u : 1 - Math.pow(2 - 2 * u, 3) / 2; };
+  var outCubic = function (u) { return 1 - Math.pow(1 - u, 3); };
+  var outBack = function (u) { return 1 + 2.6 * Math.pow(u - 1, 3) + 1.6 * Math.pow(u - 1, 2); };
+  var cs = getComputedStyle(html), ACC = (cs.getPropertyValue("--accent-rgb") || "").trim() || "91,157,255";
+  var hex = (cs.getPropertyValue("--space") || "").trim().match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+  var SPACE = hex ? [1, 2, 3].map(function (i) { return parseInt(hex[i], 16); }).join(",") : "4,6,12";
+  var rgba = function (rgb, a) { return "rgba(" + rgb + "," + clamp(a, 0, 1).toFixed(3) + ")"; };
+  var glow = $("plGlow"), glowFar = $("plGlowFar");
+
+  /* scrolling waits for the landing; the veil itself takes no touch gestures (CSS) */
+  var KEYS = /^(PageDown|PageUp|ArrowDown|ArrowUp|Home|End| |Spacebar)$/;
+  var block = function (e) { if (e.type !== "keydown" || KEYS.test(e.key)) e.preventDefault(); };
+  ["wheel", "touchmove", "keydown"].forEach(function (n) { addEventListener(n, block, { passive: false, capture: true }); });
+  var unblock = function () { ["wheel", "touchmove", "keydown"].forEach(function (n) { removeEventListener(n, block, { capture: true }); }); };
+  var fire = function (list) { list.splice(0).forEach(function (fn) { try { fn(); } catch (e) { setTimeout(function () { throw e; }); } }); };
+
+  /* when to go: the fonts, the page and site.js are in, and the moon has had its lap (shorter later in the session).
+     The load event also waits for the video's metadata: once site.js is ready it gets 1.2 s more, not longer */
+  var again = false;
+  try { again = sessionStorage.getItem("orbit-pl") === "1"; sessionStorage.setItem("orbit-pl", "1"); } catch (e) {}
+  var MIN = again ? 0.7 : 1.5, fontsIn = false, loaded = document.readyState === "complete", late = false;
+  var fonts = function () { if (!fontsIn) { fontsIn = true; word.classList.add("in"); } };
+  try { Promise.all([document.fonts.load('600 100px "Anybody"', "Orbit"), document.fonts.load('500 13px "Mona Sans"', "České diktování 0123456789")]).then(fonts, fonts); } catch (e) { fonts(); }
+  setTimeout(fonts, 2500);
+  addEventListener("load", function () { loaded = true; setTimeout(api.ready, 1500); });  // site.js never called: go anyway
+  setTimeout(function () { late = true; }, 6000);
+
+  /* geometry: the planet's centre on screen, the orbit's size in px; dust lives in the orbit's tilted plane */
+  var W = 0, H = 0, dpr = 1, cx = 0, cy = 0, S = 0, ringPx = 0, dust = [];
+  function layout(full) {
+    W = innerWidth; H = innerHeight; dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    if (ctx) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+    if (!full) return;
+    var r = mark.getBoundingClientRect(); S = r.width; cx = r.left + S / 2; cy = r.top + r.height / 2; ringPx = S * 13 / 32;
+  }
+  layout(true);
+  (function seed() {
+    var n = Math.round(clamp(W * H / 2400, 180, 620)), far = Math.max(W, H) * 0.62 / ringPx;
+    for (var i = 0; i < n; i++) {
+      var u = Math.random(), rho = 1.3 + (far - 1.3) * Math.pow(u, 1.6), g = Math.random() + Math.random() + Math.random() - 1.5;
+      dust.push({ rho: rho, a: Math.random() * TAU, h: g * (0.02 + 0.16 * u * u) * rho, w: 0.9 * Math.pow(1.3 / rho, 1.15),
+        s: 0.7 + Math.random() * Math.random() * 2.1, tint: Math.random() < 0.22 ? 1 : 0, b: 0.35 + Math.random() * 0.65,
+        tw: Math.random() * TAU, d: clamp(u * 0.75 + Math.random() * 0.3, 0, 1) });
+    }
+  })();
+  var rz;
+  addEventListener("resize", function () { clearTimeout(rz); rz = setTimeout(function () { if (el) layout(phase === 0); }, 120); });
+
+  /* the orbit in the mark's own units (13 × 4.6 around 16,16): angle a, behind the planet where sin a < 0 */
+  function pt(a) { return (16 + 13 * Math.cos(a)).toFixed(3) + " " + (16 + 4.6 * Math.sin(a)).toFixed(3); }
+  function arcs(a1, a2) {  // [behind, in front] for the stretch a1 → a2
+    var back = "", front = "", s = a1;
+    while (s < a2 - 1e-4) {
+      var e = Math.min(a2, (Math.floor(s / PI + 1e-9) + 1) * PI), d = "M" + pt(s) + "A13 4.6 0 0 1 " + pt(e);
+      if (Math.sin((s + e) / 2) < 0) back += d; else front += d;
+      s = e;
+    }
+    return [back, front];
+  }
+  function attr(n, k, v) { var c = "_" + k; if (n[c] !== v) { n[c] = v; n.setAttribute(k, v); } }
+  function css(n, k, v) { var c = "_s" + k; if (n[c] !== v) { n[c] = v; n.style[k] = v; } }
+
+  /* exit choreography, seconds after the moon closes its orbit */
+  var INHALE = 0.4, BURST = 0.36, IRIS_AT = 0.38, IRIS_DUR = 1.3, FLY_AT = 0.44, LAG = 0.07, FLY = 0.95;
+  var t = 0, et = 0, phase = 0, shown = 0, last = 0, moonA = PI, omega = 0, flyU = 0, pct = -1;
+  var mBox, wBox, wGlyph, mTo = null, wTo = null, travel = 0, landedAt = -1, irisR = 0, irisEnd = 0;
+
+  function beginExit() {
+    phase = 1; et = 0;
+    el.classList.add("exit");
+    word.textContent = "Orbit"; word.style.fontVariationSettings = '"wdth" 125, "wght" 700';  // the nav's own axes
+    var box = function (r) { return { x: r.left, y: r.top, w: r.width, h: r.height }; };
+    var glyphs = function (node) { var rg = document.createRange(); rg.selectNodeContents(node); return box(rg.getBoundingClientRect()); };
+    mBox = box(mark.getBoundingClientRect()); wBox = box(word.getBoundingClientRect()); wGlyph = glyphs(word.firstChild);
+    // where they land: the logo in the nav, if it is on screen (a reload further down can leave the nav hidden)
+    var nav = $("nav"), brand = nav && nav.querySelector(".brand"), bsvg = brand && brand.querySelector("svg"), btext = brand && brand.lastChild;
+    if (bsvg && btext && btext.nodeType === 3 && !nav.classList.contains("hidden")) {
+      var r = box(bsvg.getBoundingClientRect()), tr = glyphs(btext);
+      if (r.w && tr.w && r.y + r.h > 0 && r.y < H) { mTo = r; wTo = tr; }
+    }
+    // the moon arrives where site.js has put the nav's moon (it follows the scroll), going forward at least half a turn
+    var mf = $("moonFront"), land = 0.7;
+    if (mf) land = Math.atan2((+mf.getAttribute("cy") - 16) / 4.6, (+mf.getAttribute("cx") - 16) / 13);
+    travel = ((land - moonA) % TAU + TAU) % TAU; if (travel < PI) travel += TAU;
+    irisR = S * 0.21; irisEnd = Math.max(Math.hypot(cx, cy), Math.hypot(W - cx, cy), Math.hypot(cx, H - cy), Math.hypot(W - cx, H - cy));
+  }
+
+  function place(node, E, G, D, u, inh) {  // G flies (glyphs, or the whole mark) from where it is to D; E: the element's own box
+    var c0x = G.x + G.w / 2, c0y = G.y + G.h / 2, x, y, s, m = inOut(u), o = 1;
+    if (D) {  // a swoop: up first, then gliding into the nav
+      var c2x = D.x + D.w / 2, c2y = D.y + D.h / 2, c1x = c0x + (c2x - c0x) * 0.18, c1y = c2y + (c0y - c2y) * 0.3, n = 1 - m;
+      x = n * n * c0x + 2 * n * m * c1x + m * m * c2x; y = n * n * c0y + 2 * n * m * c1y + m * m * c2y;
+      s = Math.exp(lerp(Math.log(inh), Math.log(D.w / G.w), inOut(Math.min(1, u * 1.1))));
+    } else { x = c0x; y = c0y; s = inh * (1 + 0.5 * outCubic(u)); o = 1 - smooth(u); }  // nowhere to land: it dissolves
+    var tx = x - s * G.w / 2 - E.x - s * (G.x - E.x), ty = y - s * G.h / 2 - E.y - s * (G.y - E.y);
+    node.style.transform = "translate(" + tx.toFixed(2) + "px," + ty.toFixed(2) + "px) scale(" + s.toFixed(5) + ")";
+    if (!D) node.style.opacity = o.toFixed(3);
+  }
+
+  function drawMark() {
+    var pr = clamp((t - 0.06) / 0.75, 0, 1), ma = clamp((t - 0.22) / 0.4, 0, 1), fu = smooth(flyU), w = 0.8 + 0.6 * fu;
+    var pr6 = (6.6 * outBack(pr)).toFixed(3);
+    attr(planet, "r", pr6); attr(shade, "r", pr6); attr(shade, "opacity", (1 - fu).toFixed(3));  // a lit sphere, flat as in the logo once it lands
+    attr(moonF, "stroke-width", (0.45 + 0.55 * fu).toFixed(3));
+    attr(ringB, "stroke-width", w.toFixed(3)); attr(ringF, "stroke-width", w.toFixed(3)); attr(gapPath, "stroke-width", (2 * w).toFixed(3));
+    var ring = arcs(PI, phase ? 3 * PI : PI + TAU * shown);  // the orbit is drawn as far as the moon has come
+    attr(ringB, "d", ring[0]); attr(ringF, "d", ring[1]); attr(gapPath, "d", ring[1]);
+    var x = (16 + 13 * Math.cos(moonA)).toFixed(3), y = (16 + 4.6 * Math.sin(moonA)).toFixed(3), front = Math.sin(moonA) >= 0, r = (1.9 * outBack(ma)).toFixed(3);
+    [moonB, moonF].forEach(function (m) { attr(m, "cx", x); attr(m, "cy", y); attr(m, "r", r); });
+    attr(moonF, "opacity", front ? 1 : 0); attr(moonB, "opacity", front ? 0 : 0.8);
+    // the comet tail grows with speed, never reaches back past the start on the first lap, and is gone when it lands
+    var tail = clamp(0.3 + Math.abs(omega) * 0.11, 0.3, 1.9), vis = ma * (1 - smooth(clamp((flyU - 0.55) / 0.45, 0, 1)));
+    for (var k = 0; k < 3; k++) {
+      var a1 = moonA - tail * TRAIL[k][0]; if (!phase) a1 = Math.max(PI, a1);
+      var d = moonA - a1 > 0.01 && vis > 0.01 ? arcs(a1, moonA) : ["", ""];
+      for (var j = 0; j < 2; j++) { attr(trails[k][j], "d", d[j]); attr(trails[k][j], "stroke-width", TRAIL[k][1]); attr(trails[k][j], "opacity", (TRAIL[k][2] * vis).toFixed(3)); }
+    }
+  }
+
+  function drawWord() {  // each letter thickens a little after the one before: a ripple from O to t
+    for (var i = 0; i < chars.length; i++) {
+      var q = inOut(clamp(shown * 1.3 - i * 0.075, 0, 1)), wv = Math.sin(t * 2.4 - i * 0.7) * (1 - shown);
+      var fv = '"wdth" ' + clamp(50 + 75 * q + 7 * wv, 50, 150).toFixed(1) + ', "wght" ' + Math.round(clamp(100 + 600 * q + 60 * wv, 100, 900));
+      if (chars[i]._fv !== fv) { chars[i]._fv = fv; chars[i].style.fontVariationSettings = fv; }
+    }
+  }
+
+  // dust is drawn as soft sprites (one textured quad each, batched per alpha step); a path of hundreds of arcs and the
+  // full-screen gradients this canvas started with cost the GPU 13-28 ms a frame
+  var DOT = [], LINE = [], SPRITE = [];
+  for (var q = 0; q < 20; q++) { DOT.push([]); LINE.push([]); }
+  ["226,233,255", ACC].forEach(function (rgb) {
+    var sc = document.createElement("canvas"), sx = sc.getContext && sc.getContext("2d");
+    sc.width = sc.height = 32;
+    if (sx) {
+      var sg = sx.createRadialGradient(16, 16, 0, 16, 16, 16);
+      sg.addColorStop(0, "rgba(" + rgb + ",1)"); sg.addColorStop(0.32, "rgba(" + rgb + ",.9)"); sg.addColorStop(0.62, "rgba(" + rgb + ",.24)"); sg.addColorStop(1, "rgba(" + rgb + ",0)");
+      sx.fillStyle = sg; sx.fillRect(0, 0, 32, 32);
+    }
+    SPRITE.push(sc);
+  });
+  function paint() {
+    var inh = phase ? smooth(clamp(et / INHALE, 0, 1)) : 0, burst = phase ? clamp((et - BURST) / 0.8, 0, 1) : 0, i, j, p, g;
+    var u = phase ? clamp((et - IRIS_AT) / IRIS_DUR, 0, 1) : 0;
+    // the glow around the planet (two composited layers, never repainted): breathes while loading, swells on the
+    // inhale, goes out over the opening veil
+    var gl = clamp(t / 1.1, 0, 1) * (0.78 + 0.22 * Math.sin(t * 1.7)) * (1 + 0.9 * inh) * (1 - smooth(clamp(u * 2.4, 0, 1)));
+    var go = Math.min(1, gl / 1.6).toFixed(3);
+    css(glow, "opacity", go); css(glowFar, "opacity", go);
+    css(glow, "transform", "scale(" + (0.92 + 0.08 * gl / 1.9 + 0.1 * inh).toFixed(4) + ")");
+    if (!ctx) return;
+    var c = ctx;
+    c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    c.clearRect(0, 0, W, H);
+    // the veil opens from the planet: until then it is the preloader's own background; from now one gradient paints it
+    // with a soft hole and a thin light running along the hole's edge
+    if (u > 0) {
+      var R = lerp(irisR, irisEnd, inOut(u)), soft = 24 + R * 0.3, Rt = R + soft, k0 = R / Rt, ra = 0.32 * Math.pow(1 - u, 1.2);
+      g = c.createRadialGradient(cx, cy, 0, cx, cy, Rt);
+      g.addColorStop(0, rgba(SPACE, 0)); g.addColorStop(k0, rgba(SPACE, 0)); g.addColorStop(lerp(k0, 1, 0.12), rgba(ACC, ra));
+      g.addColorStop(lerp(k0, 1, 0.4), rgba(SPACE, 0.62)); g.addColorStop(lerp(k0, 1, 0.72), rgba(SPACE, 0.9)); g.addColorStop(1, rgba(SPACE, 1));
+      c.fillStyle = g; c.fillRect(0, 0, W, H);
+    }
+    // dust on the orbit's plane: gathers in at the start, is pulled in on the inhale, flies out in streaks on the burst
+    for (j = 0; j < 20; j++) { DOT[j].length = 0; LINE[j].length = 0; }
+    var spin = 1 + 2.2 * inh + 3 * burst, out = burst * burst * 7, dOut = burst * 14 * 0.05 / 0.8;  // dOut: the last 50 ms of flight
+    for (i = 0; i < dust.length; i++) {
+      p = dust[i];
+      var f = clamp((t - p.d * 0.7) / 1.1, 0, 1), fe = outCubic(f);
+      p.a += p.w * spin * dtNow;
+      var a = p.a - 0.9 * (1 - fe), sa = Math.sin(a), rr = p.rho * ringPx;
+      var lx = rr * Math.cos(a), ly = rr * K * sa + p.h * ringPx, bx = lx * CT - ly * ST, by = lx * ST + ly * CT;
+      var kr = 1 + 0.55 * (1 - fe) - 0.1 * inh + out;
+      var al = p.b * f * (0.5 + 0.25 * (sa + 1)) * (0.8 + 0.2 * Math.sin(t * 2 + p.tw)) * (1 - burst);
+      var lv = Math.round(al * 10); if (lv < 1) continue;
+      var x = cx + bx * kr, y = cy + by * kr, b = p.tint * 10 + lv - 1;
+      if (x < -40 || y < -40 || x > W + 40 || y > H + 40) continue;
+      if (burst > 0.02) { var k2 = kr - dOut; LINE[b].push(cx + bx * k2, cy + by * k2, x, y); }
+      else DOT[b].push(x, y, p.s * (0.8 + 0.35 * sa) * 2.7);
+    }
+    c.lineCap = "butt"; c.lineWidth = 1;
+    for (j = 0; j < 20; j++) {
+      var D = DOT[j], L = LINE[j], m;
+      if (D.length) {
+        c.globalAlpha = (j % 10 + 1) / 10;
+        for (m = 0; m < D.length; m += 3) { var s = D[m + 2]; c.drawImage(SPRITE[j < 10 ? 0 : 1], D[m] - s / 2, D[m + 1] - s / 2, s, s); }
+        c.globalAlpha = 1;
+      }
+      if (L.length) {
+        c.beginPath();
+        for (m = 0; m < L.length; m += 4) { c.moveTo(L[m], L[m + 1]); c.lineTo(L[m + 2], L[m + 3]); }
+        c.strokeStyle = j < 10 ? "rgba(226,233,255," + (j + 1) / 10 + ")" : rgba(ACC, (j - 9) / 10); c.stroke();
+      }
+    }
+    if (!phase) return;
+    // the burst: a flash from the planet and two shock waves running out along the orbit's plane
+    var fu = (et - BURST) / 0.6;
+    if (fu > 0 && fu < 1) {
+      var fr = S * (0.3 + 2.6 * outCubic(fu)), fa = 0.85 * Math.pow(1 - fu, 2);
+      g = c.createRadialGradient(cx, cy, 0, cx, cy, fr);
+      g.addColorStop(0, "rgba(255,255,255," + fa.toFixed(3) + ")"); g.addColorStop(0.2, rgba(ACC, fa * 0.75)); g.addColorStop(0.55, rgba(ACC, fa * 0.2)); g.addColorStop(1, rgba(ACC, 0));
+      c.fillStyle = g; c.fillRect(cx - fr, cy - fr, 2 * fr, 2 * fr);
+    }
+    [[BURST, 0.8, ACC, 0.8], [BURST + 0.12, 0.95, "226,233,255", 0.5]].forEach(function (sw) {
+      var su = (et - sw[0]) / sw[1];
+      if (su <= 0 || su >= 1) return;
+      var rx = ringPx * (1.05 + 9 * outCubic(su));
+      c.strokeStyle = rgba(sw[2], sw[3] * Math.pow(1 - su, 2.2)); c.lineWidth = 0.6 + 2.6 * (1 - su);
+      c.beginPath(); c.ellipse(cx, cy, rx, rx * K * 1.2, TILT, 0, TAU); c.stroke();
+    });
+  }
+
+  function land() {  // the logo is in the nav: hand over to the real one, let the page scroll
+    if (finished) return;
+    finished = true; html.classList.remove("pl-brand"); unblock(); fire(doneFns);
+  }
+  function finish() {
+    land(); if (!revealed) { revealed = true; fire(revealFns); }
+    api.active = api.covered = false;
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+    el = null;
+  }
+
+  var dtNow = 0;
+  function step(now) {
+    var dt = last ? Math.min((now - last) / 1000, 0.05) : 1 / 60; last = now; dtNow = dt;
+    t += dt;
+    var prev = moonA;
+    if (!phase) {
+      var all = fontsIn && siteReady && (loaded || performance.now() - readyAt > 1200) || late;
+      var real = all ? 1 : Math.max(Math.min((fontsIn ? 0.3 : 0) + (siteReady ? 0.35 : 0) + (loaded ? 0.35 : 0), 0.92), 0.3 * (1 - Math.exp(-t / 0.6)));
+      shown += (Math.min(real, t >= MIN ? 1 : smooth(t / MIN)) - shown) * (1 - Math.exp(-dt / 0.14));
+      if (all && t >= MIN && shown > 0.996) shown = 1;
+      moonA = PI + TAU * shown;
+      drawWord();
+      if (shown === 1) beginExit();
+    } else {
+      et += dt;
+      moonA = 3 * PI + travel * inOut(clamp(et / (FLY_AT + FLY), 0, 1));
+      var inh = 1 + 0.05 * smooth(clamp(et / INHALE, 0, 1)), um = clamp((et - FLY_AT) / FLY, 0, 1), uw = clamp((et - FLY_AT - LAG) / FLY, 0, 1);
+      flyU = inOut(um);
+      place(mark, mBox, mBox, mTo, um, inh);
+      place(word, wBox, wGlyph, wTo, uw, inh);
+      if (et >= IRIS_AT && !revealed) { revealed = true; api.covered = false; el.classList.add("open"); fire(revealFns); }
+      if (!ctx && revealed) el.style.opacity = (1 - smooth(clamp((et - IRIS_AT) / IRIS_DUR, 0, 1))).toFixed(3);
+      if (uw >= 1 && landedAt < 0) { landedAt = et; land(); }
+      if (landedAt >= 0 && et - landedAt > 0.22) { mark.style.visibility = word.style.visibility = "hidden"; }
+    }
+    omega = lerp(omega, (moonA - prev) / dt, 0.25);
+    var pc = Math.round(shown * 100), fs = "scaleX(" + shown.toFixed(4) + ")";
+    if (pc !== pct) { pct = pc; countEl.textContent = ("00" + pc).slice(-3); }
+    if (fs !== fillEl._t) { fillEl._t = fs; fillEl.style.transform = fs; }
+    drawMark();
+    paint();
+    if (phase && et >= IRIS_AT + IRIS_DUR) finish();
+  }
+  function frame(now) {
+    if (!el) return;
+    try { step(now); } catch (e) { finish(); setTimeout(function () { throw e; }); return; }
+    if (el) requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(function (now) { el.classList.add("go"); frame(now); });
+})();
+</script>
 <canvas id="space" aria-hidden="true"></canvas>
 <div class="cursor" id="cursor" aria-hidden="true"><span class="cursor-dot"></span><span class="cursor-ring"><span class="cursor-label"></span></span></div>
 <a class="skip" href="#obsah">Přeskočit na obsah</a>
@@ -62,8 +380,8 @@
     <symbol id="i-notebook" viewBox="-9 -9 18 18"><rect x="-5" y="-7.5" width="12" height="15" rx="2" fill="#22304A" stroke="#C9D1DC" stroke-width="1.4"/><path d="M-4.03-5.55A1.7 1.1 0 1 0-4.03-4.45M-4.03-2.25A1.7 1.1 0 1 0-4.03-1.15M-4.03 1.05A1.7 1.1 0 1 0-4.03 2.15M-4.03 4.35A1.7 1.1 0 1 0-4.03 5.45" fill="none" stroke="#C9D1DC" stroke-width="1.2"/></symbol>
     <symbol id="i-github"viewBox="0 0 16 16"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></symbol>
     <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M15.5 8.5V6.5a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
-    <symbol id="i-fold" viewBox="0 0 24 24"><path d="M6.5 12.5h11" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/></symbol>
-    <symbol id="i-orbit" viewBox="0 0 32 32"><circle cx="16" cy="16" r="16" fill="#0B1020"/><g transform="rotate(-24 16 16)"><path d="M4.2 16a11.8 4.2 0 0 1 23.6 0" fill="none" stroke="#EEF2FA" stroke-width="1.6" opacity=".55"/><circle cx="16" cy="16" r="6" fill="#EEF2FA"/><path d="M4.2 16a11.8 4.2 0 0 0 23.6 0" fill="none" stroke="#0B1020" stroke-width="2.8"/><path d="M4.2 16a11.8 4.2 0 0 0 23.6 0" fill="none" stroke="#EEF2FA" stroke-width="1.6" stroke-linecap="round"/><circle cx="25" cy="18.7" r="2" style="fill:var(--accent)" stroke="#0B1020" stroke-width="1.2"/></g></symbol>
+    <symbol id="i-fold" viewBox="0 0 24 24"><path d="M5.7 12.4h12.6" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"/></symbol>
+    <symbol id="i-orbit" viewBox="0 0 32 32"><circle cx="16" cy="16" r="16" style="fill:var(--ink)"/><circle cx="16" cy="16" r="15.7" fill="none" stroke="#fff" stroke-opacity=".2" stroke-width="1" vector-effect="non-scaling-stroke"/><g transform="rotate(-24 16 16)"><path d="M4.2 16a11.8 4.2 0 0 1 23.6 0" fill="none" stroke="#EEF2FA" stroke-width="1.6" opacity=".55"/><circle cx="16" cy="16" r="6" fill="#EEF2FA"/><path d="M4.2 16a11.8 4.2 0 0 0 23.6 0" fill="none" style="stroke:var(--ink)" stroke-width="2.8"/><path d="M4.2 16a11.8 4.2 0 0 0 23.6 0" fill="none" stroke="#EEF2FA" stroke-width="1.6" stroke-linecap="round"/><circle cx="25" cy="18.7" r="2" style="fill:var(--accent);stroke:var(--ink)" stroke-width="1.2"/></g></symbol>
     <symbol id="i-star" viewBox="0 0 40 40"><path d="M20 2c1.4 10.6 7.4 16.6 18 18-10.6 1.4-16.6 7.4-18 18-1.4-10.6-7.4-16.6-18-18C12.6 18.6 18.6 12.6 20 2z" fill="currentColor"/></symbol>
   </defs>
 </svg>
@@ -127,7 +445,7 @@
           <source src="assets/video/orbit.webm" type='video/webm; codecs="vp9, opus"'>
           <source src="assets/video/orbit.mp4" type='video/mp4; codecs="avc1.640032, mp4a.40.2"'>
         </video>
-        <p class="sr" id="videoText">Video je bez mluveného slova, hraje jen hudba. Ukazuje, jak podržíš klávesu, řekneš větu česky a text se napíše do kteréhokoli okna, a že přepis běží na tvé grafické kartě, takže zvuk nikam neodchází. Pak se v panelu Orbitu zeptáš hlasového agenta, co dělá relace Claude Code, a necháš ho poslat jí zadání. Na konci kolem mikrofonu krouží funkce Orbitu, mezi nimi poznámky a úkoly, a je tam tlačítko Stáhnout pro Windows.</p>
+        <p class="sr" id="videoText">Video je bez mluveného slova, hraje jen hudba. Ukazuje, jak podržíš klávesu, řekneš větu česky a text se napíše do kteréhokoli okna, jak ho hlasem opravíš („Smaž to.“, nebo s klávesou Ctrl pokyn, podle kterého text přepíše Claude) a že přepis běží na tvé grafické kartě, takže zvuk nikam neodchází. Pak se z ikonky Orbitu rozbalí panel s limity Clauda a relacemi Claude Code, zeptáš se hlasového agenta, co dělá jedna z relací, a necháš ho poslat jí zadání. Pluskem otevřeš novou relaci v oblíbené složce s modelem Sonnet, jedním klikem aktualizuješ Claude Code a panel zbalíš do ikonky a zase rozbalíš. Pak do nové relace nadiktuješ „Dej to na git, pushni to na git.“, Whisper slyší „Daytona Git, Pushnitona Git.“, vedle mikrofonu se ukáže „Claude kontroluje přepis…“ a do okna jde rovnou opravená věta. Graf ukáže, že s kontrolou je chybných slov o čtvrtinu až polovinu méně. Na konci kolem mikrofonu krouží funkce Orbitu a je tam tlačítko Stáhnout pro Windows.</p>
         <div class="stage-ctrl">
           <button class="pause" id="pauseBtn" type="button" aria-label="Zastavit video" data-cursor="Zastavit"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="i-pause" d="M8.6 6.4v11.2M15.4 6.4v11.2" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path class="i-play" d="M8.4 6.3v11.4l9.4-5.7z" fill="currentColor" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></button>
           <button class="sound" id="soundBtn" type="button"><svg aria-hidden="true"><use href="#i-speaker"/></svg><span>Pustit od začátku se zvukem</span></button>
@@ -301,9 +619,9 @@
     <div class="notes">
       <div class="note rv"><h3>Žádné poslouchání na pozadí</h3><p>Mikrofon se otevře, až když stiskneš klávesu, a po puštění se zavře. Jinak je zavřený. Otevře ho ještě hlasový agent, když ho zavoláš, a okno nastavení nebo průvodce, dokud ukazuje hlasitost mikrofonu.</p></div>
       <div class="note rv"><h3>Přepis běží na tvé grafice</h3><p>Funguje s kartami NVIDIA, AMD i Intel přes Vulkan. Model Whisper <span class="nw">large-v3</span> se stáhne jednou a pak běží jen u tebe.</p></div>
-      <div class="note rv"><h3>Claude dostane jen text, a jen když chceš</h3><p>Zvuk nikdy neodchází. Text jde Claudovi jen u tří funkcí, které jsou na začátku vypnuté: učení slovníku (text diktátů), hlasový agent (co mu řekneš, přehled tvých relací a stránky, které ti najde v historii Chromu) a předčítání artefaktů (text stránky). Do relace agent nic nepošle, dokud neřekneš <span class="said">„jo“</span>. Úkol z poznámek dostane nová relace Claude Code, až když její spuštění potvrdíš, jinak poznámky zůstávají jen v tvém počítači.</p></div>
+      <div class="note rv"><h3>Claude dostane jen text, a jen když chceš</h3><p>Zvuk nikdy neodchází. Text jde Claudovi jen u funkcí, které jsou na začátku vypnuté: kontrola přepisu a učení slovníku (text diktátů), úpravy textu hlasem (pokyn a upravovaný text), hlasový agent (co mu řekneš, přehled tvých relací a stránky, které ti najde v historii Chromu) a předčítání artefaktů (text stránky). Do relace agent nic nepošle, dokud neřekneš <span class="said">„jo“</span>. Úkol z poznámek dostane nová relace Claude Code, až když její spuštění potvrdíš, jinak poznámky zůstávají jen v tvém počítači.</p></div>
     </div>
-    <p class="privacy-note rv">Ani tahle stránka tě nesleduje: nemá analytiku, reklamní skripty, cookies ani písma z cizích serverů.</p>
+    <p class="privacy-note rv">Tahle stránka nemá cookies, reklamní skripty ani písma z cizích serverů. Návštěvy si počítá sama: bez cookies, bez ukládání IP adresy a bez cizích služeb. Se zapnutým Nesledovat v prohlížeči nepočítá nic.</p>
   </div>
 </section>
 
@@ -352,6 +670,7 @@
             <span class="w-icon" id="wIcon"><svg><use href="#i-orbit"/></svg></span>
           </div>
           <div class="w-slot">
+            <div class="w-status" id="wChip" aria-hidden="true"><i></i><span id="wChipText">Přepisuji…</span></div>
             <p class="fine w-cap" id="wCaption">Panel nad plovoucím mikrofonem. Sešit vlevo nahoře otevře tvoje poznámky, reproduktor vlevo dole ztlumí všechny zvuky Orbitu.</p>
             <div class="bubble" id="bubble" aria-hidden="true">
               <div class="bt"><span class="bi" id="bIcon">✓</span><span id="bTitle"></span><span class="bn" id="bNote"></span></div>
@@ -371,6 +690,7 @@
         <div class="feat rv" data-scene="chrome"><h3><button type="button" aria-pressed="false">Stránky z prohlížeče</button></h3><p><span class="said">„Otevři mi objednávku 82.“</span> Agent ji najde v historii Google Chrome a otevře v nové kartě.</p></div>
         <div class="feat rv" data-scene="verze"><h3><button type="button" aria-pressed="false">Verze Claude Code</button></h3><p>Pod panelem pořád vidíš, jakou verzi Claude Code máš a jestli je nejnovější. Když vyjde nová, klikneš na Aktualizovat a Orbit na pozadí spustí oficiální aktualizaci od Anthropicu. Na novou verzi se jen zeptá, nic o tobě neposílá.</p></div>
         <div class="feat rv" data-scene="zbalit"><h3><button type="button" aria-pressed="false">Zbalit do ikonky</button></h3><p>Bublinkou s čárkou vpravo nahoře, hned vedle barev, zbalíš panel i tlačítka do malé ikonky Orbitu, přesně tam, kde je máš. Diktování jede dál a ikonka při něm zčervená. Klikneš na ni a panel se zase celý rozbalí.</p></div>
+        <div class="feat rv" data-scene="kontrola"><h3><button type="button" aria-pressed="false">Kontrola přepisu</button></h3><p>Whisper občas přeslechne jméno nebo anglický výraz. Totéž u tebe na procesoru přepíše druhý rozpoznávač (NVIDIA Canary), a kde se neshodnou, Claude vybere, co dává smysl. Do okna jde rovnou opravený text a chybných slov je o čtvrtinu až polovinu méně. Claude dostane jen text, kolem 2&nbsp;500 tokenů na diktát. Zapíná se v nastavení.</p></div>
         <p class="needs rv">Potřebuješ vlastní předplatné Claude, limity panel ukáže u Pro a Max. Když Claude Code ještě nemáš, průvodce ho nainstaluje oficiálním instalátorem Anthropicu. Přihlašuješ se na stránce Anthropicu, Orbit tvoje heslo nikdy nevidí.</p>
       </div>
     </div>
@@ -387,12 +707,13 @@
       <div class="specs-side">
         <div class="acc spot rv" id="acc">
           <h3>Jak přesně píše</h3>
-          <p class="fine">Změřeno na 150 nahrávkách z české části testu FLEURS.</p>
+          <p class="fine">Změřeno na 181 větách z české části testu FLEURS.</p>
           <div class="acc-bars">
             <div class="bar-group">
               <p class="gl">Chybná slova, méně je lépe</p>
-              <div class="bar-row"><div class="top"><span class="name">large-v3</span><span class="val" data-count="8.9" data-unit=" %">8,9 %</span></div><div class="track"><i style="--w:74%"></i></div></div>
-              <div class="bar-row"><div class="top"><span class="name">large-v3-turbo</span><span class="val" data-count="10.2" data-unit=" %">10,2 %</span></div><div class="track"><i style="--w:85%;background:rgba(255,255,255,.35)"></i></div></div>
+              <div class="bar-row"><div class="top"><span class="name">large-v3</span><span class="val" data-count="9.3" data-unit=" %">9,3 %</span></div><div class="track"><i style="--w:78%"></i></div></div>
+              <div class="bar-row"><div class="top"><span class="name">large-v3-turbo</span><span class="val" data-count="10.4" data-unit=" %">10,4 %</span></div><div class="track"><i style="--w:87%;background:rgba(255,255,255,.35)"></i></div></div>
+              <div class="bar-row"><div class="top"><span class="name">large-v3 s kontrolou přepisu</span><span class="val" data-count="4.7" data-unit=" %">4,7 %</span></div><div class="track"><i style="--w:39%"></i></div></div>
             </div>
             <div class="bar-group">
               <p class="gl">Přepis celé nahrávky najednou (kolem 10 s řeči), Radeon RX 9070 XT</p>
@@ -400,7 +721,7 @@
               <div class="bar-row"><div class="top"><span class="name">large-v3-turbo</span><span class="val" data-count="0.9" data-unit=" s">0,9 s</span></div><div class="track"><i style="--w:45%;background:rgba(255,255,255,.35)"></i></div></div>
             </div>
           </div>
-          <p class="fine">Jména a značky, které model neslyší správně, mu napíšeš do slovníku.</p>
+          <p class="fine">Jména a značky, které model neslyší správně, mu napíšeš do slovníku. Kontrola přepisu chce Claude Code, s druhým rozpoznávačem Canary i 4 GB místa navíc. Na volné řeči z Evropského parlamentu (44 řečníků) srazila chyby z 12,7 % na 9,4 %.</p>
         </div>
       </div>
       <dl class="spec">
@@ -472,22 +793,23 @@
   <div class="wrap faq-grid">
     <div class="sticky"><h2 class="display kinetic" id="h-faq" data-kinetic="h2">Otázky.</h2></div>
     <div class="faq" id="faq">
-      <details class="rv"><summary>Kolik Orbit stojí?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Nic. Orbit je zdarma a open source pod licencí GNU GPL 3.0 nebo novější. Celý zdrojový kód, i se skripty, které staví instalátor, je <a href="https://github.com/josefkotran/orbit">na GitHubu</a>. Najdeš tam i licence všech přibalených součástí. Funkce kolem Claude Code běží na tvém vlastním předplatném Claude: hlasový agent, učení slovníku a souhrny artefaktů z jeho limitu ukrojí trochu.</p></div></details>
+      <details class="rv"><summary>Kolik Orbit stojí?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Nic. Orbit je zdarma a open source pod licencí GNU GPL 3.0 nebo novější. Celý zdrojový kód, i se skripty, které staví instalátor, je <a href="https://github.com/josefkotran/orbit">na GitHubu</a>. Najdeš tam i licence všech přibalených součástí. Funkce kolem Claude Code běží na tvém vlastním předplatném Claude: hlasový agent, kontrola přepisu, úpravy textu hlasem, učení slovníku a souhrny artefaktů z jeho limitu ukrojí trochu. Kontrola jednoho diktátu je kolem 2&nbsp;500 tokenů malého modelu Haiku (podle ceníku API asi 0,0003&nbsp;$), takže ani stovka diktátů denně z limitu skoro nic neubere.</p></div></details>
       <details class="rv"><summary>Funguje Orbit i bez Claude Code?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Ano. Diktování, slovník, hlasové povely i poznámky fungují samy. Claude Code přidává limity, přehled relací, předčítání, hlasového agenta a spouštění úkolů z poznámek v nových relacích.</p></div></details>
       <details class="rv"><summary>Co Orbit mění v nastavení Claude Code?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Jen to, co odsouhlasíš v průvodci. Pro přehled relací a artefakty přidá do settings.json svoje hooky, pro limity svůj stavový řádek. Tvůj původní stavový řádek dál uvidíš, cizí hooky nechá být a před první změnou uloží zálohu settings.json.orbit-backup. Odinstalace jeho záznamy zase odebere.</p></div></details>
       <details class="rv"><summary>Funguje diktování bez internetu?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Ano. Internet je potřeba jen jednou, na stažení modelu. Pak přepis běží celý na tvém počítači.</p></div></details>
-      <details class="rv"><summary>Posílá Orbit můj hlas na internet?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Ne. Nahrávku přepíše Whisper přímo na tvém počítači a zvuk nikam neodchází. Obyčejné diktování na internet vůbec nesahá. Text jde k Claudovi (na servery Anthropicu) jen u funkcí, které si zapneš: učení slovníku posílá text diktátů, hlasový agent všechno, co mu řekneš, spolu s přehledem tvých relací, a předčítání artefaktů text zveřejněné stránky. Ve výchozím nastavení jsou všechny tři vypnuté. Úkol z poznámek dostane Claude, až když potvrdíš, že pro něj má Orbit otevřít novou relaci.</p></div></details>
+      <details class="rv"><summary>Posílá Orbit můj hlas na internet?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Ne. Nahrávku přepíše Whisper přímo na tvém počítači a zvuk nikam neodchází. Obyčejné diktování na internet vůbec nesahá. Text jde k Claudovi (na servery Anthropicu) jen u funkcí, které si zapneš: kontrola přepisu a učení slovníku posílají text diktátů, úpravy textu hlasem pokyn a upravovaný text, hlasový agent všechno, co mu řekneš, spolu s přehledem tvých relací, a předčítání artefaktů text zveřejněné stránky. Ve výchozím nastavení jsou všechny vypnuté. Úkol z poznámek dostane Claude, až když potvrdíš, že pro něj má Orbit otevřít novou relaci.</p></div></details>
       <details class="rv"><summary>Proč mě Windows před instalátorem varuje?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Instalátor zatím není digitálně podepsaný (certifikát vydavatele se platí) a nové nepodepsané programy Windows ze začátku zastavuje. Když chceš mít jistotu, že je soubor celý a nezměněný, spusť ve složce se staženým souborem v PowerShellu <code>Get-FileHash .\Orbit-Setup-__VERSION__.exe</code> a porovnej výsledek se SHA-256 u tlačítka Stáhnout instalátor (na velikosti písmen nezáleží).</p></div></details>
       <details class="rv"><summary>Do kterých oken umí psát?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Do všech, kam se dá psát klávesnicí: e-mail, Word, prohlížeč, chat, terminál. Výjimkou jsou okna spuštěná jako správce, tam Windows vkládání z běžných programů nedovolí. Text pak najdeš ve schránce a Orbit ti to řekne. Stejně to dopadne, když mezitím přepneš do jiného okna: text neskončí v cizím okně.</p></div></details>
-      <details class="rv"><summary>Co když mám slabší grafiku, nebo žádnou?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Na slabší kartě ti Orbit doporučí model turbo, který je dvakrát rychlejší a dělá o něco víc chyb (10,2 % chybných slov místo 8,9 %). Bez grafiky přepisuje procesor: 10 s řeči mu s modelem turbo trvá zhruba 8 až 13 s, podle počtu jader.</p></div></details>
+      <details class="rv"><summary>Co když mám slabší grafiku, nebo žádnou?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Na slabší kartě ti Orbit doporučí model turbo, který je dvakrát rychlejší a dělá o něco víc chyb (10,4 % chybných slov místo 9,3 %). Bez grafiky přepisuje procesor: 10 s řeči mu s modelem turbo trvá zhruba 8 až 13 s, podle počtu jader.</p></div></details>
       <details class="rv"><summary>Umí i jiné jazyky než češtinu?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Ne. Orbit je postavený jen pro češtinu: Whisper má jazyk napevno nastavený na češtinu a povely i celé prostředí aplikace jsou česky. Cizí jména a značky mu napíšeš do slovníku.</p></div></details>
       <details class="rv"><summary>Jak Orbit aktualizuju?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Stáhni nový instalátor a spusť ho. Nastavení, slovník, poznámky i stažené modely zůstanou. Když Orbit zrovna běží, instalátor tě požádá, ať ho nejdřív ukončíš.</p></div></details>
+      <details class="rv"><summary>Co o mně ví tahle stránka?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>Jen to, podle čeho jde poznat, jestli stránka dává smysl: z jaké stránky sem vede odkaz, která část stránky je na obrazovce a jak dlouho, kolik se přehraje z videa a jestli klikneš na stažení, zkopírování instalace, GitHub nebo některou otázku. K tomu typ zařízení a prohlížeče, jazyk a země podle IP adresy. Samotná IP adresa se neukládá, jen její otisk, který se každý den mění, takže návštěvy z různých dnů spojit nejde. Žádné cookies, nic se neukládá do tvého prohlížeče a nic se neposílá nikomu dalšímu. Se zapnutým Nesledovat v prohlížeči (Do Not Track nebo Global Privacy Control) stránka nepočítá nic. Záznamy se mažou po 400 dnech.</p></div></details>
       <details class="rv"><summary>Jak Orbit odinstaluju?<span class="pm" aria-hidden="true"></span></summary><div class="ans"><p>V Nastavení Windows, v části Aplikace. Odinstalace odebere Orbitovy záznamy z nastavení Claude Code, vrátí tvůj původní stavový řádek a zeptá se, jestli smazat i stažené modely, tvoje nastavení a poznámky.</p></div></details>
     </div>
   </div>
 </section>
 
-<section class="closing" aria-labelledby="h-close">
+<section class="closing" id="konec" aria-labelledby="h-close">
   <div class="wrap">
     <h2 class="sr" id="h-close">Stáhni Orbit</h2>
     <p class="display kinetic wordmark" data-kinetic="mark">Orbit</p>
@@ -517,5 +839,6 @@
 <script src="assets/vendor/ScrollTrigger.min.js"></script>
 <script src="assets/vendor/lenis.min.js"></script>
 <script src="assets/site.js"></script>
+<script src="assets/visit.js"></script>
 </body>
 </html>

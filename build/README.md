@@ -72,6 +72,8 @@ Modely (1,6–3,1 GB) si Orbit stáhne sám.
    - S Piperem a staženým hlasem (`models\piper` checkoutu, jinak `%LOCALAPPDATA%\Orbit\models\piper`) zkusí
      předčítání z balíčku ve složce `Jiří Nový` (junction, hlas zkopírovaný do tempu, text „.“, nic není slyšet):
      espeak-ng v 1.0.0 cestu s diakritikou neotevřel a ukončil proces. Bez hlasu se kontrola přeskočí.
+   - Naimportuje `onnx_asr` a s onnxruntime (jen build s Piperem) spustí jeho přípravu zvuku pro druhý
+     rozpoznávač Canary (kontrola přepisu, `app\canary.py`). Model Canary (4 GB) se stahuje až na přání.
    - Co kontrola v balíčku vytvoří, se zase smaže.
 8. Volitelně podepíše whisper-server a jeho DLL (viz níže) a zavolá Inno Setup s `installer\orbit.iss`.
 
@@ -164,8 +166,8 @@ O složce rozhoduje `app\paths.py`:
 3. jinak `%LOCALAPPDATA%\Orbit`, což je normální případ instalace.
 
 Uvnitř je `config.json`, `orbit.log`, `recordings\`, `models\` (modely Whisperu a hlasy Piperu, stahují se při
-prvním spuštění), `sessions\` a `cache\`. Složka programu (`%LOCALAPPDATA%\Programs\Orbit`) se za běhu nemění,
-kromě bajtkódu Pythonu, který odinstalace smaže.
+prvním spuštění; `canary-1b-v2\`, když si uživatel zapne druhý rozpoznávač), `sessions\` a `cache\`. Složka
+programu (`%LOCALAPPDATA%\Programs\Orbit`) se za běhu nemění, kromě bajtkódu Pythonu, který odinstalace smaže.
 
 ## Licence
 
@@ -185,3 +187,13 @@ hromadnou distribucí:
   - Je potřeba zajistit zdrojáky. `THIRD_PARTY_NOTICES.md` slibuje zdroje na požádání 3 roky, jinak je vystavit
     vedle instalátoru.
 - **Inno Setup** dovoluje i komerční použití, ale autoři žádají komerční uživatele o zakoupení licence.
+
+## Přesnost na vlastním hlase (`eval_dictation.py`)
+
+```
+.venv\Scripts\python.exe build\eval_dictation.py [--again]
+```
+
+Porovná diktáty, které uživatel opravil v Historii diktátů (Uložit opravu), s tím, co Orbit vložil, s textem před
+kontrolou přepisu a s druhým rozpoznávačem; `--again` je přepíše dnešním Whisperem z uložených nahrávek (potřebuje
+`keep_recordings`). Podíl chybných slov stejně jako měření v `CLAUDE.md`. Nic nezapisuje.

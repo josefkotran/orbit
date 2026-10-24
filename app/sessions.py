@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import paths, shells
+from . import models, paths, shells
 from .config import SESSIONS_DIR
 
 log = logging.getLogger(__name__)
@@ -291,6 +291,12 @@ class Session:
     # Stop hook), unless it's only servers and hung shells (shells.py)
     background: list = field(default_factory=list)
     shells: list = field(default_factory=list)  # its background shells as Orbit sees them (shells.Shell)
+    # on the Autopilot (autopilot.py, set by main): the panel's mark after a phone ("kolo 2", "15:00", "volá") and
+    # a line for the tooltip; "" = not on it
+    autopilot: str = ""
+    autopilot_note: str = ""
+    model: str = ""  # what it runs on: "claude-opus-5-5", "Sonnet 5.5" (after /model), "" = not known yet
+    model_switch: str = ""  # Orbit switches it to this one right now (main, models.py): "Sonnet"
 
     @property
     def folder(self) -> str:
@@ -350,8 +356,14 @@ class Session:
             used = f"{self.context_tokens // 1000} tis. z {_size_text(self.context_size)} tokenů" \
                 if self.context_size else ""
             lines.append(f"Kontext {self.context * 100:.0f} %" + (f" ({used})" if used else ""))
+        if self.model_switch:
+            lines.append(f"Přepínám model na {self.model_switch}…")
+        elif models.label(self.model):
+            lines.append(f"Model: {models.label(self.model)} (jiný pravým klikem)")
         if self.loop:
             lines.append(self.loop.describe())
+        if self.autopilot_note:
+            lines.append(self.autopilot_note)
         if self.mode_class == "bypass":
             lines.append("Běží bez ptaní na oprávnění.")
         if self.hwnd:
@@ -367,8 +379,8 @@ def _size_text(tokens: int) -> str:
 class SessionTracker:
     def __init__(self):
         self.sessions: dict[str, Session] = {}
-        # transcript path -> (mtime, context tokens, topic, permission mode, bypass seen)
-        self._transcript_cache: dict[str, tuple[float, int, str, str, bool]] = {}
+        # transcript path -> (mtime, context tokens, topic, permission mode, bypass seen, model)
+        self._transcript_cache: dict[str, tuple[float, int, str, str, bool, str]] = {}
         self._status_cache: dict[str, tuple[float, dict]] = {}  # session id -> (mtime, status line record)
         self._loops: dict[str, _LoopScan] = {}  # transcript path -> what it says about /loop so far
         self.watch = shells.Watch()  # the sessions' background shells
@@ -434,6 +446,7 @@ class SessionTracker:
                 s.mode = str(hook_mode["permission_mode"])
                 s.bypass_seen = s.bypass_seen or s.mode == "bypassPermissions"
             self._update_status(s)
+            s.model = s.model or str(events.get("SessionStart", {}).get("model") or "")  # no answer yet
             if not s.hwnd or not _user32.IsWindow(wintypes.HWND(s.hwnd)) \
                     or not _user32.IsWindowVisible(wintypes.HWND(s.hwnd)):
                 s.hwnd = _terminal_by_title(s.topic)
@@ -518,8 +531,9 @@ class SessionTracker:
             mode, bypass = _permission_mode(lines)
             cached = self._transcript_cache[s.transcript] = (mtime, _context_tokens(lines), topic,
                                                              mode or (cached[3] if cached else ""),
-                                                             bypass or bool(cached and cached[4]))
-        _, tokens, s.topic, mode, bypass = cached
+                                                             bypass or bool(cached and cached[4]),
+                                                             _model(lines) or (cached[5] if cached else ""))
+        _, tokens, s.topic, mode, bypass, s.model = cached
         s.mode = mode or s.mode
         s.bypass_seen = s.bypass_seen or bypass
         s.context_tokens, s.context_pct = tokens, None
@@ -705,6 +719,24 @@ def _context_tokens(lines: list[bytes]) -> int:
             return sum(usage.get(k) or 0 for k in
                        ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
     return 0
+
+
+_ANSWER_MODEL_RE = re.compile(rb'"message":\{"model":"([^"\\]{1,80})"')
+_SET_MODEL_RE = re.compile(rb"<local-command-stdout>Set model to `([^`]{1,80})`")
+
+
+def _model(lines: list[bytes]) -> str:
+    """What the session runs on, from the transcript's end: the newest main-thread answer's model
+    ("claude-opus-5-5"), or what /model set after it ("Sonnet 5.5"), "" when the tail has neither."""
+    for line in reversed(lines):
+        if b"Set model to `" in line and b'"type":"user"' in line:
+            if m := _SET_MODEL_RE.search(line):
+                return m.group(1).decode("utf-8", "replace")
+        elif b'"type":"assistant"' in line and b'"isSidechain":false' in line:
+            m = _ANSWER_MODEL_RE.search(line)
+            if m and not m.group(1).startswith(b"<"):  # "<synthetic>": Claude Code's own message (an error)
+                return m.group(1).decode("utf-8", "replace")
+    return ""
 
 
 _model_cache: tuple[float, str] = (0.0, "")

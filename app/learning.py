@@ -47,8 +47,9 @@ Also include rare proper nouns that were recognized correctly but keep coming up
 none that are already in the current vocabulary.
 - replacements: an exact wrong phrase as it appears in the transcripts and its correct form. Only when the wrong \
 phrase can never be a legitimate phrase in normal Czech ("klod MD" -> "CLAUDE.md" is fine, "cloud" -> "Claude" is \
-NOT, because cloud is a real word). Keep "wrong" short (1-3 words) so it matches again next time. None that are \
-already in the current replacements.
+NOT, because cloud is a real word), and only when it can stand for nothing else: "Naslal jsem" may be "Našel jsem" \
+or "Napsal jsem" ("Naslal jsem Profodu, ať to pošle…" was the second), so it is no replacement. Keep "wrong" short \
+(1-3 words) so it matches again next time. None that are already in the current replacements.
 
 You may also get corrections: the exact phrase Whisper wrote and what the user meant. "corrected" ones the user \
 made deliberately (by voice or by editing the text) are the most reliable evidence there is. "said again" ones come \

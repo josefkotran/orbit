@@ -503,6 +503,7 @@ class Wizard(QDialog):
                      "Hlasový agent, kterému řekneš, co má kterým relacím napsat",
                      "Předčítání souhrnů artefaktů, které relace zveřejní",
                      "Úkoly z poznámek, které ti Orbit nabídne začít v nové relaci",
+                     "Kontrola přepisu: Claude opraví slova, která Whisper špatně slyšel",
                      "Slovník, který se sám učí z tvých diktátů"):
             bullets.addWidget(_label(f"•  {line}", "bullet", wrap=True))
         box.addLayout(bullets)
@@ -526,6 +527,8 @@ class Wizard(QDialog):
                                  "Orbit čte, kolik ti zbývá z 5hodinového a týdenního limitu."
                                  if cfg["usage_source"] == "statusline" else "Kolik ti zbývá z 5hodinového a "
                                  "týdenního limitu.", False)
+        self.check = _OptionRow("Kontrola přepisu Claudem", "Pošle text diktátu (ne zvuk) Claudovi, ten najde "
+                                "špatně slyšená slova a Orbit je opraví. Čerpá z tvých limitů.", False)
         self.learn = _OptionRow("Učit se slovník z diktátů", "Po 10 diktátech pošle jejich text (ne zvuk) Claudovi "
                                 "a ten doplní slovník. Čerpá z tvých limitů.", False)
         self.artifacts = _OptionRow("Předčítat souhrny artefaktů", "Když relace zveřejní artefakt, Claude ho shrne "
@@ -535,6 +538,7 @@ class Wizard(QDialog):
         self._proposed = {
             self.sessions: cfg["show_sessions"] if hooks else True,
             self.limits: cfg["show_usage"],
+            self.check: cfg["check_transcripts"],
             self.learn: cfg["learn_vocabulary"],
             self.artifacts: cfg["read_artifacts"] and hooks,
             self.agent: cfg["agent"],
@@ -692,7 +696,8 @@ class Wizard(QDialog):
                                                         self.limits.isChecked())
                 values.update(show_sessions=sessions_on, read_artifacts=artifacts_on,
                               claude_hooks=sessions_on or artifacts_on, show_usage=limits_on,
-                              learn_vocabulary=self.learn.isChecked(), agent=self.agent.isChecked() and not self._clash())
+                              check_transcripts=self.check.isChecked(), learn_vocabulary=self.learn.isChecked(),
+                              agent=self.agent.isChecked() and not self._clash())
                 if self._cfg["usage_source"] == "statusline":  # the OAuth source (an older config.json) needs none
                     values["claude_statusline"] = limits_on
         return values

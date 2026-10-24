@@ -217,3 +217,43 @@ def accepts_notifications() -> bool:
     if ctypes.windll.shell32.SHQueryUserNotificationState(ctypes.byref(state)) != 0:
         return True
     return state.value == 5  # QUNS_ACCEPTS_NOTIFICATIONS
+
+
+# --- staying on top ---------------------------------------------------------------------------
+
+_z = ctypes.WinDLL("user32")  # own argtypes, not the ones other modules set on ctypes.windll.user32
+_z.GetWindow.restype = ctypes.c_void_p
+_z.GetWindow.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+_z.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+_z.GetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+_z.IsWindowVisible.argtypes = _z.IsIconic.argtypes = [ctypes.c_void_p]
+_z.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+_z.SetWindowPos.argtypes = [ctypes.c_void_p, ctypes.c_void_p] + [ctypes.c_int] * 4 + [ctypes.c_uint]
+_dwm = ctypes.WinDLL("dwmapi")
+_dwm.DwmGetWindowAttribute.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_uint]
+
+
+def is_topmost(hwnd: int) -> bool:
+    return bool(_z.GetWindowLongPtrW(hwnd, -20) & 0x8)  # GWL_EXSTYLE, WS_EX_TOPMOST
+
+
+def windows_above(hwnd: int) -> list[int]:
+    """Ordinary windows (not topmost) in front of a topmost window: there are none, unless Windows has pushed it down.
+    Windows sometimes does that and leaves its WS_EX_TOPMOST as it was (Orbit behind Chrome, Pepa 17 Oct; the taskbar
+    of the same monitor was down there too), so Qt thinks it's still on top and never puts it back. Only windows
+    that can cover something: visible, not cloaked (other virtual desktops, closed Start menu), not minimized."""
+    found, rect, cloaked = [], (ctypes.c_long * 4)(), ctypes.c_int()
+    x = _z.GetWindow(hwnd, 3)  # GW_HWNDPREV: the next window up
+    while x:
+        if (_z.IsWindowVisible(x) and not _z.IsIconic(x) and not is_topmost(x)
+                and not (_dwm.DwmGetWindowAttribute(x, 14, ctypes.byref(cloaked), 4) == 0 and cloaked.value)
+                and _z.GetWindowRect(x, rect) and rect[2] > rect[0] and rect[3] > rect[1]):  # DWMWA_CLOAKED
+            found.append(x)
+        x = _z.GetWindow(x, 3)
+    return found
+
+
+def put_on_top(hwnd: int) -> bool:
+    """In front of every ordinary window again (and of the other topmost ones), without activating it."""
+    # HWND_TOPMOST; SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOOWNERZORDER
+    return bool(_z.SetWindowPos(hwnd, ctypes.c_void_p(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010 | 0x0200))

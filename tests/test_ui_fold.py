@@ -162,11 +162,13 @@ class Saved(unittest.TestCase):
         saved, shown, checks = [], [], []
         action = SimpleNamespace(isChecked=lambda: bool(checks and checks[-1]), setChecked=checks.append)
         d = SimpleNamespace(cfg={"collapsed": False}, collapse_action=action,
-                            button=SimpleNamespace(set_collapsed=shown.append))
+                            button=SimpleNamespace(set_collapsed=lambda on, animate=False: shown.append((on, animate))))
         with mock.patch.object(config, "save", side_effect=lambda cfg: saved.append(dict(cfg))):
             main.Dictation._set_collapsed(d, True)
             main.Dictation._set_collapsed(d, True)  # the menu's toggled after the button's click: nothing new saved
-        self.assertEqual((len(saved), saved[0]["collapsed"], checks, shown), (1, True, [True], [True, True]))
+        # the menu's fold is animated too (the button's own click already was, the second call changes nothing)
+        self.assertEqual((len(saved), saved[0]["collapsed"], checks, shown),
+                         (1, True, [True], [(True, True), (True, True)]))
         self.assertIs(config.DEFAULTS["collapsed"], False)
 
 

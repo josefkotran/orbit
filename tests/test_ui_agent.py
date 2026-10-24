@@ -341,6 +341,7 @@ class MainBitsTest(unittest.TestCase):
         d = SimpleNamespace(pending=1, refresh=lambda: None, inserter=fake, trail=main.editing.Trail(),
                             cfg={"trailing_space": False, "insert_mode": "type"}, _remember=lambda *a, **k: None,
                             _notify=lambda msg, **k: notes.append(msg), _maybe_learn=lambda: None)
+        d._press = lambda key, after_text="": main.Dictation._press(d, key, after_text)
         old = main.inserter.foreground, main.inserter.same_window, main.inserter.runs_as_admin
         main.inserter.foreground, main.inserter.same_window = lambda: 5, lambda a, b: a == b
         main.inserter.runs_as_admin = lambda w: False

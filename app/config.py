@@ -33,6 +33,13 @@ DEFAULTS = {
     "vocabulary": "",  # words/names Whisper should spell correctly, comma or newline separated
     "replacements": [],  # [wrong, right] phrase fixes applied to every transcript
     "learn_vocabulary": False,  # let Claude extend vocabulary/replacements from the transcripts in the log
+    # after a dictation is typed, Claude reads its text and the misheard words are fixed in the window (check.py).
+    # Off for new users: text goes to Claude.
+    "check_transcripts": False,
+    "second_opinion": False,  # ... with Canary's transcript next to Whisper's (canary.py, a 4 GB download)
+    # ... before the text goes in: where Whisper and Canary differ, Claude's fix is waited for (a few seconds) and the
+    # fixed text is typed, instead of the wrong one first and the fix after it
+    "check_first": True,
     "learned_until": None,  # log timestamp of the last transcript Claude has seen
     "voice_commands": True,  # "nový řádek" / "nový odstavec", "Odešli", "Stop", "Smaž to", "Vyber to", "Vlož to znovu"
     # Ctrl or Shift held with the dictation key: what's said is an instruction for the selected text or the last
@@ -58,6 +65,12 @@ DEFAULTS = {
     "folder_colors": {},  # folder name (lower case) -> a colour of colors.COLORS; the others get one automatically
     "tint_sessions": False,  # the sessions' terminal background in their folder's colour (colors.py)
     "favorite_folders": [],  # the + above the panel: full paths, a new Claude Code session in one click (favorites.py)
+    # the Autopilot (autopilot.py, the phone above the panel): a session works in rounds and Bland AI calls this number
+    # after each one; set in the Autopilot window, not in the settings
+    "autopilot_phone": "",  # E.164 (+420…)
+    "autopilot_key": "",  # Bland AI's API key, encrypted for the Windows account (bland.protect), "" = none
+    "autopilot_voice": "",  # Bland's voice for the calls ("" = Bland's default)
+    "autopilot_quiet": True,  # no calls between 22 and 7: moved to the morning
     "speak_answers": True,  # read the start of a finished session's answer aloud
     "read_artifacts": False,  # a session published an artifact: Claude sums it up in 7 sentences, read aloud
     "muted": False,  # the speaker button: no beeps, no bubble chimes, nothing read aloud

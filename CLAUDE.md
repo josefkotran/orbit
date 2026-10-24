@@ -34,36 +34,46 @@ složek `folder_colors`: hommel-portal (HHW) zelená, m-tex a mtex-portal oranž
 zprůhlednění tlačítka `fade_after_s` 3 s (výchozí). Od 8. 10. (večer) úpravy textu hlasem zapnuté (`voice_edit`, noví
 uživatelé vypnuté), historie diktátů (`keep_history`, výchozí zapnutá) a hudba při diktování úplně ztlumená
 (`duck_audio: "mute"`, noví uživatelé `"keep"`). Od 9. 10. oblíbené složky pod pluskem `favorite_folders`:
-hommel-portal a ondra (ty zmínil, noví uživatelé prázdné). Slovník a opravy (`vocabulary`, `replacements`) doplňuje Claude, `learned_until`
+hommel-portal a ondra (ty zmínil, noví uživatelé prázdné). Od 13. 10. Autopilot (`autopilot_phone`, `autopilot_key`
+šifrovaný DPAPI, `autopilot_voice`, `autopilot_quiet`): dokud je Pepa v okně Autopilot nevyplní, jsou prázdné
+(noční klid zapnutý). Slovník a opravy (`vocabulary`, `replacements`) doplňuje Claude, `learned_until`
 je čas posledního přepisu z logu, který už Claude viděl. `name` (jméno pro agenta) a `about` („O mně“ pro učení
 slovníku) přibyly 3. 10. a v jeho configu zatím nejsou, tedy prázdné: agent mu do té doby říká „uživatel“.
 Souhlasy `claude_hooks` / `claude_statusline` a `wizard_pending` (taky od 3. 10.) v jeho configu nebyly: první start
 nové verze dá `claude_hooks` = true, protože jeho hooky v `~/.claude/settings.json` už jsou
 (`claude_settings.hooks_installed`), `claude_statusline` = false (stavový řádek nemá), `usage_source` = `"oauth"`
 (limity dál z OAuth endpointu, i s řádkem Fable; od 10. 10. 5 h a týden z relací přes mod `orbit-mozek`, endpoint
-jen nad tím, viz Limity Clauda) a průvodce se mu neukáže (config.json existuje).
+jen nad tím, viz Limity Clauda) a průvodce se mu neukáže (config.json existuje). Od 24. 10. kontrola přepisu
+zapnutá (`check_transcripts`) i s druhým rozpoznávačem Canary (`second_opinion`; noví uživatelé obojí vypnuté)
+a vkládáním až opraveného textu (`check_first`, výchozí zapnuté, Pepa to chtěl po prvním testu), model
+Canary zkopírovaný z měření do `models\canary-1b-v2` (sedí SHA-256); z oprav vyřazená chybně naučená „Naslal jsem →
+Našel jsem“ (viz Učení slovníku) a stejně tak „Daytona git → Commitni a pushni“ (učení ji 24. 10. odpoledne odvodilo
+z „Daytona Git, Pushnitona Git“, Pepa řekl „Dej to na git, pushni to na git“; „Pushnitona Git → Pushni to na git“
+zůstala). Nahrávek se drží 1000 (dřív 30).
 
 ## Struktura
 
 | Soubor | Co dělá |
 |---|---|
 | `Orbit.pyw` | vstupní bod (u Pepy přes `.venv\Scripts\pythonw.exe`, po instalaci `runtime\pythonw.exe`, bez konzole); když start spadne, okno s chybou + `crash.log`; `Orbit.pyw --cleanup` = úklid pro odinstalátor (`app/cleanup.py`) |
-| `app/version.py` | `VERSION = "1.0.0"`: v patičce nastavení, v logu při startu a v názvu instalátoru |
+| `app/version.py` | `VERSION = "1.3.0"`: v patičce nastavení, v logu při startu a v názvu instalátoru |
 | `app/paths.py` | kde co je: složka aplikace, datová složka, složka Claude Code (jen stdlib, importuje ho i `cc_hook.py`) |
 | `app/vocab.py` | slovník a opravy: čištění, slučování se stropem 300 znaků, export a import souboru |
 | `app/main.py` | třída `Dictation`: řídí stavy, Qt signály (`Bridge`) mezi vlákny, tray, menu, nastavení, polling limitů; logování a zachytávání chyb (`_setup_logging`) |
 | `app/whisper_server.py` | spouští `whisper-server.exe` jako podproces (grafika, nebo jen procesor), hlídá ho a po pádu spustí znovu, přepis přes HTTP, filtry halucinací, slovník, povely |
-| `app/recorder.py` | nahrávání přes sounddevice (MME, 16 kHz mono int16), detekce „zvuk opravdu teče“, prahy podle šumu mikrofonu, režim měřáku |
+| `app/recorder.py` | nahrávání přes sounddevice (MME, 16 kHz mono int16), detekce „zvuk opravdu teče“, prahy podle šumu mikrofonu, režim měřáku; `trim_tail` (poslední kus bez ticha za posledním slovem) |
 | `app/hotkey.py` | globální push-to-talk přes pynput low-level hooky, zachytávání nové klávesy, ztracené puštění klávesy, české názvy kláves |
 | `app/inserter.py` | vložení textu: schránka + Ctrl+V (se zálohou schránky), nebo psaní přes `SendInput` Unicode; okno v popředí, okna správce; mazání a označení napsaného (Backspace, Shift+←), čtení výběru (Ctrl+Insert), čekání na puštěný Ctrl/Shift |
 | `app/editing.py` | co Orbit napsal naposledy (`Trail`: kdy je bezpečné to vzít zpět) a povely nad tím: „Smaž to“, „Vyber to“, „Vlož to znovu“, „Nahraď X za Y“; hledání přeslechnutého slova, rozdíly pro opravy (jen stdlib) |
-| `app/history.py` | historie diktátů: `<data>/history.json`, posledních 1000, kam text šel, nahrávka, oprava (bez Qt) |
+| `app/history.py` | historie diktátů: `<data>/history.json`, posledních 1000, kam text šel, nahrávka, oprava, co udělala kontrola přepisu (`unchecked`, `checked`, `second`) (bez Qt) |
 | `app/historyview.py` | okno Historie diktátů (ikona bubliny vedle Poznámek, menu Orbitu): kopírování jedním klikem, hledání, vložit znovu, přehrát nahrávku, přepsat znovu, opravit, smazat |
 | `app/pastsessions.py` | minulé relace Claude Code jako u `claude --resume`: přepisy z `projects/*/<id>.jsonl`, název, složka, první a poslední zadání, čte jen začátek a konec přepisu a jen změněné (bez Qt) |
-| `app/pastsessionsview.py` | okno Historie relací (ikona hodin vedle agenta): hledání, filtr složky, „Pokračovat v relaci“ (`claude --resume` ve složce relace), běžící relace = přepnutí do jejího okna |
+| `app/pastsessionsview.py` | okno Historie relací (ikona hodin vedle agenta): hledání, filtr složky, „Pokračovat v relaci“ (`claude --resume` ve složce relace, model jako naposledy nebo jiný), běžící relace = přepnutí do jejího okna |
+| `app/models.py` | modely relací: názvy a rodiny (Fable, Opus, Sonnet, Haiku), výchozí model Claude Code, `--model` nové relace, žádosti o přepnutí běžící relace pro mod `orbit-mozek` a vrácení výchozího modelu (bez Qt) |
 | `app/rewrite.py` | úpravy textu hlasem přes `claude -p` (Ctrl/Shift + klávesa diktování): pokyn + označený text nebo poslední diktát, Claude spuštěný už během mluvení |
 | `app/ducking.py` | hudba a zvuk ostatních programů ztlumené nebo ztišené, dokud je otevřený mikrofon (Core Audio přes ctypes, vlastní vlákno, `<data>/ducked.json` pro návrat po pádu) |
-| `app/ui.py` | `FloatingButton` (mikrofon + panel limitů), `Bubble` (oznámení), `SettingsDialog` (nastavení), kreslení ikony; společné kusy nastavení a průvodce: `KeyAndMic`, `ClaudeBox`, `DownloadRow`, `scrolling` |
+| `app/ui.py` | `FloatingButton` (mikrofon + panel limitů), `Bubble` (oznámení), `StatusChip` (slovy, co se po puštění klávesy děje), `SettingsDialog` (nastavení), kreslení ikony; společné kusy nastavení a průvodce: `KeyAndMic`, `ClaudeBox`, `DownloadRow`, `scrolling` |
+| `app/foldfx.py` | animace zbalení do ikonky a rozbalení (`FoldFx`: vlastní průhledné okno nad tlačítkem, propouští myš), jen se zapnutými animacemi Windows |
 | `app/onboarding.py` | průvodce prvním spuštěním (`Wizard`, 6 stránek) a dva pomocníci, které používá i nastavení: `ClaudeConnection` (stav, instalace, přihlášení) a `Downloads` (stahování na pozadí) |
 | `app/claude_setup.py` | Claude Code na tomhle PC (jen stdlib): kde je `claude.exe`, verze, `claude auth status --json`, oficiální instalátor a `claude auth login` ve viditelném okně, nejnovější verze na kanálu a `claude update` na pozadí |
 | `app/downloads.py` | stahování modelů a hlasů z Hugging Face (navazování, kontrola SHA-256, volné místo) a doporučení modelu podle grafiky (DXGI, Vulkan) |
@@ -72,14 +82,19 @@ jen nad tím, viz Limity Clauda) a průvodce se mu neukáže (config.json existu
 | `app/claude_settings.py` | Orbitovy záznamy v `settings.json` Claude Code: hooky a stavový řádek, jen té své instalace (podle cesty ke skriptu), atomický zápis, záloha |
 | `app/cc_status.py` | stavový řádek Claude Code (jen stdlib, rychlý): zapíše limity a kontext relace do `<data>/sessions/status/<id>.json`, ukáže původní stavový řádek uživatele (nebo vlastní řádek) |
 | `app/cleanup.py` | `Orbit.pyw --cleanup`: odebere hooky, stavový řádek (vrátí původní) a položku v Run této instalace, vždy skončí 0 |
-| `app/claude_cli.py` | společné volání `claude -p` (bez nástrojů, na předplatném) pro učení slovníku, souhrny artefaktů a úpravy textu (`Prepared`: proces spuštěný dřív, než je známé zadání); `claude.exe` a prostředí bere z `claude_setup` |
+| `app/claude_cli.py` | společné volání `claude -p` (bez nástrojů, na předplatném) pro učení slovníku, souhrny artefaktů, úpravy textu a kontrolu přepisu (`Prepared`: proces spuštěný dřív, než je známé zadání, zadání pak jako stream-json); `claude.exe` a prostředí bere z `claude_setup` |
 | `app/learning.py` | učení slovníku: přepisy z logu + opravy uživatele (`<data>/corrections.json`) → `claude -p` → nová slova a opravy |
+| `app/check.py` | kontrola přepisu: prompt pro Claude Haiku (text, druhý přepis, předchozí diktát), pojistky, že odpověď je oprava (`accept`), co se změnilo (`changes`), `Checker` spuštěný už při stisku (bez Qt) |
+| `app/canary.py` | druhý rozpoznávač pro kontrolu: NVIDIA Canary-1B-v2 (onnx-asr, procesor) ve vlastním procesu s nižší prioritou (`SecondOpinion` → `_worker`), stav modelu (bez Qt) |
 | `app/artifacts.py` | předčítání artefaktů: záznam od hooku → text stránky → souhrn 7 vět od Clauda |
 | `app/sessions.py` | přehled relací Claude Code: stav z hook souborů, kontext ze stavového řádku (jinak odhad z přepisu), režim oprávnění, příkazy na pozadí (`shells.py`), přepnutí okna |
 | `app/tasks.py` | vlastní úkoly uživatele (poznámky): `tasks.json` v datové složce, co nabídnout ke spuštění, zadání pro relaci, spuštění relace v samostatném procesu (bez Qt) |
 | `app/notebook.py` | okno Poznámky: sekce Aktivní / V plánu / Poznámky / Hotovo, úkol s názvem, složkou, kontextem a poznámkami, přetahování a šipky |
 | `app/favorites.py` | oblíbené složky pod pluskem nad panelem: seznam, názvy, nové repo (složka + `git init`), otevření relace v samostatném procesu (bez Qt) |
 | `app/favoritesview.py` | okna „Vybrat složky a barvy…“ (přepínač a barevná tečka u každé složky) a „Nové repo…“ |
+| `app/autopilot.py` | Autopilot: relace pracuje po kolech, po každém hovor na telefon, odpověď z hovoru = další kolo; stav v `<data>/autopilot.json`, zadání relaci přes mod (`<data>/sessions/prompt/`) (bez Qt) |
+| `app/autopilotview.py` | okno Autopilot (ikona telefonu vlevo od plusu): číslo, klíč Bland AI, běžící relace, cíl a interval, hlášení a poslední hovor |
+| `app/bland.py` | hovory přes Bland AI (`api.bland.ai/v1`): založení hovoru, výsledek a přepis, kontrola klíče; klíč šifrovaný DPAPI, telefonní čísla E.164 (jen stdlib + requests) |
 | `app/colors.py` | barvy relací podle složky (jména jako `/color` v Claude Code): proužek v panelu a obarvení pozadí terminálu relace (OSC 11, jen stdlib) |
 | `app/shells.py` | příkazy na pozadí relací (modré „2 shells“ v Claude Code): najde jejich procesy, pozná, jestli pracují, čekají, jsou to nepoužívané servery nebo visí; zastavení přes mod `orbit-mozek` (jen stdlib) |
 | `app/cc_hook.py` | hook, který Claude Code spouští (jen stdlib, rychlý): zapíše `<data>/sessions/<id>.<událost>.json` (i `permission_mode` a okno relace) |
@@ -92,20 +107,21 @@ jen nad tím, viz Limity Clauda) a průvodce se mu neukáže (config.json existu
 | `app/winutil.py` | jedna instance (mutex), AppUserModelID, spouštění s Windows (registry), pípání a zvuky bublin |
 | `whisper/` | `whisper-server.exe` a co potřebuje: od 3. 10. (commit 0f7a5c2) build pro jakékoli PC (`GGML_BACKEND_DL`, 76 MB), vedle exe `ggml-*.dll` (Vulkan a varianty CPU); Orbit umí i starý build (jeden exe s Vulkanem, 59 MB). Z něj je `whisper\` v instalátoru. Licence whisper.cpp |
 | `app/voice.py` | lokální české hlasy Piper (Jirka, Kasandra) pro předčítání místo Jakuba; Piper běží ve vlastním procesu (`_worker`) |
-| `models/` | `ggml-large-v3.bin` (3,1 GB), `ggml-large-v3-turbo.bin` (1,6 GB), `piper/` (hlasy Piperu) – nejsou v gitu ani v instalátoru, stahují se (`downloads.py`); rozestažené jako `*.part` |
-| `recordings/` | posledních 30 nahrávek (`.wav` + `.txt` s přepisem), když je zapnuté ukládání – nejsou v gitu |
+| `models/` | `ggml-large-v3.bin` (3,1 GB), `ggml-large-v3-turbo.bin` (1,6 GB), `piper/` (hlasy Piperu), `canary-1b-v2/` (druhý rozpoznávač, 4 GB, jen když je zapnutý) – nejsou v gitu ani v instalátoru, stahují se (`downloads.py`); rozestažené jako `*.part` |
+| `recordings/` | posledních 1000 nahrávek (`.wav` + `.txt` s přepisem, asi 250 MB; do 24. 10. jen 30), když je zapnuté ukládání – nejsou v gitu |
 | `orbit.log` | log aplikace včetně přepisů (jen se zapnutým učením slovníku) a časů – první místo, kam se dívat; řeč agenta, předčítání a adresy jen jako délky (`ORBIT_DEBUG=1` i s texty); vedle něj `whisper-server.log` a `crash.log` (pád v nativním kódu) |
 | `whisper-next/` | jen výstup `build_whisper.py` (nová verze whisper.cpp), pak nahradí `whisper\`; 13. 10. neexistovala |
-| `build/` | `build_whisper.py` (whisper-server přes portable MSYS2), `build_installer.py` (balíček + Inno Setup), `verify_bundle.py` (kontrola balíčku jeho vlastním Pythonem), `README.md`; `cache/`, `tools/`, `dist/`, `output/` nejsou v gitu |
+| `build/` | `build_whisper.py` (whisper-server přes portable MSYS2), `build_installer.py` (balíček + Inno Setup), `verify_bundle.py` (kontrola balíčku jeho vlastním Pythonem), `eval_dictation.py` (přesnost na vlastním hlase: diktáty opravené v historii), `README.md`; `cache/`, `tools/`, `dist/`, `output/` nejsou v gitu |
 | `installer/` | `orbit.iss` (Inno Setup) a texty licencí GPL/LGPL, které jdou do instalace |
-| `tests/` | testy (stdlib `unittest`, od 7. 10.): `test_core_*` (přepis, Piper, klávesa, vkládání, config, povely a opravy, historie, oblíbené složky), `test_claude_*` (nástroje agenta, hledání programů), `test_dist_*` (build, instalátor), `test_ui_*` (potvrzování agenta, překreslování, relace, „Smaž to“ a úpravy na falešném textovém poli, plusko a jeho okna, tlačítko reproduktoru a předpověď limitu, verze a aktualizace Claude Code); viz Spuštění |
+| `tests/` | testy (stdlib `unittest`, od 7. 10.): `test_core_*` (přepis, Piper, klávesa, vkládání, config, povely a opravy, historie, oblíbené složky, Autopilot, kontrola přepisu, Canary a ořez ticha), `test_claude_*` (nástroje agenta, hledání programů), `test_dist_*` (build, instalátor), `test_ui_*` (potvrzování agenta, překreslování, relace, „Smaž to“ a úpravy na falešném textovém poli, plusko a jeho okna, tlačítko reproduktoru a předpověď limitu, verze a aktualizace Claude Code, hluchý mikrofon, Autopilot, zbalení a jeho animace, tlačítko za okny jiných programů, diktát do okna pod myší, kontrola přepisu na falešném textovém poli, pilulka „Přepisuji…“ vedle tlačítka); viz Spuštění |
 | `THIRD_PARTY_NOTICES.md` | licence všeho, co instalátor nese nebo Orbit stahuje |
-| `web/` | stránka https://orbit.easya.cz se stažením instalátoru, `publish.py` ji sestaví a nahraje (viz `web/README.md`) |
+| `web/` | stránka https://orbit.easya.cz se stažením instalátoru a její vlastní statistiky návštěv (`/admin/`, PHP v `site/api`, `site/lib`, `site/admin`), `publish.py` ji sestaví a nahraje (viz `web/README.md`) |
 | `video/` | úvodní video webu v Remotionu, hotové soubory jdou do `web/site/assets/video` (viz `video/README.md`) |
-| `mods/` | mody pro Claude Code: `orbit-mozek` (panel `/mozek`) a `orbit-ukoly` (úkol z Poznámek v jeho relaci), viz `mods/README.md`; `.claude-plugin/marketplace.json` v kořeni z repozitáře dělá marketplace `orbit` |
+| `mods/` | mody pro Claude Code: `orbit-mozek` (panel `/mozek`, limity, zastavení příkazů, zadání z Autopilota) a `orbit-ukoly` (úkol z Poznámek v jeho relaci), viz `mods/README.md`; `.claude-plugin/marketplace.json` v kořeni z repozitáře dělá marketplace `orbit` |
 
-Závislosti: PySide6, sounddevice, numpy, pynput, requests, piper-tts s onnxruntime (`requirements.txt`; Piper je
-volitelný, Orbit bez něj jen nenabízí hlasy Piperu). Venv je `.venv` (vznikl ještě ve staré
+Závislosti: PySide6, sounddevice, numpy, pynput, requests, piper-tts s onnxruntime, onnx-asr (`requirements.txt`; Piper
+je volitelný, Orbit bez něj jen nenabízí hlasy Piperu; onnx-asr spouští na onnxruntime druhý rozpoznávač Canary, bez
+onnxruntime se nenabízí). Venv je `.venv` (vznikl ještě ve staré
 složce `diktovani`, řádek `command` v `pyvenv.cfg` je proto zastaralý, ale nevadí to).
 
 ## Klíčová rozhodnutí a proč
@@ -178,15 +194,29 @@ složce `diktovani`, řádek `command` v `pyvenv.cfg` je proto zastaralý, ale n
 - **`suppress_nst` je schválně vypnuté**, protože maže `: " ( ) /` (např. „10:30“ by se změnilo na „10 30“).
 - Filtry: nahrávka kratší než 0,3 s nebo s max. RMS pod 200 (≈ −44 dBFS; u šumícího mikrofonu pod 3× jeho šum,
   viz Mikrofon) se nepřepisuje. Maže se známá halucinace
-  „Titulky vytvořil JohnyX“ a samostatné „Děkuji za pozornost / sledování“, „Titulky“, „Hudba“. Filtruje se po kusech
-  (viz průběžný přepis), takže halucinace uprostřed nesmaže zbytek textu.
+  „Titulky vytvořil JohnyX“ a samostatné „Děkuji / Děkujeme za pozornost / sledování“, „Titulky“, „Hudba“; od 24. 10.
+  i „Děkujeme za pozornost / sledování.“ jako poslední věta za řečí (v Pepově historii 3×: dvakrát jako celý diktát,
+  jednou za 21 s diktátem do Claude Code). „Děkuji za pozornost.“ za větou zůstává, e-mail tak může končit. Filtruje
+  se po kusech (viz průběžný přepis), takže halucinace uprostřed nesmaže zbytek textu.
+- **Bez ticha za posledním slovem** (od 24. 10., `recorder.trim_tail`): poslední kus (od posledního řezu do puštění
+  a `TAIL_MS` po něm) jde Whisperu jen do 0,3 s za posledním 30ms blokem nad prahem pauzy (`max(150, 3 × šum)`).
+  V tom tichu (u Pepy 0,5–0,9 s) Whisper „slyšel“ „Titulky vytvořil JohnyX“, „Děkujeme za pozornost“ nebo
+  „www.hradeckralove.org“. Měřeno: na Pepových 30 nahrávkách obě takové konce zmizely, nic řečeného neubylo a pár
+  slov se zlepšilo („od kým jeho“ → „od Kimiho“, „Někde to“ → „Nejde to“, „kyber bezpečnost“ → „kyberbezpečnost“);
+  na FLEURS 9,26 → 9,20 % (zlepšeno 9, zhoršeno 8 vět), na VoxPopuli beze změny. Nahrávka v `recordings/` zůstává
+  celá, ořez je jen pro přepis (i „Přepsat znovu“ a přepis z historie).
+- **Prompt se musí vejít do 224 tokenů** (whisper.cpp jich vezme z konce `n_text_ctx/2`, zbytek začátku zahodí).
+  Spočítáno Whisperovým tokenizérem (`multilingual.tiktoken`) 24. 10.: věta o diktování 40 tokenů, Pepův slovník
+  296 znaků = 123 tokenů, celý prompt 170; s 150 znaky kontextu průběžného přepisu (~65 tokenů) to bylo 235 a ořízl se
+  začátek věty. Proto `CONTEXT_CHARS = 100`. Čeština s diakritikou má ~2,4 znaku na token (`prozkoumej` = 5 tokenů).
 - Opravy (`replacements`, „comgit“ → „Comgate“) se aplikují na celý text diktátu: celá slova, bez ohledu na velikost
-  písmen. Pak hlasové povely.
+  písmen; velké písmeno, které Whisper napsal, zůstane („Proskoumej to“ → „Prozkoumej to“, do 24. 10. „prozkoumej
+  to“: 5 diktátů v historii začínalo malým písmenem). Pak hlasové povely.
 
 ### Průběžný přepis (`live_transcribe`, měřeno na 30 Pepových nahrávkách)
 - Během držení `Recorder._cut_at_pause` odřízne hotový kus v půlce pauzy a ten se hned přepisuje. Po puštění zbývá
   jen poslední kus, text se vkládá **najednou po puštění** (Pepa nechtěl psaní během mluvení). Kusy jedné nahrávky
-  jdou za sebou v jednom vlákně (`Take`); do promptu každého jde konec předchozího textu (150 znaků).
+  jdou za sebou v jednom vlákně (`Take`); do promptu každého jde konec předchozího textu (100 znaků, viz prompt výš).
 - Parametry: pauza = bloky 30 ms s RMS < 150 (HyperX v tichu 1–11, řeč 150–800; u šumícího mikrofonu víc, viz
   Mikrofon) aspoň 0,5 s, kus aspoň 6 s. Pepovy pauzy mezi větami mají 0,4–1,3 s, s prahem 0,6 s se 35 s diktát
   vůbec nerozdělil.
@@ -212,6 +242,15 @@ složce `diktovani`, řádek `command` v `pyvenv.cfg` je proto zastaralý, ale n
   ukazuje počet znaků (`41/300`) a nad limitem varuje; učení i import přidávají jen to, co se vejde.
 - Opravy jen pro fráze, které v češtině nemůžou být správně („cloud“ → „Claude“ ne, cloud je slovo).
   Obojí je vidět a upravitelné v nastavení, v menu je „Naučit slovník z nových diktátů“.
+- **Opravy skoro nefungují dopředu** (rozbor 24. 10.): ze 105 se jich ve 377 diktátech od 8. 10. objevilo jen 44
+  a jen 5 víc než jednou, protože Whisper stejné slovo komolí pokaždé jinak („sešun“, „sešen“, „sesion“, „section“,
+  „sešnu“). V době diktování opravily 12 diktátů, kontrola přepisu Claudem by jich opravila 72. A nevidí kontext:
+  „Naslal jsem → Našel jsem“ se 13. 10. naučila z věty „Naslal jsem Profodu, ať to pošle…“ (myšleno „Napsal“), takže
+  by tu větu příště pokazila (z Pepova configu 24. 10. vyřazena, prompt učení teď říká, že fráze, která může znamenat
+  víc slov, opravou není). Opravy zůstávají pro to, co se opakuje přesně stejně; zbytek dělá kontrola přepisu.
+- Rozbor 105 Pepových oprav: asi třetina anglické a technické termíny psané podle výslovnosti („Kometopuš“, „kron“,
+  „clode md“), pětina jména a domény („HOMEL“, „Frankenstozl“, „orbit.easia.cz“), třetina špatně slyšená česká slova
+  („Otehři“, „plošťáře“, „zákaž znínka“), desetina pravopis podle výslovnosti („proskoumej“, „Pust“).
 
 ### Volba modelu (měřeno, ne odhadem)
 Test: česká část FLEURS (test split, 723 nahrávek, vzato každé 4., tedy 150 vzorků), WER/CER přes `jiwer`
@@ -230,6 +269,133 @@ Závěry: prompt přesnost neovlivní (nechává se kvůli slovníku), kvantizac
 doladěný český model je horší (smazán). Latence large-v3 podle délky nahrávky: 2 s → 0,9 s, 4,5 s → 1,4 s,
 10 s → 1,9 s (turbo 0,2–0,35 s). S turbem měl Pepa chyby typu „rozpozdává“, „pozdal“, „vypolišovat“; na testovací
 řeči je large-v3 napsal správně. Přidání ticha na začátek nahrávky nepomáhá (ověřeno).
+
+**Měření 24. 10.** (Pepa: „rozkoumej, jak co nejlépe vylepšit rozpoznávání češtiny“): FLEURS cs znovu (každá 4. ze
+723, tedy 181 vět, 37 min), k tomu VoxPopuli cs (každý 7. ze 1123 úseků, 161 úseků, 27 min, 44 řečníků Evropského
+parlamentu: spontánní řeč, různé hlasy a mikrofony, bližší „lidem“ než předčítané FLEURS). Whisper přes Orbitův
+`whisper-server` s jeho parametry a promptem (bez Pepova slovníku), ostatní přes onnx-asr na procesoru, normalizace
+jako výš. Párové srovnání s bootstrapem (95% interval rozdílu WER):
+
+| Varianta | FLEURS | VoxPopuli |
+|---|---|---|
+| **Whisper large-v3** (Orbit) | 9,26 % | 12,65 % |
+| Whisper large-v3-turbo | 10,37 % | 14,14 % |
+| Parakeet-TDT-0.6B-v3 (int8) | 23,37 % | 19,83 % |
+| Canary-1B-v2 (int8) | 9,38 % | – |
+| Canary-1B-v2 (fp32) | 8,45 % (−0,8; interval −2,1 … +0,4) | **9,10 %** (−3,6; −6,0 … −1,8) |
+| Whisper + kontrola Haiku | 6,89 % (lepší 60 vět, horší 0) | 11,53 % |
+| Whisper + kontrola Sonnet | 5,18 % | – |
+| **Whisper + Canary fp32 + kontrola Haiku** | **4,73 %** (lepší 89, horší 1) | 9,36 % |
+| Whisper + Canary int8 + kontrola Haiku | 5,12 % | – |
+| Whisper + Canary fp32 + kontrola Sonnet | 4,47 % (lepší 92, horší 3) | – |
+| Whisper + Canary fp32 + Gemma 4 12B (lokálně, llama.cpp Vulkan) | 6,95 % (lepší 60, horší 10) | – |
+| vždy lepší z Whisper/Canary (strop výběru) | 5,99 % | 8,33 % |
+
+- Kde se Whisper a Canary shodnou (29 % vět FLEURS), je jen 2,5 % chyb; rozcházejí se jinde, proto druhý názor
+  pomáhá. NVIDIA (arXiv 2509.14128) uvádí FLEURS cs Canary 7,86 % proti Whisperu 11,33 %, jenže Whisper bez beam
+  search a promptu; s Orbitovým nastavením je náskok Canary na předčítané řeči na hraně průkaznosti, na spontánní
+  řeči jasný (Whisper tam vynechává slova: 158 vynechaných proti 104).
+- Věty FLEURS jsou z Wikipedie (FLoRes), jazykový model je mohl vidět: zisk kontroly na FLEURS může být nadsazený,
+  VoxPopuli a Pepova historie jsou důvěryhodnější. Kontrola samotného textu na VoxPopuli: −1,1 bodu (lepší 33,
+  horší 0), s Canary −3,3.
+- Nedoporučeno: turbo (o 1,1–1,5 bodu horší), Parakeet v3 (int8 v onnx-asr, NVIDIA uvádí 11 %), Qwen3-ASR-cs-1.7B
+  (podle autorů FLEURS 12,37 % proti jejich 12,10 % pro Whisper), české doladění Whisperu BuzzASR/czech (FLEURS 12,07 %),
+  cloudové služby (zvuk nesmí ven). Lokální Gemma 4 12B jako kontrola: na Pepově hovorové češtině asi třetina zásahů
+  špatně („údole“ → „URL“, „Čtyrkunech“ → „Čtvrtek“) a 3 z 30 odpovědí nesmysl, i když trvá jen 1,2 s (medián,
+  52 tokenů/s) a 7,4 GB grafiky.
+- Canary na grafice přes DirectML (onnxruntime-directml): enkodér istupakova na DML padá, export Masterx/canary-1b-v2-onnx
+  (TorchScript) běží, ale dekodér na DML je pomalejší než na procesoru (2–5 s na větu). Proto procesor.
+- Měřicí skripty a výsledky jsou v scratchpadu relace (ne v gitu); osobní měření na Pepově hlase půjde až s opravami
+  v historii (`build/eval_dictation.py`).
+
+### Kontrola přepisu (od 24. 10., `check_transcripts`, `second_opinion`; `app/check.py`, `app/canary.py`)
+- Pepa: „všechno uprav jak říkáš, ať je to 10/10“. Po vložení diktátu Claude Haiku přečte jeho text (s druhým
+  přepisem z Canary, předchozím diktátem do stejného místa a jménem programu) a opraví jen slova, která Whisper
+  špatně slyšel; Orbit je v okně přepíše (`Dictation._checked` → `_retype`: Backspace k prvnímu rozdílu, i přes
+  diktáty napsané po něm, a zbytek znovu), jen když je to bezpečné jako u „Smaž to“ (stejné okno, od vložení žádná
+  klávesa ani klik uživatele, `editing.Trail`; v terminálu jen do 800 znaků a 3 řádků). **Mezerník je výjimka**
+  (`hotkey.PushToTalk(on_space=…)` → `Trail.space_seen`): samotný mezerník (bez Ctrl, Alt, Shift, Win) hned za
+  posledním diktátem se připíše k jeho textu a stopa pokračuje. Proč: Pepa má mezeru za textem vypnutou a píše ji
+  mezi diktáty sám; při prvním skutečném testu 24. 10. tak každá oprava („Pouští“ → „Pushni“) skončila jen v bublině
+  a „Smaž to“ by po mezeře taky nešlo. Tichá bublina (bez zvuku,
+  `_notify(quiet=True)`) „Opraveno: čas → část. Klikni sem a vrátím původní“ (`_revert_check`). Když bezpečné není:
+  text v okně zůstane, oprava jde do historie (`checked`, `Entry.best` ji pak vkládá a kopíruje) a bublina „Opravil
+  bych…“ ji na klik dá do schránky. Čistě interpunkční změny se nepromítají.
+- **Nejdřív kontrola, pak vložení** (`check_first`, od 24. 10., výchozí zapnuté; Pepa po prvním testu: „funguje to,
+  oprava se udělá, ale chtěl bych, aby se to rovnou napsalo opravené, a ne první špatně“): když jsou oba přepisy
+  hotové, `Dictation._precheck` je porovná (`check.same_words`: stejná slova bez ohledu na velikost písmen
+  a interpunkci, diakritika se počítá). **Shodnou se** (u čistě řečených vět skoro vždy; v Pepově testu 3 ze 6) =
+  text jde do okna hned a kontrola běží po vložení jako dřív (oprava, kterou by našla, je pak vzácná). **Liší se**
+  (tam bývají chyby Whisperu) = Orbit počká na Clauda (`PRECHECK_WAIT_S` 8 s) a do okna jde rovnou opravený text
+  (historie: `unchecked` = text Whisperu, tichá bublina „Opraveno: … Klikni sem a vrátím, co napsal Whisper“,
+  `_tell_fixed`). Nestihne-li to Claude, jde do okna text Whisperu (`Take.late`) a oprava se přepíše po příchodu
+  (`_checked`). Diktáty a povely řečené mezitím čekají za ním (`_held_takes`, `_release_held`), pořadí v okně
+  zůstává. Tlačítko po dobu čekání ukazuje přepis. Bez druhého rozpoznávače se čeká na Clauda vždy.
+- **Co se děje, i slovy** (od 24. 10., Pepa: oranžový mikrofon je fajn, „ale chápu, že to někomu nemusí docvaknout“):
+  po puštění klávesy je vedle kruhů pilulka ve stylu panelu s měsíčkem, který obíhá svou dráhu (jako agent, když
+  přemýšlí), a textem fáze (`ui.StatusChip`, `FloatingButton.set_status`, text dává `Dictation.refresh`):
+  „Přepisuji…“ (Whisper a Canary), „Claude kontroluje přepis…“ (rozpoznávače se liší a čeká se na Clauda:
+  `Take.asking`, signál `Bridge.asking` z `_precheck`), „Přepisuji pokyn…“ a „Claude upravuje text…“ (úpravy hlasem).
+  Kontrola po vložení (rozpoznávače se shodly) ji nemá: na nic se nečeká. Ukáže se až po 300 ms (`DELAY_MS`, rychlý
+  přepis by jen bliknul), na straně ke středu obrazovky, svisle na středu kruhů (i u zbalené ikonky), jde s tlačítkem
+  a mizí s ním. Je pod kartou bubliny (`GAP` = ocásek bubliny, nejvýš tak široká jako bublina) a bublinu, která už
+  je vidět, vrátí nad sebe (`_put_on_top`, bez aktivace): starší „Opraveno…“ nepřekryje. Okno nebere fokus ani myš.
+  Barva mikrofonu se neměnila. Tooltip tlačítka a ikony v oznamovací oblasti při kontrole vysvětluje proč. Testy
+  `tests/test_ui_status.py`, fáze v `tests/test_ui_check.py`. Neověřeno: jak to Pepa vidí při skutečném diktátu.
+- **Rychlost:** přepis je v logu 0,5–1,6 s po puštění; kontrola (Haiku přes `claude -p`, proces spuštěný už při
+  stisku klávesy, `Take.checker`) trvá 2,3–5 s, v Pepově prvním testu 2,3–5,0 s. S vypnutým `check_first` se text
+  vkládá hned a oprava přijde ~3–5 s po puštění; „Odešli“ pak Enterem počká na opravu (nejvýš `CHECK_SEND_WAIT_MS`
+  12 s, `_release_key`), ať odejde opravený text. Pepa „Odešli“ za 377 diktátů nepoužil.
+- **Proč Haiku:** rychlejší a opatrnější. Sonnet opraví o něco víc (známé chyby 32/54 proti 23/54, FLEURS 4,47 %
+  proti 4,73 %), ale „opravuje“ i to, co Pepa opravdu řekl („Založte“ → „Založ“, „Otevřu“ → „Otevři“). Claude
+  dostává jen text (souhlas jako u učení slovníku, noví uživatelé vypnuté), zvuk nikdy; v logu jen počet změn
+  (slova jen se zapnutým učením slovníku).
+- **Kolik to stojí** (měřeno 24. 10. skutečným Orbitovým příkazem na 8 Pepových diktátech, `usage` z události
+  `result`): vstup 2 060–2 380 tokenů, z toho 1 341 z mezipaměti (začátek, který přidává Claude Code) a 386–1 033
+  nově do hodinové mezipaměti (system prompt se slovníkem a diktát; system prompt mezipaměť zpravidla nezasáhne);
+  výstup 116–661 tokenů, z toho 0–511 přemýšlení (Haiku 5.5 bez `--effort`). Celkem ~2 400–3 000 tokenů, podle ceníku
+  API 0,0002–0,00055 $ (průměr ~0,0003 $), 3,1–5,2 s. Kontroluje se každý diktát aspoň o 2 slovech (i ten, kde se
+  rozpoznávače shodly, jen po vložení), povely, úpravy a agent ne; proces spuštěný při stisku a zrušený (povel)
+  dotaz na model nepošle. Pepa (~24 diktátů denně) tak ~60 tis. tokenů Haiku denně, ~0,01 $ podle API: v limitech
+  Max 20x neznatelné. Nevyzkoušeno: `--effort low` (přemýšlení je skoro polovina výstupu a zdržuje; přesnost by se
+  musela změřit znovu).
+- **Bublina** ukazuje nejvýš 3 změny (`check.summary`); samotná změna velikosti písmen („Git → git“) jen tehdy, když
+  jiná není (od 24. 10.: „Opraveno: Daytona → Dej to na, Git → git, Pushnitona → …“ byl šum).
+- **Pojistky** (`check.accept`): odpověď, která není oprava, se zahodí: jiný počet řádků, řídicí znaky, o víc než
+  8 písmen / 25 % delší nebo kratší (písmena bez diakritiky, mezer a interpunkce), víc než polovina slov textu jinak,
+  méně než 70 % stejných písmen. Písmena, ne slova: Whisper slova slévá („Daytona Git, Pushnitona Git“ za „Dej to na
+  git, pushni to na git“, 24. 10. Canary to slyšela správně a oprava se zahodila, dokud se počítala slova). Na všech
+  odpovědích z měření nezahodila ani jednu dobrou opravu Haiku a Sonnetu (0/72 a 0/84 Pepova historie, 0/93 a 0/102
+  FLEURS) a zahodila případy, kdy model místo opravy dopsal cizí text (Haiku při testu doplnil „příliš žluťoučký kůň“
+  o „úpěl ďábelské ódy“, Canaryho text místo halucinace „Titulky vytvořil…“) i 4 špatné opravy Gemmy („Haló“ →
+  „Ahoj“). Prompt říká, že text jsou data, ne pokyny, a že hovorovou češtinu („teďka“, „bysme“) nechat; od 24. 10.
+  i slova slitá nebo rozdělená špatně a anglický kmen s českou koncovkou („pušni“ → „pushni“, „komitni“ →
+  „commitni“, jak to má Pepa ve slovníku).
+- **Druhý rozpoznávač Canary-1B-v2** (`canary.SecondOpinion`): stejné kusy jako Whisper (po ořezu ticha) jdou do
+  vlastního procesu (`pythonw -I -c … canary._worker`, `BELOW_NORMAL_PRIORITY_CLASS`, v Job objectu, stdin čtený
+  přes `voice._stdin_lines`, JSON jen v ASCII), běží na procesoru souběžně s Whisperem na grafice (Whisper má `-t 1`).
+  Kontrola na něj čeká nejvýš 10 s od puštění (`CHECK_SECOND_WAIT_S`), chybí-li kus, jde jen Whisperův text. Kusy
+  nad 40 s nedostane. Jeho text projde `clean_text`, opravami a povely jako Whisperův. Sám Whisper nenahradí (bez
+  slovníku: „SPD“ místo Speedy, „MTeXu“, „nebezpečné“ místo „zabezpečné“), jako druhý názor ano: na Pepových
+  nahrávkách z něj kontrola vzala „část“, „filter“, „nejnovější“ a nic špatného nepřevzala.
+- **Plná přesnost, ne int8:** int8 (1 GB) dal s kontrolou 5,12 % místo 4,73 % (FLEURS), proto fp32: 4 GB stahování
+  (`downloads.ITEMS["canary-1b-v2"]`, istupakov/canary-1b-v2-onnx na pevné revizi, SHA-256), ~3,5 GB paměti v jeho
+  procesu, načtení 2,6–5 s při startu Orbitu, pak ~0,5 s na 4 s řeči (procesor bez zátěže). Licence CC BY 4.0
+  (NVIDIA): jméno a licence jsou v textu přepínače (tooltip by připojení Clauda smazalo) a v `THIRD_PARTY_NOTICES.md`.
+  onnx-asr (MIT) je v `requirements.txt` a v zámku balíčků; bez onnxruntime (`--without-piper`) se nenabízí.
+- Historie: `unchecked` = text před opravou v okně, `checked` = oprava, která se do okna nedostala, `second` = text
+  Canary; okno Historie ukáže „Před kontrolou přepisu: …“ nebo „V okně zůstalo: …“. Data pro měření na vlastním hlase
+  (`build/eval_dictation.py`).
+- **Ověřeno 24. 10.:** celý řetězec se skutečným Orbitovým whisper-serverem, Canary a Claude Haiku na 7 Pepových
+  nahrávkách („čas“ → „část“, „fliter“ → „filter“, „největší PHP“ → „nejnovější PHP“, „zabezpečné“ → „zabezpečené“;
+  „návštěvy, ne boti“ nespravil ani jeden). Po restartu Pepova Orbitu: Canary načten za 5,1 s, bez chyb. Průběh
+  v okně (oprava, vrácení, klávesa mezitím, další diktát, „Odešli“, terminál) testy `tests/test_ui_check.py` na
+  falešném poli, jádro `tests/test_core_check.py`.
+- **První skutečný test 24. 10. odpoledne** (Pepa: „Zatím to mluvení vypadá moc dobře. Přepsalo se to přesně“):
+  kontrola běžela u každého diktátu (2,3–5 s, s Canary), u „Dej to na git, pushni to na git“ (Whisper: „Daytona Git,
+  Pushnitona Git“) odpověď zahodily pojistky a „Pouští“ / „Půjšně“ → „Pushni“ se do okna nedostaly kvůli mezerníku
+  (viz výš). Po opravě obou na stejných nahrávkách skutečným řetězcem: „Dej to na Git, pushni to na Git,“, „Pushni
+  to na git.“, „Pushni to na git.“. **Neověřeno:** přepis opravy v živém okně (hooky injected vstup nevidí).
 
 ### Mikrofon – soukromí má přednost
 - **Mikrofon je otevřený jen při držení push-to-talk** (a v okně nastavení kvůli živé vlně). Zkoušel jsem „stále
@@ -265,7 +431,20 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 - **Nahrávka bez řeči už nezmizí potichu** (v Pepově logu 14 s „ticho“ a pak „Haló, haló, slyšíš mě?“): od 1,5 s
   bublina (u agenta řádek v panelu). Jen nuly = „Mikrofon posílá jen ticho. Není ztlumený? … Soukromí › Mikrofon“
   (`Recorder.got_signal`), něco jako řeč, jen moc potichu (aspoň 0,5 s nad `max(50, 3 × šum)`, `voiced_s`) = „mikrofon
-  je moc potichu“. Jen šum = nic neřekl, nic se neukáže.
+  je moc potichu“. Něco krátce nad šumem (pípnutí, klik, odkašlání) = nic neřekl, nic se neukáže.
+- **Hluchý mikrofon** (od 13. 10., Pepa: „diktoval jsem, udělalo to i zvuky, ale žádný text a nic v historii“):
+  13. 10. v 10:08 (9,9 s) a 10:12 (5,2 s) nahrávka se `signál: True`, ale nic nad šumem, takže potichu zahozená
+  (pravidlo „jen šum = nic neřekl“). Totéž v logu 26. 9., 29. 9. (4× za sebou), 1. 10., 3. 10. a 8. 10. (agent):
+  vždy SoloCast, delší nahrávka a hned potom „Haló, haló, slyšíš mě?“, které už prošlo. Ve Windows se v tu chvíli
+  nic nezměnilo (Audio/Operational bez událostí, mikrofon nepoužíval žádný jiný program). Nejpravděpodobněji ztlumení
+  přímo na mikrofonu (SoloCast má dotykový senzor nahoře; ztlumený posílá svůj šum, ne nuly, proto `got_signal`),
+  neověřeno. Na Pepově SoloCastu přes reproduktory je ve **všech** uložených nahrávkách blok nad 50 do 0,12 s
+  (zachycené startovní pípnutí), takže nahrávka, kde `DEAF_WARN_S` (2 s) nepřijde nic nad šumem (`voiced_s == 0`),
+  znamená hluchý mikrofon: Orbit to řekne **už během držení** („Mikrofon nic neslyší. Není ztlumený přímo na
+  mikrofonu (tlačítkem nebo dotykem) nebo ve Windows?“, jednou za nahrávku, `Take.warned_deaf`) a po puštění znovu
+  („…nic nezachytil, nahrávka je jen ticho…“), obojí jako chyba (červená bublina, u agenta řádek v panelu). Text
+  v historii není, protože žádný nevznikl. Řádek „Nahrávka … je ticho“ v logu má teď i nejhlasitější blok
+  (`Recorder.peak`) a čas nad šumem. Testy `tests/test_ui_silence.py`.
 
 ### Push-to-talk
 - pynput `Listener(win32_event_filter=...)`, zvolená klávesa/tlačítko se **potlačí** (`SystemHook.SuppressException`),
@@ -305,10 +484,32 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   jiného chatu nebo terminálu). Do oken spuštěných jako správce Windows vkládat nedovolí (UIPI) a ani neřekne, že
   ne: `inserter.runs_as_admin` (token procesu s `TokenElevation`, nebo přístup odepřen) → text do schránky
   a bublina „Okno běží jako správce…“. Stejně, když `SendInput` nevezme všechny události.
+- **Tlačítko myši pro diktování funguje jako klik** (17. 10., Pepa: „kde mám myš, tam to [má] mluvit, musím na to
+  úplně kliknout“): relace „rege“ ovládala Chrome přes Claude in Chrome (akce každých ~8 s) a Chrome se tím dostával
+  do popředí; třikrát za sebou šel diktát do Chromu místo do terminálu pod myší a Pepa ho po kliknutí do terminálu
+  řekl znovu (historie: chrome → WindowsTerminal). Vlastní klik tlačítka okno neaktivuje (hook ho spolkne). Proto
+  s vazbou na myš (`ptt.kind == "mouse"`) `Dictation._follow_pointer` při stisku a znovu při konci nahrávky
+  (`_finish_recording`, před `take.target`) dá do popředí okno pod myší (`inserter.pointed`: `WindowFromPoint` →
+  `GA_ROOT`; ne hlavní panel a plocha, menu, okna bez aktivace a nástrojová okna jako Orbitovo tlačítko a bubliny,
+  zakázané okno), když to není to v popředí (`sessions.focus_window`). Klávesa pro diktování nic nemění. V logu
+  „Diktát jde do okna pod myší (WindowsTerminal), v popředí bylo chrome“. Když Chrome okno vezme až během přepisu,
+  platí dál pravidlo výš (schránka a bublina). Testy `tests/test_ui_pointer.py`. Neověřeno: fyzickým tlačítkem myši
+  v živém Orbitu.
 - Po 3 s nečinnosti (stav idle, myš mimo, žádné menu) tlačítko i panel zprůhlední na 30 % (`windowOpacity`,
   animace), Pepa chtěl, aby bylo vidět „jen malinko“ (10 % i 20 % byly moc průhledné, 30 % schválil). Najetí myší, nahrávání nebo
   přepis ho hned vrátí. Od 8. 10. jde čas zvolit v nastavení („Zprůhlednit tlačítko“: 3 s, 5 s, 10 s, 30 s, minuta,
   nikdy; `fade_after_s`, 0 = nikdy, `FloatingButton.set_fade_after`).
+- **Tlačítko za okny jiných programů** (17. 10., Pepa: „pole Orbit se dává za prohlížeč, se dvěma Chromy Orbit
+  nevidím“): Windows tlačítko odsunuly pod obyčejná okna (Chrome, terminály) a nechaly mu `WS_EX_TOPMOST`, takže Qt
+  si myslí, že je navrchu, a nic neopraví. Stejně odsunutý byl i hlavní panel druhého monitoru (Explorer, bez okna
+  přes celou obrazovku), příčinu se nepodařilo zjistit ani vyvolat (`HWND_BOTTOM` příznak smaže, vložení za obyčejné
+  okno Windows u topmost okna ignorují, `SetWindowLongPtr` příznak nastavit neumí). Proto `Dictation._keep_button_on_top`
+  každou sekundu (`ON_TOP_CHECK_MS`): viditelné, nezakryté (cloaked) a neminimalizované obyčejné okno nad tlačítkem
+  (`winutil.windows_above`, ~0,1 ms), nebo ztracený příznak (`HWND_NOTOPMOST` zvenku; Qt ho po skrytí a ukázání
+  nevrátí) = `SetWindowPos(HWND_TOPMOST)` bez aktivace (`winutil.put_on_top`). Ne během hry, videa nebo prezentace
+  přes celou obrazovku (`accepts_notifications`), po jejím konci se tlačítko vrátí. V logu „Tlačítko bylo za okny
+  jiných programů (chrome, …)“, nejvýš jednou za minutu. Ověřeno na Pepově odsunutém tlačítku (vrátilo se) a na
+  odsunutém panelu druhého monitoru (detekce), testy `tests/test_ui_on_top.py` se skutečnými okny mimo obrazovku.
 
 ### Relace Claude Code (`show_sessions`, `speak_answers`)
 - Pepa pouští Claude Code přes `cmd.exe` z Průzkumníka, **každá relace má vlastní okno Windows Terminalu**
@@ -319,7 +520,9 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 - Hooky v `~/.claude/settings.json` (Pepa souhlasil): SessionStart, UserPromptSubmit, Notification, Stop,
   StopFailure, SessionEnd a PostToolUse s `"matcher": "Artifact"` → `"command": "<python.exe vedle Orbitova>",
   "args": ["<absolutní cesta>/app/cc_hook.py"], "async": true` (exec forma bez shellu, u Pepy
-  `C:/Users/josef/orbit/.venv/Scripts/python.exe`). Orbit je přidá (se souhlasem `claude_hooks`), když je zapnutý
+  `C:/Users/josef/orbit/.venv/Scripts/python.exe`). Od 16. 10. i PreModelSwitch, jako jediný **bez `async`**
+  (`claude_settings.SYNC_EVENTS`: Claude Code čeká na jeho odpověď; viz Model relací); u Pepy ho přidá první start
+  Orbitu po té změně. Orbit je přidá (se souhlasem `claude_hooks`), když je zapnutý
   přehled relací nebo předčítání artefaktů, jinak odebere (`claude_settings.set_hooks`). Běžící relace si změněné
   hooky načtou samy (ověřeno 30. 9. s Claude Code 2.1.28x).
 - **Vlastnictví (od 3. 10.)**: Orbit pozná svůj hook jen podle cesty ke **svému** `cc_hook.py` (porovnání bez ohledu
@@ -394,7 +597,10 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   její soubory, takže po aktualizaci (30. 9. i třikrát za den) byla v přehledu jen část relací.
 - **Název relace** = `aiTitle` z přepisu (záznam `{"type":"ai-title","aiTitle":"Analýza ceníků a katalogů
   Profodu"}`, opakuje se v přepisu, čte se z konce; bez ai-title v posledních 512 KB se hledá od konce po 1 MB,
-  `sessions._title_lines`: 1–2 ms místo 44–181 ms u přepisů 19–88 MB). Bez něj název složky. Stejný text dává
+  `sessions._title_lines`: 1–2 ms místo 44–181 ms u přepisů 19–88 MB). Bez něj (nová relace, ještě bez zadání)
+  ukazuje řádek panelu tlumeně „Nová relace“ (`ui.UNTITLED`) a složku ve vlastním sloupci jako u ostatních (od 16. 10.,
+  Pepa: u nové relace s Haiku „se neukazuje složka“, když byla na místě názvu); bubliny a hlas ji dál jmenují podle
+  složky (`Session.name`). Stejný text dává
   Claude Code do titulku okna. Používá se v panelu, v bublinách i v hlasu („Hotovo: …“). V panelu je za názvem
   tlumeně i složka (Pepa chtěl vidět, kde relace pracuje), proto je panel široký 440 px (s 320 px se názvy
   ořezávaly). Relace jsou seřazené podle složky a začátku relace (pořadí neskáče se změnou stavu).
@@ -776,6 +982,135 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   se neotevřela“ (třeba smazaná složka). Ověřeno skutečným `cmd.exe` s falešným `claude.bat`: dostal přesně
   `--dangerously-skip-permissions --resume "<id>"`. Neověřeno: skutečné `claude --resume` z Orbitu.
 
+### Model relací (od 16. 10., `app/models.py`)
+- Pepa chtěl „strašně jednoduše měnit modely jednotlivých session“, třeba při otevření zvolit Sonnet, Opus nebo
+  Haiku. Nabízí se Fable, Opus, Sonnet, Haiku (`models.FAMILIES`, aliasy Claude Code 2.1.301: `fable` = Fable 5.1,
+  `opus` = Opus 5.5, `sonnet` = Sonnet 5.5, `haiku` = Haiku 5.5; všechny mají nativně kontext 1 mil., velikost
+  kontextu přepnutí neomezuje). Výchozí model = `model` v uživatelském `settings.json` (u Pepy `opus[1m]`,
+  `models.default`). Volba téže rodiny jako výchozí dá přesně výchozí řetězec (Opus = `opus[1m]`, `models.alias`).
+- **Přesné názvy všude** (Pepa 16. 10.: „ať je tam přesný název, třeba Sonnet 5.5, nejenom Sonnet“): v přepínači
+  plusku, nabídce relace, řádku panelu, Historii relací i bublinách „Fable 5.1 / Opus 5.5 / Sonnet 5.5 / Haiku 5.5“.
+  Na co alias ukazuje, řekne Claude Code sám: `claude -p --input-format stream-json` a jen `control_request`
+  `initialize` (bez zprávy modelu, `--no-session-persistence`, ~0,8 s), v odpovědi `models` je
+  `{value: "sonnet", resolvedModel: "claude-sonnet-5-5", displayName: "Sonnet 5.5"}` (totéž, co SDK vrací jako
+  `supportedModels`). `models.refresh_names` se ptá po každé kontrole připojení Clauda (`Dictation._claude_changed`,
+  ve vlákně), ale jen jednou na verzi Claude Code; výsledek je v `<data>/cache/models.json` (čte ho i podproces, který
+  spouští relace). Než odpověď přijde, ukazuje se jen rodina („Sonnet“). U běžící relace je název z přepisu
+  (`claude-sonnet-5-5` → „Sonnet 5.5“, `models.label`).
+- **Při otevření**: nahoře v nabídce plusku (i v menu Orbitu „Nová relace Claude Code“) přepínač „Model Fable Opus
+  Sonnet Haiku“ (`ui.ModelPicker` v `QWidgetAction`: klik vybere, nabídka zůstane otevřená). Při každém otevření
+  nabídky je vybraný výchozí model (volba se nepamatuje, aby další relace omylem nejela na Haiku); překreslení po
+  změně barvy složky volbu nechá (`keep_model`). Výchozí = žádné `--model` (relace jako z Průzkumníka), jiný =
+  `--model "!ORBIT_MODEL!"` (`agent_tools._launch`, jen alias z `models.is_alias`, jako proměnná). Platí i pro
+  „Nové repo…“. V Historii relací vedle „Pokračovat v relaci“ seznam „Model jako naposledy“ (Claude Code při
+  `--resume` vrátí model relace) / Fable / Opus / Sonnet / Haiku, „Kopírovat příkaz“ přidá `--model`.
+- **Běžící relace**: pravý klik na relaci v panelu → „Model: Opus 5.5“ a čtyři modely, fajfka u toho, na čem běží
+  (tooltip: k čemu je, a že další zpráva znovu načte celou konverzaci bez mezipaměti, s počtem tokenů). V řádku
+  panelu je za názvem tlumeně model jen tehdy, když není výchozí („Haiku“, `ui.model_tag`), při přepínání v barvě
+  akcentu „→ Sonnet“; tooltip vždy „Model: …“. Model relace = z konce přepisu poslední odpověď hlavní větve
+  (`"message":{"model":"claude-opus-5-5"`) nebo novější `<local-command-stdout>Set model to `Sonnet 5.5``
+  (`sessions._model`), před první odpovědí `model` z hooku SessionStart.
+- **Jak se přepne**: Orbit zapíše `<data>/sessions/model/<relace>.<id>.json` (`{session_id, id, time, model,
+  default}`, `models.ask`), mod `orbit-mozek` 0.5.0 (viz Mody) ho do 2 s převezme (`.ack.json`), spustí v relaci
+  `$.command.run({command: 'model', args})` (= `/model sonnet`, u pracující relace až po tahu) a odpoví `.done.json`
+  (`{ok, text, model}`, ok = relace teď běží na té rodině). Proč vlastní `/model` Claude Code, ne přepis modelu
+  v každém požadavku (`turn.step` v modu by to uměl): relace pak ví, na čem běží (patička, `/model`, podagenti,
+  kontextové okno).
+- Co `/model` dělá navíc (zjištěno 16. 10. z kódu `claude.exe` 2.1.301 a vyzkoušeno na skutečné relaci s Haiku):
+  1. V relaci, která už odpověděla, se v jejím okně zeptá „Switch model? … the full history gets re-read“ a čeká
+     na Enter (snímek okna). Přeskočí to jen hook PreModelSwitch s `permissionDecision: "allow"` (`skipConfirm`).
+     Proto `cc_hook.py` u PreModelSwitch (synchronní, nic nezapisuje, stavy relací se nemění) řekne allow **jen**
+     když v `sessions/model/` je žádost Orbitu pro tu relaci a přesně ten `requested_model`, mladší než 10 min
+     (`models.ASK_FRESH_S`); jinak mlčí a Claude Code se ptá jako vždy. Pomalý hook by přepnutí zablokoval
+     (timeout = blokace), proto nic pomalého, vždy kód 0. Bez hooku (bez souhlasu `claude_hooks`) relace dialog
+     ukáže a Orbit po 5 s v klidu bublinou řekne, ať to potvrdí v jejím okně; „No, go back“ (`Kept model as…`)
+     je uživatelova volba, bez bubliny.
+  2. **Uloží model i jako výchozí pro nové relace** (`settings.json` `model`; lokálně `/model <název>` i řádek
+     Model v `/config` vždy, „jen pro tuhle relaci“ umí jen výběr přes Alt+P, Remote Control a SDK). Orbit si při
+     žádosti zapíše původní hodnotu a hned po odpovědi modu ji vrátí (`models.restore_default` →
+     `claude_settings.set_default_model`, jen když tam pořád je model z žádosti; žádná hodnota = klíč pryč; dvě
+     přepnutí naráz: druhé vezme původní hodnotu z prvního). Naměřeno: výchozí model byl jiný ~60 ms. Běžící
+     relace klíč nesledují (Pepova relace spuštěná bez `--model` jela 40 s na Opusu, i když byl výchozí Sonnet),
+     týkalo by se to jen relace spuštěné právě v tu chvíli. V okně relace zůstane řádek „…and saved as your default
+     for new sessions“, mod proto ukáže toast „jiný model jen pro tuhle relaci, výchozí … zůstává“.
+- Bez odpovědi modu do 7 s (`models.ACK_WAIT_S`, relace spuštěná se starším modem) bublina: `/reload-plugins` nebo
+  `/model …` v jejím okně. Odmítnutí od Claude Code (model účet nemá) = červená bublina s jeho textem. Žádost, na
+  kterou Orbit nedočkal (restart), převezme další start (`models.leftovers`).
+- **Ověřeno 16. 10.** skutečnou interaktivní relací (Haiku, nainstalovaný mod 0.5.0, skutečný `cc_hook.py` jako
+  PreModelSwitch přes `--settings`): převzetí 0,86 s, přepnutí bez dialogu za 1,07 s, další odpověď od
+  `claude-sonnet-5-5`, výchozí `opus[1m]` vrácený. Neověřeno: celé z běžícího Orbitu (pravý klik) a `--model`
+  ze skutečného plusku (řetězec příkazu je v testech, rozbalení proměnné v cmd je stejné jako u `--resume`).
+  Testy `tests/test_core_models.py`, `tests/test_ui_models.py`, `--model` v `test_claude_agent_tools.py`.
+
+### Autopilot (od 13. 10., `app/autopilot.py`, `app/autopilotview.py`, `app/bland.py`)
+- Pepa viděl reel Rileyho Browna („give Claude Code a phone number“, Bland AI) a chtěl: ikonka telefonu, v ní aktivní
+  relace, jednu vybrat, „dát do řešení“ ve smyčce a po každém kole (třeba po hodině) mu zavolat, co udělala, co dál
+  a jak by problém řešila. Rozhodnutí (13. 10.): název **Autopilot**; odpověď z hovoru **hned spustí další kolo**,
+  volá se nejvýš jednou za interval (relace mezitím stojí); nezvednutý hovor = **relace počká** a za interval se volá
+  znovu; telefonie **Bland AI**. Rozebrané a zamítnuté: WhatsApp (Calling API chce firemní číslo na Cloud API
+  s limitem aspoň 2 000 příjemců denně, webhook nebo SIP s vlastním WebRTC, a 4 nezvednuté hovory po sobě odeberou
+  povolení volat), ElevenLabs + Twilio (nejlepší čeština, ale dva účty a číslo), Twilio jen s nahrávkou (bez rozhovoru),
+  Telegram (bot volat neumí, jen hlasovky).
+- Panel: kruh s telefonem (E717) vlevo od plusu (jen s Claudem), číslo = kolik relací je na autopilotu
+  (`FloatingButton._phone_center`, `autopilot_clicked`); v menu Orbitu „Autopilot…“. U relace na autopilotu je za
+  názvem telefon a „kolo 2“ / čas dalšího hovoru / „volá“ / „stojí“ v barvě akcentu (`Session.autopilot`, tooltip
+  `autopilot_note`, nastavuje `Dictation._drive_autopilot` před `set_sessions`).
+- Okno (`AutopilotWindow`, QDialog `#autopilot`): nahoře číslo (`bland.normalize_phone`: 9 číslic = +420, jinak E.164),
+  klíč Bland AI (pole je po uložení prázdné, v configu `autopilot_key` jako `dpapi:<base64>` šifrovaný pro účet
+  Windows, `bland.protect`; po uložení `GET /v1/me` ukáže kredit), hlas (nepovinné), „V noci (22–7 h) nevolat“,
+  „Kde vzít klíč“ (`v2.app.bland.ai/settings`), „Zkusit hovor“. Vlevo běžící relace (proužek v barvě složky), vpravo
+  cíl (prázdný = pokračovat v tom, na čem pracuje), „Volat nejvýš jednou za“ 30 min / 1 h / 2 h / 3 h, „Pustit na
+  autopilota“; u relace na autopilotu stav, cíl, poslední hlášení, poslední hovor (výsledek, minuty, cena, shrnutí,
+  přepis), „Zavolat teď“ (hned, i v noci) nebo „Pokračovat“, když stojí, a „Vypnout autopilota“.
+- **Jak relace dostane zadání**: mod `orbit-mozek` 0.4.0 (viz Mody) každé 2 s projde `<data>/sessions/prompt/`
+  a `<relace>.<id>.json` (`{session_id, id, time, text}`, mladší než minuta) pošle `$.prompt.submit({text, asUser:
+  true})` jako slova uživatele (vlastní tah, až relace nic nedělá), vedle zapíše `….done.json` `{ok, text: started /
+  queued / důvod}`; „queued“ po 1,5 s, když relace zrovna pracuje (submit se vyřeší až se začátkem tahu). Bez odpovědi
+  do 7 s (`ACK_WAIT_S`) autopilot stojí: relace nemá mod 0.4 (běží ze starší verze) → `/reload-plugins` nebo restart
+  a „Pokračovat“ pošle stejné zadání znovu. Nepoužívá `/loop` ani CronCreate: kola řídí Orbit.
+- **Kolo**: zadání (`first_prompt`, `next_prompt`) říká cíl, ať pracuje sám a o drobnostech rozhoduje sám, uživatel je
+  mimo počítač, a ať tah ukončí blokem „## Hlášení pro telefon“ (Co jsem udělal / Stav / Návrhy, jak dál 1) 2) 3) /
+  Otázka; bez kódu, cest a odkazů). Kolo skončí, když přehled relací (hooky) hlásí hotovo/chybu se Stopem po zadání
+  (`s.since >= sent_at`); „čeká na tebe“ (oprávnění) se jen ukáže, nevolá se. Hlášení = poslední odpověď od nadpisu
+  dál (`report_text` maže Markdown, kód, cesty, odkazy; max 3500 znaků), bez nadpisu celá.
+- **Hovor** (`bland.start_call`): `language: "cs"`, `wait_for_greeting` (nejdřív „Haló?“), `record: false`,
+  `voicemail: hangup`, `max_duration` 10 min, `first_sentence` „Ahoj, tady Orbit. Volám kvůli relaci …“, `task` =
+  instrukce pro hlasového agenta Blandu (tykat, bez rodových tvarů, shrnout, návrhy, otázka, doptat se, odpovídat jen
+  z hlášení, na konci zopakovat, co předá; nic neslibovat, žádná hesla) + hlášení, `summary_prompt` = co chce
+  uživatel dál. Na telefonu mluví model Blandu, ne Claude. Orbit se ptá `GET /v1/calls/<id>` každých 8 s
+  (`POLL_CALL_S`, nic z internetu nemusí do PC), `bland.outcome`: odpověděl (aspoň jedna jeho neprázdná věta),
+  nezvedl (no-answer, busy, hlasová schránka, ticho), chyba. Přepis „Pepa: … / Orbit: …“ + shrnutí jde jako další
+  kolo; „AUTOPILOT: KONEC“ na začátku odpovědi relace (když v hovoru zaznělo ukončení) autopilota vypne.
+- Kdy volat: první kolo hned po jeho konci, další nejdřív interval po posledním hovoru (`next_call`), noc 22–7 h
+  posune na 7:00 (`_when`, `autopilot_quiet`). Bubliny (`_notify`, klik = okno na té relaci): „Kolo je hotové,
+  zavolám v …“ (jen když se čeká přes minutu), „Hovor skončil, relace pokračuje kolem N“, „Hovor nikdo nezvedl…
+  zkusím to znovu v …“, chyby (klíč, kredit 402, relace bez modu) = autopilot stojí. Skončená relace autopilota vypne.
+- Stav v `<data>/autopilot.json` (atomicky, jen při změně): po restartu Orbitu hovor, na který se čeká, pokračuje
+  (`calling` s id), hovor bez id se zavolá znovu, nepřevzaté zadání se pošle znovu. Požadavky na Bland běží ve
+  vlastních 2 vláknech, výsledky si `tick()` bere každou sekundu (`_poll_sessions` → `_drive_autopilot`); bez přehledu
+  relací (hooky + `show_sessions`) autopilot stojí a okno řekne proč.
+- Log: číslo jen jako „…456“, klíč nikdy, hlášení a přepisy jen délky. Bland: kredit nejméně 5 $ pro hovory mimo
+  USA/Kanadu, cena podle srovnání ~0,12–0,14 $/min + telefonie; čeština podle dokumentace podporovaná.
+- Ověřeno 13. 10.: mod 0.4.0 ve skutečné relaci Claude Code (`claude -p --input-format stream-json`, haiku,
+  dočasná datová složka) soubor se zadáním převzal za 1,5 s, relace odpověděla novým tahem, `.done.json` =
+  `{"ok":true,"text":"started"}`. **Ověřeno i v Pepově interaktivní relaci** (13. 10. v 17:41, m-tex, bezpečnostní
+  hlídka): zadání převzal mod za 2 s, hook UserPromptSubmit pro něj běží, relace po 8 min napsala hlášení přesně
+  v požadovaném tvaru (1269 znaků).
+- **Stop přijde až po „idle“**: seznam relací Claude Code přepnul na `idle` dřív, než async Stop hook zapsal odpověď
+  (13. 10. o 1 ms), přehled relací to bral jako přerušený tah bez odpovědi a autopilot vzal prázdné hlášení. Teď
+  kolo bez odpovědi čeká na Stop až 15 s (`STOP_WAIT_S`, `Autopilot._quiet`); přerušený tah (Esc, Stop nepřijde)
+  pak pokračuje bez hlášení.
+- **Kredit zdarma do Česka nevolá**: Bland vrátí 400 „International calling requires a completed purchase. Adding
+  a card by itself does not enable it – buy credits or turn on auto-recharge“; úvodní kredit (Pepa měl 2 $) ani
+  samotná karta nestačí, `bland._request` to říká česky. **Ani po nákupu do Česka nevolá** (Pepa 13. 10. koupil
+  10 $, kredit 12 $): pak 400 „Call not permitted to this destination, or call was formatted incorrectly.“ (zkoušeno
+  ještě 15. 10.). Podpora Blandu 16. 10. (e-mail na obchod@m-tex.cz): +420 je přes výchozí telefonii Blandu zakázané,
+  kredit ani čekání to nezmění; jediná cesta je vlastní Twilio (BYOT: Česko ve Voice Geo Permissions v Twiliu, Twilio
+  připojit v Bland › Add-ons › BYOT, číslo importovat, volat s hlavičkou `encrypted_key` a `from` = to číslo). Bland
+  pak strhává z kreditu jen svou sazbu (0,14 $/min na plánu Start), volání platí Twilio. Orbit BYOT zatím neumí.
+  **Neověřeno**: skutečný hovor, kvalita češtiny Blandu.
+  Testy `tests/test_core_autopilot.py` (falešný Bland a mod) a `tests/test_ui_autopilot.py`.
+
 ### Mody pro Claude Code (od 8. 10., `mods/`)
 - Pepa slyšel o modech Claude Code (doplňky v TypeScriptu, které běží uvnitř Claude Code: panely, řádek nad promptem,
   příkazy, nástroje, přístup k proudu odpovědi; od 2.1.287, API je v ranném přístupu) a vybral dva nápady:
@@ -796,6 +1131,13 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   (`$.fs.list`), žádost své relace mladší než minuta (`STOP_FRESH_MS`) vyřídí jednou (`stopsSeen`: jméno + čas
   souboru) přes `TaskStop` a vedle zapíše odpověď `{ok, text}` (viz Příkazy na pozadí). Mazat soubory mod neumí
   (`$.fs` nemá remove), maže Orbit.
+- **Zadání z Autopilota** (od 13. 10., `orbit-mozek` 0.4.0, `promptRequested`): ve stejné smyčce po 2 s projde
+  `<data>/sessions/prompt/`, zadání své relace (mladší než minuta, nejvýš 60 tis. znaků, jednou) pošle
+  `$.prompt.submit({text, asUser: true})` a odpoví `{ok, text}` (started, po 1,5 s queued, nebo proč ne). Viz Autopilot.
+- **Přepnutí modelu** (od 16. 10., `orbit-mozek` 0.5.0, `modelRequested`): ve stejné smyčce `<data>/sessions/model/`,
+  žádost své relace (mladší než minuta, model jen `fable|opus|sonnet|haiku` s nepovinným `[1m]`, jednou) potvrdí
+  `.ack.json`, spustí `$.command.run({command: 'model', args})` a odpoví `.done.json` `{ok, text, model}`
+  (`$.session.model()` po přepnutí). Viz Model relací. 16. 10. nainstalovaný u Pepy (0.4.0 → 0.5.0).
 - **`orbit-ukoly`**: v relaci s `ORBIT_TASK_ID` řádek nad promptem (úkol, složka, počet poznámek, tlačítka Poznámka,
   Hotovo, Skrýt), sekce systémového promptu „pracuješ na úkolu…“ (`prompt.compose`, ne když je úkol hotový) a nástroje
   `mcp__orbit-ukoly__task_note` a `task_done` (`isDeferred: false`). Úkol čte z `tasks.json` (znovu po 15 s), píše jen
@@ -889,7 +1231,11 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   Y“** (i „oprav/přepiš/změň X na Y“, „místo X napiš Y“) udělá Orbit sám, když X najde (`editing.find`: celá slova,
   bez diakritiky, podobnost ≥ 0,75, všechny stejné výskyty, velké písmeno na začátku věty); jinak **Claude**
   (`rewrite.Rewriter`: `claude -p --safe-mode --model sonnet --effort low`, JSON `{text, problem}`), spuštěný už při
-  stisku (`claude_cli.Prepared`), takže po puštění trvá 3–6 s (měřeno 8. 10.). Claude dostane označený text, jinak
+  stisku (`claude_cli.Prepared`), takže po puštění trvá 3–6 s (měřeno 8. 10.). **Od 24. 10. jde zadání jako
+  stream-json** (`--input-format stream-json`, výsledek z události `result`): Claude Code 2.1.310 s obyčejným stdin
+  skončí, když do 3 s nic nepřijde („no stdin data received in 3s“), a pokyn se řekne a přepíše za déle, takže každá
+  úprava přes Clauda by selhala (ověřeno: čekání 6 s = chyba, 2 s v pořádku; se stream-json 6 s v pořádku).
+  Claude dostane označený text, jinak
   poslední diktát (když je ještě bezpečně před kurzorem), jinak nic a podle pokynu píše nový text („napiš krátkou
   odpověď…“), nebo vrátí `problem` („Přelož to.“ bez textu). Text je pro něj data (ověřeno: pokyn uvnitř textu
   neposlechl), tvary bez rodu („nestihnu přijít“).
@@ -1026,7 +1372,8 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   kde bylo), 3. `%LOCALAPPDATA%\Orbit`. Uvnitř: `config.json`, `orbit.log`, `whisper-server.log`, `crash.log`,
   `recordings\`, `models\` (+ `piper\`), `sessions\` (+ `artifacts\`, `status\`), `cache\`,
   `statusline-previous.json` (původní stavový řádek uživatele, když je Orbitův zapnutý), `tasks.json` (+ `tasks\`
-  s dlouhými zadáními; úkoly z Poznámek, nikdy do gitu). Ve složce aplikace zůstává
+  s dlouhými zadáními; úkoly z Poznámek, nikdy do gitu), `autopilot.json` (relace na Autopilotu, hlášení a přepisy
+  hovorů; `sessions\prompt\` zadání pro mod). Ve složce aplikace zůstává
   jen kód, `assets\` (statické) a `whisper\`.
 - Složka Claude Code: `ORBIT_CLAUDE_DIR`, jinak `CLAUDE_CONFIG_DIR` (Claude Code ji tak umí přesunout, `.claude.json`
   je pak v ní), jinak `~/.claude` a `~/.claude.json`. Všechno, co Orbit čte nebo zapisuje u Claude Code (hooky,
@@ -1223,6 +1570,34 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 - Pozor na zkratky v `paintEvent`: čtverec reproduktoru (`_speaker_area`) zasahuje 4 px do čtverce mikrofonu, zbalený
   ho proto vrací prázdný a `paintEvent` zbaleného kreslí jen ikonku hned na začátku (jinak by vlny čtení kreslily kus
   reproduktoru do ikonky). Testy `tests/test_ui_fold.py`.
+- **Animace zbalení a rozbalení** (od 16. 10., `app/foldfx.py`; Pepa: „ať to udělá nějakou mega cool animaci … a když
+  to odminimalizovávám, ať to udělá hezkou animaci a načte se okno“). Zbalení (800 ms): panel se nadechne (+4 %),
+  pak se stáčí a zrychleně padá do středu mikrofonu jako do černé díry (stopa rozmazání, 80° po směru hodin), hvězdy
+  z jeho ploch (56, na neprůhledných místech obrázku) za ním padají po spirálách, ve středu záblesk, ikonka vyskočí
+  s přestřelem 20 %, natočí se na místo, měsíc kolem planety oběhne dvakrát (i za ní) a rozběhnou se dvě rázové vlny.
+  Rozbalení (740 ms): ikonka nabobtná, měsíc zrychluje, záblesk a ikonka praskne, rázové vlny, hvězdy vyletí na svá
+  místa v panelu a panel se ze středu rozvine (malý přestřel, otočení −40° → 0); přes panel pak přeběhne světelná
+  vlna od mikrofonu ven (načítá se).
+  - **Tlačítko se změní hned** (`set_collapsed(on, animate=True)`): velikost, místo, kliky, `button_pos` jsou rovnou
+    ty nové (testy zbalení platí beze změny), jen kreslí nic (`_fx_hidden`), dokud animace neskončí. Animace je vlastní
+    okno (`FoldFx`: průhledné, `WindowTransparentForInput`, bez aktivace, kolem obrázku `PAD` 64 px na rázové vlny,
+    které by okno tlačítka u svého okraje usekly). Obrázek je okno tlačítka nakreslené celé (`_snapshot` →
+    `_paint_whole`, to, co kreslí `paintEvent`): u zbalení to, co je teď na obrazovce, u rozbalení panel, jak bude
+    vypadat (`_layout` spočítá rozvržení bez změny okna, `_wanted_align` zarovnání jako `_auto_align`). První snímek
+    animace = to, co bylo vidět, poslední = to, co pak ukáže tlačítko (testy porovnávají pixely). Pořadí: okno animace
+    se ukáže a vykreslí, pak se tlačítko schová; na konci se tlačítko vykreslí, pak okno animace zmizí: chvíli jsou
+    vidět obě stejná, nikdy žádné.
+  - Animuje se jen klik (čip se čárkou, ikonka) a menu „Zbalit do ikonky“, ne start Orbitu, ne skryté tlačítko a ne
+    s vypnutými animacemi Windows (Nastavení › Přístupnost › Vizuální efekty › Efekty animace,
+    `SPI_GETCLIENTAREAANIMATION`, `foldfx.animations_on`). Začátek nahrávání (diktát i agent), skrytí tlačítka a nový
+    klik animaci hned ukončí: mikrofon musí být vidět červeně hned (soukromí). Okno animace začíná na průhlednosti
+    tlačítka (zprůhledněné po 3 s) a za 150 ms je plné, jako `_wake`.
+  - `_paint_icon(p, c, scale, spin, moon)`: ikonku animace kreslí stejná funkce jako tlačítko, s velikostí, natočením
+    a polohou měsíce na dráze (`moon` v radiánech po směru hodin, `None` = přesně jeho místo; za planetou se kreslí
+    před ní a je o kousek menší).
+  - Změřeno 16. 10.: snímek 0,2–4,2 ms (okno 578×414), na skutečných Windows ~65 snímků/s, nejdelší mezera 15,6 ms.
+    Testy `tests/test_ui_foldfx.py`; náhled po snímcích jde vyrobit přes `FoldFx.frame(u)`. Neověřeno: jak to vypadá
+    v pohybu na Pepově obrazovce (jen snímky a běh mimo obrazovku).
 
 ### Export a import slovníku (od 3. 10.)
 - Pepa chtěl přenést svůj slovník na jiný počítač. V nastavení u „Slovník“ jsou tlačítka „Exportovat…“
@@ -1307,8 +1682,15 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   historie diktátů, ztlumení hudby při diktování, limity z relací, nový reproduktor; `Orbit-Setup-1.2.0.exe`,
   82 004 811 B, SHA-256 `09b18ed1…636922d5` (celý v `web/release.json`). Ověřeno: build s kontrolou balíčku
   (`verify_bundle.py`), stažený soubor z webu má stejný SHA-256, rozsahy bajtů (206). Tichou instalací se 1.2.0
-  nezkoušela (`orbit.iss` se od 1.1.0 nezměnil).
-- Tichá instalace: `Orbit-Setup-1.2.0.exe /VERYSILENT /SUPPRESSMSGBOXES /CURRENTUSER` (Orbit se po ní nespustí),
+  nezkoušela (`orbit.iss` se od 1.1.0 nezměnil). **1.3.0 (24. 10. 2026)**: kontrola přepisu Claudem s druhým
+  rozpoznávačem Canary (onnx-asr v balíčku) a vložení až opraveného textu, pilulka „Přepisuji… / Claude kontroluje
+  přepis…“ u tlačítka, ořez ticha za posledním slovem, 1000 nahrávek, model relací (Fable / Opus / Sonnet / Haiku
+  při otevření i za běhu, mod `orbit-mozek` 0.5.0), animace zbalení a rozbalení, diktát tlačítkem myši do okna pod
+  myší, tlačítko vrácené nad okna jiných programů, hluchý mikrofon, Autopilot (hovory přes Bland AI; do Česka zatím
+  nevolá); `Orbit-Setup-1.3.0.exe`, 82 754 842 B, SHA-256 `69ab5122…25bbbfe4`. Ověřeno: build s kontrolou balíčku
+  (`verify_bundle.py` i import onnx_asr a příprava zvuku pro Canary), 407 testů. Tichou instalací se nezkoušela
+  (`orbit.iss` se nezměnil).
+- Tichá instalace: `Orbit-Setup-1.3.0.exe /VERYSILENT /SUPPRESSMSGBOXES /CURRENTUSER` (Orbit se po ní nespustí),
   odinstalace `unins000.exe /VERYSILENT /SUPPRESSMSGBOXES`.
 - **Podpis**: instalátor je nepodepsaný, SmartScreen ukáže „neznámý vydavatel“. Pro rozdávání ve velkém je potřeba
   certifikát; build ho umí přes `ORBIT_SIGN_THUMBPRINT`, `ORBIT_SIGN_COMMAND` (Azure Trusted Signing) nebo
@@ -1354,7 +1736,7 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   ```
   Whisper server při zabití aplikace skončí sám (Job object).
 - Kontrola kódu: `.venv\Scripts\python.exe -m pyflakes app Orbit.pyw tests`.
-- **Testy** (od 7. 10., stdlib `unittest`, 268 testů, ~60 s): `.venv\Scripts\python.exe -m unittest discover -s tests`
+- **Testy** (od 7. 10., stdlib `unittest`, 406 testů, ~110 s): `.venv\Scripts\python.exe -m unittest discover -s tests`
   (jen část: `-p "test_core*.py"`, `test_claude*`, `test_dist*`, `test_ui*`; `test_ui_*` zkouší metody `Dictation`
   na stubu a `VoiceAgent` s falešným procesem, bez Clauda). Samy si nastaví `ORBIT_DATA_DIR`/`ORBIT_CLAUDE_DIR`
   na dočasné složky a uklidí po sobě. Nespouští `claude` ani whisper-server (místo něj malý server v Pythonu), klávesy
@@ -1409,7 +1791,7 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   (`index.html`, `assets/site.css`, `assets/site.js`, GSAP + ScrollTrigger + Lenis v `assets/vendor/`), běží na
   Blueboardu ve složce `easya_cz/orbit` stejného FTP účtu jako m-tex.cz (hosting dělá ze složky v `easya_cz/` subdoménu,
   ověřeno: `easya_cz/easya/` = easya.easya.cz), před tím Cloudflare s wildcard DNS. Na účtu jsou i m-tex a další weby,
-  proto stránka nesmí spouštět žádný kód (`.htaccess` PHP zakazuje).
+  proto stránka nesmí spouštět žádný kód kromě tří souborů statistik (`.htaccess` jiné PHP zakazuje, viz Návštěvy webu).
 - **První verzi (Bodoni Moda + Barlow, zlatá na tmavě modré) Pepa odmítl jako „AI slob“**: chtěl designérskou práci,
   jiné písmo, hodně pohybu, hover efektů a JavaScriptu. Teď: nadpisy **Anybody** (variabilní šířka 50–150, tloušťka
   100–900, jen od 48 px), text **Mona Sans**; barvy aplikace (akcent `#5B9DFF`, přepínatelný na fialovou/tyrkysovou
@@ -1426,17 +1808,94 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 - Posudek nezávislého agenta „art director“ pomohl: odhalení písmen přes vlasový řez vypadalo rozbitě (teď jen
   průhlednost + rozmazání), všechny sekce měly stejnou šablonu a tři mřížky stejných karet (teď každá jinak), Anybody
   v malých velikostech působilo jako e-sportovní písmo. Kontrola: Playwright v `scratchpad`, snímky desktop + 390 px.
-- Písma jsou přímo na webu (žádné Google Fonts) a stránka nic neměří, protože slibuje „Ani tahle stránka nic neměří“.
-  CSP + `Permissions-Policy: microphone=()`.
+- Písma jsou přímo na webu (žádné Google Fonts), žádné cookies ani cizí skripty. CSP + `Permissions-Policy: microphone=()`.
+  Do 24. 10. stránka nic neměřila a slibovala „nemá analytiku“; od té doby si návštěvy počítá sama (další bod) a text
+  v Soukromí i otázka „Co o mně ví tahle stránka?“ to říkají. Když se měření změní, opravit oba texty.
+- **Návštěvy webu** (od 24. 10., Pepa: „jak fungují konverze na M-texu … admin stránku, kde bych viděl konverze, kdo na
+  webu byl, na co koukal“, pak „ve vzhledu Orbitu, ten na M-texu se mi tak moc nelíbí … ať vím, kdo tam přišel a ať
+  jsou to relevantní návštěvy, ne boti“). Vzor je karta „Co se právě dělo“ v Konverzích M-texu, vzhled je Orbitu.
+  - **https://orbit.easya.cz/admin/** (`admin/index.php`, `admin.css`, `admin.js`): shrnutí větou, dlaždice (lidé na webu,
+    stažení instalátoru, instalace příkazem, zkopírované zadání, teď na webu; srovnání se stejným úsekem předtím), graf
+    den po dni (dnes po hodinách; návštěvy se stažením nebo instalací v akcentu, ostatní šedomodře: dvojice prošla
+    validátorem dataviz proti `#0E1424`, skrytá tabulka pro čtečky), **Kdo přišel** (návštěva = řádek jako relace v panelu
+    Orbitu: proužek podle výsledku, čas, doba na stránce, země, zařízení a prohlížeč, odkud, části stránky s časem
+    a kroky: stažení s tlačítkem, zkopírování, funkce v panelu, otázky, video se zvukem, ukázka diktování, instalace
+    v PowerShellu; krátké návštěvy jen s úvodem sbalené po dnech; „To jsem byl já“ ji smaže, dvě kliknutí), vpravo cesta
+    po stránce s největším únikem, odkud, země, na čem (kolik z Windows), co si prohlédli, odkud stahují. Období Dnes /
+    7 / 30 / 90 dní. Bez rodových tvarů u návštěvníků.
+  - **Měření** (`assets/visit.js`): žádná cookie, nic v prohlížeči, jedno náhodné id na načtení stránky v paměti.
+    Začne, až je stránka opravdu vidět (ne karta na pozadí, ne prerender), DNT / Global Privacy Control = nic. Posílá
+    přes `sendBeacon` na `api/hit.php`: `start` (odkud bez dotazu, utm, kotva, `navigator.webdriver`), `ev` (download
+    s místem tlačítka, copy, github, script_view, video_sound, demo, feature po kliku nebo 1,2 s najetí, faq, theme, link)
+    a každých 30 s, při skrytí a odchodu `end` (sekce `{id: [kdy poprvé, ms na obrazovce]}` přes IntersectionObserver na
+    čáru uprostřed obrazovky, viditelný čas, video, interakce `i`, `x` = odchod, pak už „teď na webu“ nesvítí). Sekce =
+    `id` v `index.html` (`top` … `konec`, závěr má `id="konec"` kvůli tomu), seznam je v `visit.js` i `Stats::SECTIONS`.
+  - **Server** (`lib/stats.php`, PHP 7.4+, ověřeno 8.0 a 8.3): `data/hits-RRRR-MM-DD.php` po řádcích JSON za strážním
+    řádkem `<?php exit; ?>` (servírované omylem nic neukáže), flock, strop 20 MB na den, 400 dní. IP se neukládá: `vh`
+    (prohlížeč + síť) a `ih` (síť) jsou HMAC s klíčem serveru (`data/secret.php`, vznikne sám) a datem, IPv6 po /64.
+    IP návštěvníka je `CF-Connecting-IP`, jen když požadavek přišel z rozsahů Cloudflaru, země `CF-IPCountry` (ověřeno
+    24. 10.: chodí), město jen se zapnutým „Add visitor location headers“ v Cloudflaru. Limit 240 požadavků na síť za
+    10 min. Neměří se síť majitele (jako na M-texu) ani prohlížeč přihlášený do administrace (cookie
+    `orbit_no_stats` na rok). IP majitele **není v kódu** (repozitář je veřejný): je v
+    `~\m-tex\private\orbit-owner-ips.txt` (IP na řádek, `#` komentář), `publish.py` z něj udělá `data/owner.php` a nahraje ho se
+    stránkou, `Stats::ownerIps()` ho čte (od 24. 10., předtím konstanta `OWNER_IPS`; bez souboru se měří všichni).
+  - **Jen lidé, ne roboti**: robot podle user-agenta (boti, náhledy odkazů, headless, Lighthouse, curl, Python…, i
+    Chrome nebo Firefox pod 90 jako scraperové pooly na M-texu) nebo `navigator.webdriver`; návštěva bez scrollu, pohybu
+    myši, dotyku nebo kliku pod 8 s na obrazovce = „otevření bez prohlížení“. Obojí jen počet v poznámce seznamu.
+    Načtení stránky téhož prohlížeče ze stejné sítě do 30 min = jedna návštěva (přes den, mezi dny se spojit nedají).
+  - **Instalace příkazem**: `install.ps1` a `download/latest.json` jdou přes `api/serve.php` (přepis v `.htaccess`, cíl
+    **musí být absolutní** `/api/serve.php`: s relativním vrátil hosting 404 a instalace příkazem byla 24. 10. asi 3 min
+    rozbitá). Soubor jde ven celý a beze změny, počítá se až po něm. PowerShell na `install.ps1` = spuštěná instalace,
+    na `latest.json` = stahuje instalátor; Claude, prohlížeč, curl se ukážou jako čtení skriptu. Připojí se k návštěvě ze
+    stejné sítě do hodiny po ní, jinak „jen příkaz“.
+  - **Heslo**: `python web\publish.py --admin-password` vygeneruje nové, na server nahraje jen otisk PBKDF2 (400 000 ×,
+    `data/admin.php`) a heslo zapíše do `~\m-tex\private\orbit-admin.txt` (mimo veřejné repo, vedle přihlášení FTP).
+    Změnit jde i v administraci (odhlásí ostatní prohlížeče). Cookie `__Host-orbit-admin` podepsaná klíčem serveru,
+    30 dní, SameSite=Strict, POST jen z vlastního webu a s CSRF tokenem, 5 špatných hesel za 15 min ze sítě nebo 20 za
+    hodinu odkudkoli = čekání. Administrace má vlastní CSP bez inline skriptů (`admin/.htaccess`).
+  - Ochrana: `.htaccess` povolí jen `hit.php`, `serve.php`, `index.php`; jiné PHP, `lib/` a `data/` nejdou otevřít
+    (403, k tomu přepis na 404 a vlastní `Require all denied` v obou složkách). `publish.py` z `site/data/` nahraje jen `.htaccess` (a `.gitignore` ho drží mimo git),
+    nahrává jedním spojením a `.htaccess` s přepisem až po `api/serve.php`.
+  - Testy `tests/test_dist_web_stats.py` (skutečné PHP přes `php -S`, bez něj se přeskočí: `ORBIT_PHP`, PATH,
+    `~\tools\php83`). Celé kolo s prohlížečem (člověk z GitHubu, dva roboti, neviděná karta, instalace v PowerShellu,
+    přihlášení, snímky 1440 a 390 px) jde Playwrightem z `meteoradar\node_modules`, `navigator.webdriver` vypne
+    `--disable-blink-features=AutomationControlled`.
+  - Na živém webu nejde z Pepovy sítě vyzkoušet, že se návštěva zapíše (síť se neměří): z mobilu na datech, pak
+    „To jsem byl já“. Ověřeno 24. 10. živě: instalační skript a `latest.json` přes PHP stejné bajty, `lib/` a `data/`
+    403, přihlášení, Cloudflare a země, poznaná síť majitele. Zápis návštěv jen lokálně.
+- **Preloader** (od 20. 10., Pepa: „hezký preloader … mega luxusní, ať to matchuje celou stránku“): uprostřed logo
+  Orbitu (stínovaná koule, při letu zploští na logo z menu), měsíc během načítání obkreslí svou dráhu (tečkovaná jako
+  halo videa → plná, kometa v barvě akcentu), kolem prach v rovině dráhy, slovo „Orbit“ pod ním tloustne písmeno po
+  písmenu (Anybody wdth 50 → 125, wght 100 → 700 = přesně logo v menu), dole linka s počítadlem. Odchod (1,7 s):
+  nadechnutí, záblesk a dvě rázové vlny po rovině dráhy (jako rozbalení v aplikaci), závoj se otevře měkkým kruhem od
+  planety, prach odletí v čarách, hvězdy webu vyletí hyperprostorem a logo i slovo **odletí na logo v menu** (ověřeno
+  na pixel i s polohou měsíce, Chromium, Firefox, WebKit, i na 390 px); když menu není vidět (načtení níž), rozplynou
+  se. Kód: markup a skript hned pod `<body>` v `index.html` (musí běžet od prvního vykreslení, `site.js` je až na konci),
+  styly `.preloader`/`.pl-*` v `site.css`. `window.OrbitPreloader` (`onReveal`, `onDone`, `ready`, `covered`): `site.js`
+  pod závojem nekreslí hvězdy ani nadpis, úvod stránky (hyperprostor, skládání nadpisu, video od začátku, položky menu)
+  spustí až `onReveal`, Lenis pustí až `onDone` (do přistání se nescrolluje). Odchází, když jsou písma, `site.js`
+  (`ready()`) a `load` (na ten po `ready` čeká nejvýš 1,2 s, `load` čeká i na metadata videa), nejdřív po 1,5 s
+  viditelného času, později v relaci prohlížeče po 0,7 s (`sessionStorage` `orbit-pl`), nejpozději po 6 s. Bez JS,
+  s omezením pohybu a při tisku není; bez GSAP odejde sám (`load` + 1,5 s); bez skriptu ho CSS za 1 s schová.
+- **Plynulost preloaderu** (měřeno Playwrightem: headless Chromium s `--use-angle=d3d11` na RX 9070 XT, mezery mezi
+  snímky a čas JS v rAF, pak trace Chromu):
+  JS je 1–5 ms na snímek, zdržovalo GPU. Celoobrazovkové přechody a cesta se stovkami oblouků na plátně stály 13–28 ms
+  GPU na snímek → záře jsou dvě CSS vrstvy (jen opacity/transform), závoj je pozadí a jediný přechod až při otevření,
+  prach jsou sprity. Rozmazané znaky nadpisu, kterým se každý snímek mění osy písma, se překreslovaly → osy stojí, dokud
+  se znak neskládá (platí pro všechny kinetické nadpisy). Text a tlačítko pod nadpisem (`.hero .rv`, široký stín tlačítka)
+  mají během prolnutí `will-change`, pod závojem opacity 0,001 (úplně průhledné Chrome nekreslí a první vykreslení pak
+  stojí snímek). Výsledek: odchod 100–101 snímků ze 101 včas (dřív p90 33 ms, nejhorší 117 ms). `will-change` na
+  znacích nadpisu ani na položkách menu nepomohl (spíš uškodil). Neověřeno: skutečný Chrome s oknem na Pepově monitoru.
 - **Úvodní video** (Remotion, viz níže) je ve `web/site/assets/video/` (`orbit.mp4`, `orbit.webm`, `poster.jpg`),
   hraje ztlumeně ve smyčce, tlačítko pustí od začátku se zvukem. Bez `orbit.mp4` (nebo s `--no-video`) je místo něj
   animovaný orrery. Hudba „Mountains“ (Andrew Ev, Mixkit) je uvedená v patičce.
 - Tlačítko „Stáhnout pro Windows“ na konci videa nejde kliknout (Pepa: „je na hovno“), proto na něj v čase
-  64,15–74,8 s přiletí shora skutečné tlačítko a levituje přesně nad ním (`#stageCta`; ve videu je 490×76 px se
+  103,18–113,86 s přiletí shora skutečné tlačítko a levituje přesně nad ním (`#stageCta`; ve videu je 490×76 px se
   středem na 818, 855 v 1920×1080, velikost přes `cqw`, o kousek větší, aby to nakreslené při levitaci nevykouklo).
-  Časy jsou z `video/src/scenes/Outro.tsx` (takt 33): když se konec videa přestříhá, musí se změnit
-  `CTA_IN`/`CTA_OUT` v `site.js`. Se zvukem video nehraje ve smyčce: po konci skočí na záběr v 70 s, tlačítko
-  zůstane a objeví se „Přehrát znovu“. Dokud není instalátor, tlačítko říká „Instalátor už brzy“ a vede na instalaci.
+  Časy jsou z `video/src/scenes/Outro.tsx` (takt po konci bicích, 53; nakreslené tlačítko vyskočí v 104,2 s): když
+  se konec videa přestříhá, musí se změnit `CTA_IN`/`CTA_OUT`/`END_FRAME`/`POP` v `site.js` (do 20. 10. 64,15–74,8 s,
+  video 76 s; do 24. 10. 87,58–98,23 s, video 99,4 s). Se zvukem video nehraje ve smyčce: po konci skočí na záběr
+  v 109,0 s, tlačítko zůstane a objeví se „Přehrát znovu“. Dokud není instalátor, tlačítko říká „Instalátor už brzy“ a vede na instalaci.
 - **Hosting gzipuje všechno**, i video: pak nefungují rozsahy bajtů (iPhone video nepřehraje, stahování bez velikosti).
   `.htaccess` proto pro mp4/webm/exe/obrázky/písma kompresi vypíná (`no-gzip`). Cloudflare si soubory drží rok:
   zlou kopii vyřeší jen změna `?v=`, tedy `ASSET_SALT` v `publish.py`.
@@ -1463,8 +1922,27 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
   Aktualizovat → „Aktualizuju…“ → ✓ a bublina) a „Zbalit do ikonky“ (scéna `zbalit`: `.widget.folded` celou
   repliku jen zprůhlední, ne vyjme z layoutu, aby stránka neposkočila, a ukáže ikonku na místě mikrofonu). Ověřeno
   Playwrightem: 1440×900, 1280×720 (obě karty se při scrollu kolečkem rozsvítí a replika je celá vidět) i 390 px.
+- **Zbalení na webu přesně jako v aplikaci** (od 20. 10., Pepa: „dej tam tu přesnou animaci, která je v aplikaci“):
+  scéna `zbalit` volá `fold(on, true)` a ta pustí přepis `app/foldfx.py` v `site.js` (`startFx`, `fxFrame`, `fxGlow`,
+  `fxRing`, `fxStars`, `fxShimmer`, `fxIcon`; stejné křivky, časy 800/740 ms, 56 hvězd, pořadí kreslení). Skutečné
+  části repliky se přepnou hned a čekají skryté (`.fx-quiet`), jejich kopie (bez id, `aria-hidden`) se točí jako
+  skupiny kolem středu mikrofonu (čtyři: tři slabší na rozmazání), plátno nad nimi kreslí hvězdy, záři, rázové vlny
+  a ikonku (`_paint_icon` v jednotkách favicony). Délky z aplikace se násobí velikostí mikrofonu / 52 px, layout se
+  čte jen na začátku (i s `zoom` úzkého layoutu). Animaci hned ukončí `baseline()`, jiná scéna, `.off` (mimo
+  obrazovku), skrytá karta a změna šířky okna; s omezením pohybu jen přepne. Kopie se neskrývají, jen jsou skoro
+  průhledné (0,001): skryté by Chrome při zvětšení kreslil znovu (špičky 33–50 ms). Ikonka `.w-icon` má 0,846
+  velikosti mikrofonu a sedí na jeho středu (dřív 52 px na pevném místě, na úzkém layoutu vedle). Ověřeno
+  Playwrightem proti snímkům z aplikace (`video/out/fold-ref`) v 1440×900 a 390×844, Firefox i WebKit, snímky nejvýš
+  16,8 ms (Chromium s `--use-angle=d3d11`). Neověřeno: skutečný Chrome s oknem.
   Ostatní novinky 1.2.0 (úpravy hlasem, „Smaž to“, historie diktátů a relací, plusko, příkazy na pozadí) na webu
   zatím nejsou.
+- **Kontrola přepisu na webu** (od 24. 10., verze 1.3.0): poslední karta v sekci Claude „Kontrola přepisu“ (scéna
+  `kontrola` v `site.js`: mikrofon repliky červený, oranžový, vedle něj pilulka `#wChip` „Přepisuji…“ a „Claude
+  kontroluje přepis…“ jako `ui.StatusChip`, pak bublina „Opraveno…“; `dictation()` nastavuje `data-state` mikrofonu
+  a pilulku), `Stats::FEATURES` ji zná. „Jak přesně píše“ ukazuje měření z 24. 10. (181 vět FLEURS: large-v3 9,3 %,
+  turbo 10,4 %, s kontrolou přepisu 4,7 %; VoxPopuli 12,7 → 9,4 % v poznámce), otázka o slabší grafice taky; „Kolik
+  Orbit stojí?“ říká, kolik tokenů bere kontrola (~2 500 Haiku na diktát, ~0,0003 $ podle ceníku API). Popis videu
+  pro čtečky obrazovky zmiňuje novou scénu.
 - Stránka odkazuje na GitHub (menu, instalace, otázka „Kolik Orbit stojí?“, patička).
   Bez `--installer` se nahrají jen změněné soubory stránky. Podrobnosti a FTP (FTPS přes `ftp.m-tex.cz`, heslo
   v `~/m-tex/private/ftp.netrc`, Windows curl useknul soubory) v `web/README.md`.
@@ -1493,18 +1971,48 @@ doladěný český model je horší (smazán). Latence large-v3 podle délky nah
 ## Úvodní video (od 3. 10. 2026)
 
 - Pepa chtěl „nejkrásnější Remotion video“ o Orbitu úplně nahoru na web: screeny, benefity, hudba, výzva ke stažení.
-  Projekt `video/` (podrobnosti v `video/README.md`), 1920×1080, 76 s, stříhané na takty hudby.
+  Projekt `video/` (podrobnosti v `video/README.md`), 1920×1080, 115,1 s (do 20. 10. 76 s, do 24. 10. 99,4 s),
+  stříhané na takty hudby.
+- **Kontrola přepisu ve videu (24. 10.**, Pepa: „dej to jako další feature a do Remotion videa, takže to přegeneruj“):
+  nová fráze (8 taktů, 44–52) po zbalení, před závěrem: do relace z plusku se nadiktuje „Dej to na git, pushni to na
+  git.“, vlevo „Whisper slyšel „Daytona Git, Pushnitona Git.““, vedle kruhů pilulka „Přepisuji…“ a „Claude kontroluje
+  přepis…“ (replika `ui.StatusChip`: `StatusChip` v `OrbitWidget.tsx`), do terminálu jde opravená věta, tichá bublina
+  „Opraveno: Daytona → Dej to na, Pushnitona → pushni to na…“ (zalomená jako v Qt), pak „Až o polovinu méně chyb.“
+  s grafem (FLEURS 9,3 → 4,7 %, VoxPopuli 12,7 → 9,4 %) a v závěru na drahách „Kontrola přepisu“. Proč celá fráze
+  a až po dropu: před dropem by se musela posunout hudba proti scénám (fráze jsou svázané s úvodem skladby), po dropu
+  stačí skok na konec skladby o frázi později (`build_music.py`: `CUT_FROM` 193 → 225; basa a kopák taktů 225–257
+  jdou jako fráze před nimi, obálka basy taktu 225 sedí s 193 na r = 0,83, žádný break). `time.ts`: `CUT_BAR` 52,
+  závěr počítá takty od něj. MP4 a WebM jsou úměrně delší (stejný datový tok).
+- **Nová verze 20. 10.** (Pepa: „předělej úvodní video, máme spoustu nových vylepšení … ať je tam i ta animace
+  zbalení“): hudba začíná o 4 takty dřív (tichý úvod skladby) a groove po dropu je o frázi delší (`build_music.py`),
+  přibyla scéna „Opravíš hlasem.“ (`scenes/Edit.tsx`: „Smaž to.“ smaže poslední diktát, s Ctrl „Napiš to
+  formálněji.“ a text přepíše Claude, tužka místo mikrofonu), panel se na dropu rozbalí z ikonky Orbitu a v poslední
+  frázi plusko otevře novou relaci (nabídka s modelem Sonnet 5.5, složka web, okno Windows Terminalu v modré barvě
+  složky), aktualizace Claude Code z pilulky s verzí a zbalení do ikonky a zpět. Replika panelu je přepsaná podle
+  aplikace ze 16. 10. (čipy telefonu, plusku, historie relací a historie diktátů, zbalení, barvy složek, šroubovák
+  a fajfka, pilulka s verzí, nová hlavička „limit 5 h se obnoví v …“), animace zbalení je přepis `app/foldfx.py`
+  (`video/src/components/FoldFx.tsx`, snímky ověřené proti `FoldFx.frame(u)` z aplikace, `grab.py` je ukládá do
+  `video/out/fold-ref/`). Autopilot ve videu není (do Česka Bland nevolá). Tlačítko na konci je na stejném místě,
+  jen o 23,43 s později (časy na webu viz Web).
+  Na webu od 20. 10. večer (`publish.py`, s ním šel ven i preloader ze stejného dne; Pepa to odsouhlasil). Ověřeno na
+  živém webu: video a WebM vrací 206, délka 99,44 s, skutečné tlačítko v 90,5 s na nakresleném, scéna `zbalit` hraje
+  animaci, bez chyb v konzoli (Playwright, headless). Neověřeno: přehrání se zvukem v Pepově Chromu a iPhone.
+  Zbalení a model relací ve videu jsou z aplikace po vydání 1.2.0 (16. 10.): instalátor na webu je zatím 1.2.0.
 - Vzhled sleduje web (barvy, písma Anybody + Mona Sans, „dýchající“ nadpisy z `site.js`). Když se změní web, změnit
   `video/src/lib/theme.ts`, písma v `video/public/fonts` a vyrenderovat znovu. Aplikace ve videu je replika
   `app/ui.py` v Reactu (`video/src/components/OrbitWidget.tsx`, `Bubble.tsx`); po změně vzhledu aplikace ji upravit.
   Ověřené proti skutečnému renderu z Qt (`video/capture/grab.py`, ukázková data, 3× rozlišení).
 - Od 8. 10. ukazuje i Poznámky bez přestřihu: replika panelu má sešit s „2“ (`NotesChip`, ověřeno proti Qt
   `FloatingButton.set_notes_count(2)`) a v závěru krouží „Poznámky a úkoly“ (vnější dráha, fáze 3,9, nikde se
-  nepřekrývá s jiným popiskem). Tlačítko na konci je na stejném místě, `CTA_IN`/`CTA_OUT` na webu platí dál.
+  nepřekrývá s jiným popiskem). Tlačítko na konci je na stejném místě. „Kontrola přepisu“ (24. 10.) krouží na
+  prostřední dráze (fáze 4,15), ověřeno snímky po celý závěr.
 - Hudba: „Mountains“ (Andrew Ev, Mixkit, licence bez uvádění autora, nesmí se šířit samostatně, proto není v gitu).
 - Video má být srozumitelné i ztlumené (na webu hraje bez zvuku), proto je všechno řečené i v obraze.
-- Render: `npx remotion render Orbit out/orbit-master.mp4 --crf 14`, pak `node scripts/export-web.mjs` (2 průchody,
-  MP4 ~22 MB a WebM ~19 MB, limit webu ~25 MB). Na nahrání webu je `web/publish.py`.
+- Render: `npx remotion render Orbit out/orbit-master.mp4 --crf 14` (~2 min), pak `node scripts/export-web.mjs`
+  (2 průchody, 1,95 a 1,65 Mbit/s: u 99,4 s MP4 25,1 MB a WebM 21,3 MB, u 115,1 s od 24. 10. 29,0 a 24,7 MB;
+  datový tok se kvůli délce nesnižoval, video má `preload="none"`). Na nahrání webu je `web/publish.py`.
+- Chrome kreslí text na neprůhledném pozadí subpixelově (ClearType) a ve videu pak má tenké písmo modré a oranžové
+  okraje: text na čipech, kruzích, oknech a v nabídce je proto ve skupině s `opacity: 0.999` (šedé vyhlazení).
 - **Pozor na barevný rozsah**: master z Remotionu je „full range“ (yuvj420p). Takové VP9 hardwarový dekodér Chromu na
   Pepově Radeonu odmítne (`PIPELINE_ERROR_DECODE`) a Chrome pak nepřepne na MP4, video na webu stojí (3. 10. se to
   stalo). Bez grafiky (headless) to hrálo, proto test jen s `--disable-gpu` nestačí. `export-web.mjs` proto převádí
@@ -1536,7 +2044,11 @@ Historie diktátů, úpravy textu s Ctrl a „Smaž to“ jsou od 8. 10. hotové
 Další náměty jsou v reportu `reports/Diktovací nástroje a podněty pro Orbit.md` (seřazené podle přínosu).
 
 1. Doladění na jeho hlas z `recordings/` (LoRA i na enkodér, podle studie stačí málo minut opravených nahrávek).
+   Od 24. 10. se drží 1000 nahrávek a `build/eval_dictation.py` měří na diktátech opravených v historii; PyTorch pro
+   RX 9070 XT na Windows existuje (ROCm 7.2). Nejdřív pár desítek opravených diktátů jako měřítko.
 2. Vlastní ikona pro Orbit (teď je to pořád ikona mikrofonu).
 3. Z reportu: Esc během držení klávesy zahodí nahrávku, klávesa pro „Odešli“ podle
-   aplikace, whisper.cpp 1.9.5 (úprava Vulkanu pro RDNA4) a Silero VAD změřit na nahrávkách, agent čte odpověď od
-   první hotové věty.
+   aplikace, whisper.cpp 1.9.5 (opravy Flash Attention ve Vulkanu) změřit na nahrávkách, agent čte odpověď od
+   první hotové věty. (Ticho za posledním slovem od 24. 10. řeší `trim_tail`, Silero VAD už není potřeba.)
+4. Canary rychleji: na grafice s fp16 enkodérem a dekodérem s cache (Masterx export má `decoder-kv`/`cross-kv`),
+   nebo až ho umí whisper.cpp (od 1.9.0 umí Parakeet); oprava by přišla o ~1 s dřív.

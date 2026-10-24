@@ -42,6 +42,10 @@ class Entry:
     instruction: str = ""  # an edit by voice: what the user asked for (text is then the result)
     original: str = ""  # an edit by voice: the text before it
     corrected: str = ""  # the user's own correction of the text (the history window)
+    # the transcript check (check.py): the text before it fixed it in the window (text is then the fixed one) ...
+    unchecked: str = ""
+    checked: str = ""  # ... or its fix when it couldn't go into the window any more (text stays what's there)
+    second: str = ""  # the second recognizer's transcript (canary.py), as it came
     key: str = ""  # "send" / "stop": "Odešli" or "Stop" followed it
     kind: str = ""  # "" = a dictation, AGENT = said to the voice agent
     reply: str = ""  # AGENT: what the agent answered
@@ -49,8 +53,9 @@ class Entry:
 
     @property
     def best(self) -> str:
-        """The text to insert again: the user's correction, if there is one."""
-        return self.corrected or self.text
+        """The text to insert again: the user's correction, else the check's fix that didn't make it into the
+        window, else what's there."""
+        return self.corrected or self.checked or self.text
 
 
 def path() -> Path:

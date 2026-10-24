@@ -44,6 +44,7 @@ INNO_SHA256 = "9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732"
 INNO_DIR = BUILD / "tools" / "InnoSetup"
 
 PIPER_PACKAGES = {"piper-tts", "onnxruntime"}  # GPL-3.0 Piper and its ONNX runtime: left out by --without-piper
+# (Canary, the transcript check's second recognizer, runs on onnxruntime too: without it the check uses Whisper alone)
 PIP_TARGET = ["--only-binary=:all:", "--platform", "win_amd64", "--python-version", "3.13", "--implementation", "cp"]
 # Every wheel in runtime\Lib\site-packages with the SHA-256 PyPI served for it (win_amd64, CPython 3.13). pip installs
 # exactly these (--require-hashes --no-deps): requirements.txt pins only Orbit's direct dependencies, so a new release
@@ -57,6 +58,7 @@ charset-normalizer==3.5.2 sha256:78456a747de8dc58360ffa581f30a002baf5aa28cb26253
 flatbuffers==25.12.19 sha256:7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4 piper
 idna==3.20 sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
 numpy==2.5.3 sha256:71cad2b2a7451ab79d8f5e71b453485b6775963d5cf794179144a7463fe6e8ec
+onnx-asr==0.12.0 sha256:5e7ceca454609819ea7833f61e2302e0c8f6ece4f8a78b66c5daba53cb51de4a
 onnxruntime==1.30.0 sha256:4b63041bd623a9a9ac5e353948436c6fa7f43edd12d6b4a4ebc340bca959ba93 piper
 packaging==26.3 sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c piper
 pathvalidate==3.3.1 sha256:5263baab691f8e1af96092fa5137ee17df5bdfbd6cff1fcac4d6ef4bc2e1735f piper

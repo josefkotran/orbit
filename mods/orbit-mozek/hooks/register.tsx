@@ -3,7 +3,9 @@
 // of output tokens per request, and the context window as /context draws it (estimated locally, free), with limits.
 // The limits also go to Orbit's panel: after each turn the engine hands over what the answers reported, and this mod
 // leaves them in Orbit's data folder on this PC (reportLimits). Nothing is sent anywhere, nothing is asked for.
-// And Orbit can ask it to stop a background shell nobody needs any more (stopRequested).
+// And Orbit can ask it to stop a background shell nobody needs any more (stopRequested), to hand the session a
+// prompt the user gave Orbit (promptRequested: Orbit's Autopilot, a round of work and what was said on the phone), or
+// to switch the session to the model the user picked in Orbit's panel (modelRequested).
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, SessionRateLimit } from 'claude-code'
 
@@ -51,6 +53,11 @@ const LIMIT: Record<string, string> = { five_hour: '5 h', seven_day: 'týden' }
 const SEEK_AGAIN_MS = 10 * 60 * 1000 // no Orbit data folder found: looked for again after this long
 const STOP_EVERY_MS = 2000 // Orbit's requests to stop a background shell are looked for this often
 const STOP_FRESH_MS = 60 * 1000 // an older request is left alone (Orbit gave up on it long ago)
+const PROMPT_FRESH_MS = 60 * 1000 // the same for a prompt: Orbit waits a few seconds for the answer, then gives up
+const PROMPT_MAX = 60_000 // characters: longer is not Orbit's
+const QUEUED_MS = 1500 // the prompt's turn hasn't started by then (the session is busy): Orbit hears "queued"
+const MODEL_FRESH_MS = 60 * 1000 // a model switch Orbit asked for longer ago is left alone (it gave up after 7 s)
+const MODEL_ALIAS = /^(fable|opus|sonnet|haiku)(\[1m\])?$/ // all Orbit ever asks for (app/models.py)
 
 // Orbit's data folders (each has its config.json), found once per load: the folder Orbit was told to use, a task
 // session's, the installed Orbit's, a checkout in ~/orbit. Every one found gets the limits: whichever Orbit runs
@@ -63,6 +70,10 @@ const trimSlash = (dir: string): string => dir.replace(/[\\/]+$/, '')
 let stopWatch: { cancel: () => void } | null = null
 let stopping = false
 const stopsSeen = new Set<string>() // request file name + its time: each request is acted on once
+let prompting = false
+const promptsSeen = new Set<string>()
+let switching = false
+const switchesSeen = new Set<string>()
 
 // The working copy the stream writes into; the host's copy (`live`) is what the pane draws and what survives a reload.
 let cur: MozekLive | null = null
@@ -206,7 +217,97 @@ async function stopRequested($: EngineInterface): Promise<void> {
   }
 }
 
-const tokens = (n: number): string =>
+/** Orbit (app/autopilot.py) hands the session a prompt: <data>/sessions/prompt/<session>.<id>.json, {"session_id",
+ * "id", "time", "text"}. Submitted as the user's own words (they are: the goal set in Orbit's Autopilot window, what
+ * was said on the phone), a turn of its own once the session is idle. The answer goes next to the request as
+ * <session>.<id>.done.json, {"ok", "text"}: "started", "queued" (the session is busy, it starts after) or why not;
+ * Orbit removes both. */
+async function promptRequested($: EngineInterface): Promise<void> {
+  if (prompting) return
+  prompting = true
+  try {
+    const session = await $.session.id()
+    for (const dir of await orbitDataDirs($)) {
+      const folder = `${dir}/sessions/prompt`
+      for (const entry of await $.fs.list(folder).catch(() => [])) {
+        const name = /^([\w-]{1,128})\.([a-z0-9]{4,32})\.json$/.exec(entry.name)
+        const seen = `${entry.name}@${entry.mtimeMs}`
+        if (!name || name[1] !== session || promptsSeen.has(seen)) continue
+        let request: { session_id?: unknown; id?: unknown; time?: unknown; text?: unknown }
+        try {
+          request = JSON.parse(String(await $.fs.read(`${folder}/${entry.name}`))) as typeof request
+        } catch {
+          continue // being written
+        }
+        promptsSeen.add(seen)
+        const fresh = typeof request.time === 'number' && (await $.clock.now()) - request.time * 1000 < PROMPT_FRESH_MS
+        const text = typeof request.text === 'string' ? request.text.trim() : ''
+        if (request.session_id !== session || request.id !== name[2] || !fresh || !text || text.length > PROMPT_MAX) {
+          continue
+        }
+        const submitted = $.prompt.submit({ text, asUser: true }).then(
+          r => (r.drop !== undefined ? { ok: false, text: String(r.drop).slice(0, 300) } : { ok: true, text: 'started' }),
+          (error: unknown) => ({ ok: false, text: String(error).slice(0, 300) }),
+        )
+        const queued = new Promise<{ ok: boolean; text: string }>(resolve =>
+          $.clock.after(QUEUED_MS, () => resolve({ ok: true, text: 'queued' })),
+        )
+        const answer = await Promise.race([submitted, queued])
+        await $.fs.write(`${folder}/${name[1]}.${name[2]}.done.json`, JSON.stringify(answer)).catch(() => undefined)
+      }
+    }
+  } finally {
+    prompting = false
+  }
+}
+
+/** Which model family a model names: "sonnet" for sonnet, sonnet[1m], claude-sonnet-5-5 (Orbit's app/models.py). */
+const family = (model: string): string => /fable|opus|sonnet|haiku|mythos/.exec(model.toLowerCase())?.[0] ?? ''
+
+/** Orbit (app/models.py, a right click on the session in its panel) switches the session to another model:
+ * <data>/sessions/model/<session>.<id>.json, {"session_id", "id", "time", "model"} with model an alias (sonnet,
+ * opus[1m]). Run as Claude Code's own /model, so the session knows what it runs on (its footer, its context window, its
+ * subagents); a busy session runs it after its turn. `.ack.json` says it was taken, `.done.json` {"ok", "text",
+ * "model"} what /model did. Orbit's PreModelSwitch hook spares the session the question in its window, and Orbit puts
+ * the default for new sessions back (/model saves it there). */
+async function modelRequested($: EngineInterface): Promise<void> {
+  if (switching) return
+  switching = true
+  try {
+    const session = await $.session.id()
+    for (const dir of await orbitDataDirs($)) {
+      const folder = `${dir}/sessions/model`
+      for (const entry of await $.fs.list(folder).catch(() => [])) {
+        const name = /^([\w-]{1,128})\.([a-z0-9]{4,32})\.json$/.exec(entry.name)
+        const seen = `${entry.name}@${entry.mtimeMs}`
+        if (!name || name[1] !== session || switchesSeen.has(seen)) continue
+        let request: { session_id?: unknown; id?: unknown; time?: unknown; model?: unknown }
+        try {
+          request = JSON.parse(String(await $.fs.read(`${folder}/${entry.name}`))) as typeof request
+        } catch {
+          continue // being written
+        }
+        switchesSeen.add(seen)
+        const fresh = typeof request.time === 'number' && (await $.clock.now()) - request.time * 1000 < MODEL_FRESH_MS
+        const model = typeof request.model === 'string' ? request.model : ''
+        if (request.session_id !== session || request.id !== name[2] || !fresh || !MODEL_ALIAS.test(model)) continue
+        const answer = `${folder}/${name[1]}.${name[2]}`
+        await $.fs.write(`${answer}.ack.json`, JSON.stringify({ time: (await $.clock.now()) / 1000 })).catch(() => undefined)
+        const ran = await $.command.run({ command: 'model', args: model }).catch((error: unknown) => ({ text: String(error) }))
+        const now = await $.session.model().catch(() => '')
+        const ok = family(now) === family(model)
+        // /model's own line says "saved as your default for new sessions": Orbit puts that back right away
+        if (ok) $.ui.toast('Orbit: jiný model jen pro tuhle relaci, výchozí model pro nové relace zůstává, jak byl.')
+        await $.fs.write(`${answer}.done.json`, JSON.stringify({ ok, text: String(ran.text ?? '').slice(0, 300), model: now }))
+          .catch(() => undefined)
+      }
+    }
+  } finally {
+    switching = false
+  }
+}
+
+const tokens =(n: number): string =>
   n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1).replace('.', ',')} mil.` : n >= 1000 ? `${Math.round(n / 1000)}k` : `${n}`
 
 const seconds = (ms: number): string => (ms < 10_000 ? `${(ms / 1000).toFixed(1).replace('.', ',')} s` : `${Math.round(ms / 1000)} s`)
@@ -242,7 +343,11 @@ export const register: Register = on => {
       description: 'Mozek relace: o čem Claude přemýšlí, co dělají nástroje a jak je plný kontext',
     })
     stopWatch?.cancel()
-    stopWatch = $.clock.every(STOP_EVERY_MS, () => void stopRequested($).catch(() => undefined))
+    stopWatch = $.clock.every(STOP_EVERY_MS, () => {
+      void stopRequested($).catch(() => undefined)
+      void promptRequested($).catch(() => undefined)
+      void modelRequested($).catch(() => undefined)
+    })
     return next(e)
   })
 

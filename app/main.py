@@ -16,20 +16,21 @@ import numpy as np
 from PySide6.QtCore import QObject, QPoint, QtMsgType, QTimer, QUrl, Signal, qInstallMessageHandler
 from PySide6.QtGui import QAction, QDesktopServices, QGuiApplication
 from PySide6.QtTextToSpeech import QTextToSpeech
-from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon
+from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon, QWidgetAction
 
-from . import (agent, artifacts, claude_cli, claude_settings, claude_setup, claude_usage, colors, config, downloads,
-               ducking, editing, favorites, history, hotkey, inserter, learning, pastsessions, paths, rewrite, sessions,
-               shells, tasks, theme, vocab, voice, winutil)
+from . import (agent, artifacts, autopilot, bland, canary, check, claude_cli, claude_settings, claude_setup,
+               claude_usage, colors, config, downloads, ducking, editing, favorites, history, hotkey, inserter,
+               learning, models, pastsessions, paths, rewrite, sessions, shells, tasks, theme, vocab, voice, winutil)
+from .autopilotview import AutopilotWindow, money
 from .favoritesview import FavoritesDialog, NewRepoDialog
 from .historyview import HistoryWindow
 from .inserter import Inserter
 from .notebook import Notebook
 from .pastsessionsview import SessionHistory
 from .onboarding import CANCELLED, ClaudeConnection, Downloads, Wizard
-from .recorder import Recorder, input_devices, is_bluetooth_handsfree, is_silent
-from .ui import (ADD_GLYPH, CHOOSE_GLYPH, Bubble, FloatingButton, FolderMenu, SettingsDialog, color_icon,
-                 export_vocabulary, fill_color_menu, import_vocabulary, message_box, mic_icon)
+from .recorder import Recorder, input_devices, is_bluetooth_handsfree, is_silent, trim_tail
+from .ui import (ADD_GLYPH, CHOOSE_GLYPH, Bubble, FloatingButton, FolderMenu, ModelPicker, SettingsDialog,
+                 color_icon, export_vocabulary, fill_color_menu, import_vocabulary, message_box, mic_icon)
 from .version import VERSION
 from .whisper_server import (SAMPLE_RATE, WhisperServer, apply_replacements, apply_voice_commands, build_prompt,
                              clean_text, terminal_command, to_wav)
@@ -37,14 +38,19 @@ from .whisper_server import (SAMPLE_RATE, WhisperServer, apply_replacements, app
 log = logging.getLogger("orbit")
 
 TAIL_MS = 250  # keep recording a moment after release – people let go while finishing the last word
-KEEP_RECORDINGS = 30
+KEEP_RECORDINGS = history.MAX_ITEMS  # as many as the history (~250 MB): its entries play them, and they're the
+# material for measuring the recognition on the user's own voice (and one day for tuning Whisper to it)
 LIVE_FALLBACK_MS = 600  # if the mic sends only exact zeros (e.g. muted), start anyway after this
 STATUS_REFRESH_MS = 5_000  # the sessions' limits files (local, cheap); the OAuth endpoint: claude_usage.combined
 RELEASE_CHECK_MS = 30 * 60_000  # is there a newer Claude Code (an HTTP request and claude --version)
 SESSION_POLL_MS = 1000
+ON_TOP_CHECK_MS = 1000  # is the button still in front of other programs' windows (_keep_button_on_top)
 NOTIFY_TURN_S = 20  # a finished turn is announced only if Claude worked at least this long (else Pepa watched it)
 FORECAST_WARN = timedelta(minutes=60)  # warn when the 5-hour limit runs out sooner than this at the current pace
-CONTEXT_CHARS = 150  # the end of the previous piece goes into the prompt; Whisper keeps only ~224 prompt tokens
+# The end of the previous piece goes into the prompt. Whisper keeps the last 224 prompt tokens: with a full vocabulary
+# (300 characters, ~123 tokens) and the sentence before it (~40) there's room for ~60 more, 150 characters were ~65
+# and cut off the start of the prompt (counted with Whisper's tokenizer, 24 Oct).
+CONTEXT_CHARS = 100
 CLICK_S = 0.35  # the agent's button let go sooner than this = a click: it listens until Pepa stops talking
 LISTEN_MAX_MS = 30_000  # hands-free listening ends after this at the latest
 CONFIRM_TIMEOUT_MS = 120_000  # a message for a session that Pepa doesn't confirm within this isn't sent
@@ -55,8 +61,17 @@ AGENT_IDLE_CHECK_MS = 60_000  # how often a long-idle agent process is ended (ag
 MAX_RECORDING_S = 300  # a recording ends after this at the latest (a key-up the hook never saw)
 WATCH_MS = 1000  # how often a running recording is checked (the key's release, the secure desktop, its length)
 SILENT_TELL_S = 1.5  # a recording this long that had nothing in it gets a bubble saying why
+# This long into a recording without one block above the mic's noise, not even the start beep (Pepa's mic hears it
+# 0.12 s after the start in every recording kept): the mic is deaf. Said while the key is still held, so a mic muted
+# on itself costs a few seconds of talking, not the whole dictation.
+DEAF_WARN_S = 2.0
 REDICTATE_S = 60  # a dictation this soon after "Smaž to", into the same window, probably says the deleted one right
 REDICTATE_SIMILAR = 0.5  # ... when it's at least this alike (editing.similar): its differences are corrections
+CHECK_SECOND_WAIT_S = 10  # the check waits for the second recognizer's text this long after release, at most
+CHECK_SEND_WAIT_MS = 12_000  # "Odešli" with the check on: Enter waits for its fix, this long at most
+# The check before the text goes in (check_first): Claude's fix is waited for this long after the recognizers are
+# done; later the text goes in as Whisper wrote it and the fix follows in the window
+PRECHECK_WAIT_S = 8
 
 
 class Take:
@@ -75,6 +90,7 @@ class Take:
         self.released_at = 0.0
         self.target = 0  # the window in front when it ended: the text goes there only if it still is
         self.confirm_id: str | None = None  # for the agent: the "Mám to poslat?" already shown when it started
+        self.warned_deaf = False  # "Mikrofon nic neslyší" said while recording (once: the user may be quiet)
         # Ctrl or Shift held: what's said is an instruction for editing text (editing.py, rewrite.py)
         self.edit = False
         self.rewriter: rewrite.Rewriter | None = None  # its Claude, started while the user talks
@@ -90,11 +106,30 @@ class Take:
         self.raw_text = ""
         self.seconds = 0.0
         self.stem = ""  # its recording in recordings/ ("" = not kept)
+        # the transcript check (check.py): its Claude, started while the user talks; the second recognizer's text of
+        # each piece (Futures of canary.SecondOpinion.transcribe); once typed, its history entry and place on the trail
+        self.checker: check.Checker | None = None
+        self.second: list = []
+        self.entry_id = ""
+        self.typed: editing.Typed | None = None
+        self.held_key = ""  # "Odešli" waiting for the check's fix ("" = none, or pressed already)
+        self.prechecking = False  # checked before it goes into the window (check_first): not inserted yet
+        self.asking = False  # ... the recognizers differ: Claude is asked (the button says so)
+        self.late = False  # ... the check took too long: it went in as it was, the fix comes later (_checked)
+        self.unchecked = ""  # ... fixed before it went in: Whisper's text
+        self.second_text = ""  # the second recognizer's text, once known
 
     def drop_rewriter(self) -> None:
         if self.rewriter:
             self.rewriter.cancel()
             self.rewriter = None
+
+    def drop_checker(self) -> None:
+        if self.checker:
+            self.checker.cancel()
+            self.checker = None
+        for future in self.second:
+            future.cancel()  # (one already running finishes; nothing waits for it)
 
 
 class Bridge(QObject):
@@ -112,6 +147,9 @@ class Bridge(QObject):
     transcribe_failed = Signal(str, object)  # message, the Take
     input_seen = Signal()  # the user's own key or click after Orbit typed something (the hook, editing.Trail)
     rewritten = Signal(object, object)  # an edit by Claude is back: the Take, (scope, source, typed, rewrite.Result)
+    checked = Signal(object, object)  # the transcript check is back: the Take, {"text", "fixed", "second"} or {"error"}
+    prechecked = Signal(object, object)  # the check before insertion: the Take, {"fixed"} / {"agree"} / {"late"} / …
+    asking = Signal(object)  # ... the recognizers differ, Claude is asked: the Take
     rewrite_failed = Signal(object, str)  # the Take, the message
     retranscribed = Signal(str, object)  # a history entry transcribed again: its id, {"text", "raw"} or {"error"}
     usage_ready = Signal(object)
@@ -190,6 +228,10 @@ class Dictation:
         self.live_timer.timeout.connect(self.recorder.force_live)
         self.inserter = Inserter()
         self.executor = ThreadPoolExecutor(max_workers=1)
+        # the transcript check's second recognizer (canary.py), its own process; its pieces one after another
+        self.second_opinion: canary.SecondOpinion | None = None
+        self.second_executor = ThreadPoolExecutor(max_workers=1)
+        self._held_takes: list[Take] = []  # dictations waiting for the check before insertion, and what came after
         self.stop_timer = QTimer(singleShot=True, interval=TAIL_MS)
         self.stop_timer.timeout.connect(self._finish_recording)
         self.watch_timer = QTimer(interval=WATCH_MS)
@@ -215,6 +257,16 @@ class Dictation:
         self.button.set_muted(self.cfg["muted"])
         self.tracker = sessions.SessionTracker()
         self.stopper = shells.Stopper()  # background shells to stop, through the session's mod orbit-mozek
+        # sessions Orbit switches to another model (a right click in the panel, models.py): session id ->
+        # {"id", "model", "label", "at", "told"}; requests an Orbit before this one left behind go on here
+        self._model_switches: dict[str, dict] = {
+            r["session_id"]: {"id": r["id"], "model": r.get("model", ""), "label": models.label(r.get("model")),
+                              "at": float(r.get("time") or 0), "told": False} for r in models.leftovers()}
+        # sessions working in rounds that call the user after each one (the phone above the panel); moved on every
+        # second with the session overview (_poll_sessions)
+        self._bland_key = bland.unprotect(self.cfg["autopilot_key"])
+        self.autopilot = autopilot.Autopilot(self._autopilot_settings)
+        self.autopilot_window: AutopilotWindow | None = None
         self.session_timer = QTimer(interval=SESSION_POLL_MS)
         self.session_timer.timeout.connect(self._poll_sessions)
         self.tts: QTextToSpeech | None = None
@@ -276,6 +328,8 @@ class Dictation:
         self.button.dictation_history_clicked.connect(self.open_history)
         self.button.sessions_history_clicked.connect(self.open_past_sessions)
         self.button.new_session_clicked.connect(self._show_favorites)
+        self.button.autopilot_clicked.connect(self.open_autopilot)
+        self.button.set_autopilot_count(len(self.autopilot.pilots))
         self.bridge.favorite_failed.connect(self._favorite_failed)
         self.bridge.past_resumed.connect(self._past_resumed)
         self.favorites_dialog: FavoritesDialog | None = None
@@ -291,6 +345,10 @@ class Dictation:
         self.button.collapse_toggled.connect(self._set_collapsed)
         self._place_button()
         self._watch_screens()
+        self._buried_logged = 0.0  # when the log last said Windows pushed the button down (once a minute at most)
+        self.on_top_timer = QTimer(interval=ON_TOP_CHECK_MS)
+        self.on_top_timer.timeout.connect(self._keep_button_on_top)
+        self.on_top_timer.start()
 
         self.menu = QMenu()
         self.hint_action = self.menu.addAction("")
@@ -307,6 +365,7 @@ class Dictation:
         self.favorites_menu.aboutToShow.connect(lambda: self._fill_favorites(self.favorites_menu, heading=False))
         self._fill_favorites(self.favorites_menu, heading=False)  # (an empty submenu may not open at all)
         self.menu.addAction("Historie relací…", self.open_past_sessions)  # the clock above the panel
+        self.menu.addAction("Autopilot…", self.open_autopilot)  # the phone above the panel
         self.toggle_action = QAction("Zobrazovat plovoucí tlačítko", self.menu, checkable=True)
         self.toggle_action.setChecked(self.cfg["show_button"])
         self.toggle_action.toggled.connect(self._set_button_visible)
@@ -350,6 +409,9 @@ class Dictation:
         b.input_seen.connect(lambda: self.ptt.watch_clicks(False))
         b.rewritten.connect(self._rewritten)
         b.rewrite_failed.connect(self._rewrite_failed)
+        b.checked.connect(self._checked)
+        b.prechecked.connect(self._prechecked)
+        b.asking.connect(self._asking)
         b.retranscribed.connect(self._retranscribed)
         b.usage_ready.connect(self._usage_ready)
         b.usage_failed.connect(self._usage_failed)
@@ -377,6 +439,7 @@ class Dictation:
         self.downloads.finished.connect(self._download_finished)
 
         self.ptt = hotkey.PushToTalk(self.cfg["ptt"], b.ptt_down.emit, b.ptt_up.emit, on_input=self._user_input,
+                                     on_space=self.trail.space_seen,
                                      own_point=inserter.own_point)
         self.ptt.start()
         self._start_server()
@@ -387,6 +450,7 @@ class Dictation:
         self._apply_agent_setting()
         self.claude.refresh()
         self._prepare_voice()
+        self._apply_check_setting()
         self.refresh()
         if config.problem:
             QTimer.singleShot(0, lambda: self._notify(config.problem, error=True))
@@ -496,6 +560,10 @@ class Dictation:
         elif key in voice.VOICES:
             self._notify(f"Český {label} je stažený.", title="Předčítání", kind="done")
             self._prepare_voice()
+        elif key == canary.KEY:
+            self._notify("Druhý rozpoznávač je stažený, kontrola přepisu ho teď bere v úvahu.",
+                         title="Kontrola přepisu", kind="done")
+            self._apply_check_setting()
         else:  # a model that isn't the one in use (downloaded from the settings and not saved)
             self._notify(f"{label[:1].upper()}{label[1:]} je stažený.", kind="done")
         self.refresh()
@@ -552,6 +620,8 @@ class Dictation:
         self.button.set_claude(connected)
         if connected:
             self.claude.check_release()  # is there a newer Claude Code (at most once an hour)
+            if status.exe and status.version:  # which model each alias stands for ("Sonnet 5.5"), once a version
+                threading.Thread(target=models.refresh_names, args=(status.exe, status.version), daemon=True).start()
         self._show_claude_version()
         if connected == self._claude_was:
             return
@@ -657,6 +727,7 @@ class Dictation:
         self.live_timer.start()
         self.take = Take(build_prompt(vocabulary), for_agent)
         self._check_edit(self.take)
+        self._start_check(self.take)
         # Only a question already in the panel can be answered: what was said before it came is no answer to it.
         # Not waiting until it's read to the end: a long one takes half a minute, Pepa reads it and cuts it short.
         if for_agent and self._confirm and time.monotonic() - self._confirm["shown"] >= CONFIRM_SEEN_S:
@@ -666,6 +737,7 @@ class Dictation:
         except Exception as e:
             self.live_timer.stop()
             self.take.drop_rewriter()
+            self.take.drop_checker()
             self.take = None
             log.exception("Mikrofon nejde spustit")
             self._notify(f"Mikrofon nejde spustit: {e}", error=True)
@@ -674,6 +746,8 @@ class Dictation:
         self._desktop_ok = winutil.on_user_desktop()
         self.ducker.duck(self.cfg["duck_audio"], {os.getpid()})  # Orbit's own beeps stay
         self.watch_timer.start()
+        if not for_agent:
+            self._follow_pointer()
         self.refresh()
 
     def _mic_live(self):
@@ -691,12 +765,28 @@ class Dictation:
         """The dictation key's code when it's a key (held as well: Right Ctrl doesn't make a dictation an edit)."""
         return self.cfg["ptt"]["code"] if self.cfg["ptt"].get("kind") == "key" else 0
 
+    def _follow_pointer(self):
+        """A mouse button for dictation acts where the pointer is, like a click (its own click never reaches the
+        window: the hook swallows it): the window under the pointer comes to the front, when it's pressed and again
+        when the recording ends. Pepa 17 Oct: a Claude session driving Chrome kept bringing Chrome to the front and
+        the dictation went into Chrome, not into the terminal under the mouse, unless he clicked it first. A key for
+        dictation leaves the window in front alone."""
+        if self.cfg["ptt"].get("kind") != "mouse":
+            return
+        window, front = inserter.pointed(), inserter.foreground()
+        if not window or inserter.same_window(window, front):
+            return
+        brought = sessions.focus_window(window)
+        log.info("Diktát jde do okna pod myší (%s), v popředí bylo %s%s", inserter.app_name(window) or "?",
+                 inserter.app_name(front) or "nic", "" if brought else " – do popředí ho dát nešlo")
+
     def _check_edit(self, take: Take):
         """Ctrl or Shift held as the dictation starts: an instruction for editing text, not text. Claude (for what
         isn't a plain "Nahraď X za Y") starts right away, while the user talks."""
         if take.edit or take.agent or not self.cfg["voice_edit"] or not inserter.edit_held(self._ptt_key()):
             return
         take.edit = True
+        take.drop_checker()  # an instruction isn't text to check
         log.info("Diktát je pokyn pro úpravu textu")
         if self.claude.connected:
             take.rewriter = rewrite.Rewriter(self.cfg["name"], self.cfg["about"])
@@ -732,6 +822,7 @@ class Dictation:
                 self._agent_state = self._agent_rest()
             self.take.cancelled = True
             self.take.drop_rewriter()
+            self.take.drop_checker()
             self.take = None
         if self.recorder.active:
             self.recorder.stop()
@@ -751,6 +842,11 @@ class Dictation:
                     ptt.reset()
             self._drop_recording()
             return
+        take = self.take
+        if take and not take.warned_deaf and self.recorder.live and self.recorder.voiced_s == 0 \
+                and time.monotonic() - self._recording_since >= DEAF_WARN_S:
+            take.warned_deaf = True
+            self._tell_silence(take.agent, still_recording=True)
         if time.monotonic() - self._recording_since > MAX_RECORDING_S and not self.stop_timer.isActive():
             log.warning("Nahrávání trvá přes %d s, ukončuji ho", MAX_RECORDING_S)
             for ptt in (self.ptt, self.agent_ptt):
@@ -778,11 +874,16 @@ class Dictation:
                 log.exception("Chyba ve vlákně přepisu (%s)", fn.__name__)
         return self.executor.submit(run)
 
-    def _queue_piece(self, take: Take, audio):
+    def _queue_piece(self, take: Take, audio, last: bool = False):
+        """last: the piece up to the release, transcribed without the quiet after the last word (trim_tail); the
+        recording keeps it."""
         take.audio.append(audio)
         if not is_silent(audio, self.recorder.noise):
             take.spoken = True
-            self._submit(self._transcribe_piece, take, audio)
+            heard = trim_tail(audio, self.recorder.noise) if last else audio
+            self._submit(self._transcribe_piece, take, heard)
+            if take.checker and self.second_opinion:  # Canary on the processor while Whisper is on the graphics card
+                take.second.append(self.second_executor.submit(self.second_opinion.transcribe, heard))
 
     def _finish_recording(self):
         self.ducker.restore()  # the music back as soon as the microphone closes
@@ -796,17 +897,21 @@ class Dictation:
         was_live = self.recorder.live
         tail = self.recorder.stop()
         take, self.take = self.take, None
+        if not take.agent:
+            self._follow_pointer()  # (it may have been taken away from it meanwhile)
         take.target = inserter.foreground()
         for piece in self.recorder.pop_pieces():  # cut just before release, not picked up yet
             self._queue_piece(take, piece)
-        self._queue_piece(take, tail)
+        self._queue_piece(take, tail, last=True)
         if self.cfg["sounds"] and not self.cfg["muted"] and was_live:
             winutil.play("stop")  # after queueing: nothing may cost the dictation
         if not take.spoken:
             seconds = sum(map(len, take.audio)) / SAMPLE_RATE
-            log.info("Nahrávka %.2f s je ticho nebo moc krátká – přeskakuji (signál: %s, šum %.0f)", seconds,
-                     self.recorder.got_signal, self.recorder.noise)
+            log.info("Nahrávka %.2f s je ticho nebo moc krátká – přeskakuji (signál: %s, šum %.1f, nejhlasitější "
+                     "%.0f, nad šumem %.2f s)", seconds, self.recorder.got_signal, self.recorder.noise,
+                     self.recorder.peak, self.recorder.voiced_s)
             take.drop_rewriter()
+            take.drop_checker()
             if take.agent:
                 self._agent_state = self._agent_rest()
             if seconds >= SILENT_TELL_S:
@@ -825,21 +930,31 @@ class Dictation:
         self._submit(self._finish_take, take, list(self.cfg["replacements"]), self.cfg["voice_commands"],
                      self.cfg["keep_recordings"], self.cfg["learn_vocabulary"])
 
-    def _tell_silence(self, for_agent: bool):
-        """A recording long enough to be meant had nothing in it: say why, or it looks like Orbit ignored it."""
+    def _tell_silence(self, for_agent: bool, still_recording: bool = False):
+        """A recording long enough to be meant had nothing in it: say why, or it looks like Orbit ignored it (it
+        beeped at the start and the end as always). still_recording: DEAF_WARN_S into it, the key still held."""
         if not self.recorder.got_signal:  # exact zeros all the time: muted, or Windows doesn't let apps use the mic
             text = ("Mikrofon posílá jen ticho. Není ztlumený? A mají aplikace přístup k mikrofonu (Nastavení "
                     "Windows › Soukromí a zabezpečení › Mikrofon)?")
+            why = "jen nuly"
+        elif self.recorder.voiced_s == 0:
+            # Only the mic's own hiss, not even the start beep: muted on the mic itself (a muted SoloCast sends its
+            # hiss, not zeros; 13. 10. twice, before that 8. 10., 3. 10., 1. 10.…), or another mic than spoken into.
+            text = ("Mikrofon nic neslyší." if still_recording else "Mikrofon nic nezachytil, nahrávka je jen ticho.") \
+                + " Není ztlumený přímo na mikrofonu (tlačítkem nebo dotykem) nebo ve Windows?"
+            why = "jen šum mikrofonu"
         elif self.recorder.voiced_s >= 0.5:  # something like speech, only too quiet to count
             text = ("Skoro nic jsem neslyšel, mikrofon je moc potichu. Zesil ho v nastavení zvuku ve Windows, nebo "
                     "mluv blíž k němu.")
+            why = "moc potichu"
         else:
-            return  # nothing above the mic's own noise: nothing was said
-        log.info("Nahrávka bez řeči: %s", "jen nuly" if not self.recorder.got_signal else "moc potichu")
+            return  # a beep, a click or a cough above the noise, nothing said
+        log.info("%s: %s (nejhlasitější %.0f)", "Mikrofon zatím nic neslyší" if still_recording else
+                 "Nahrávka bez řeči", why, self.recorder.peak)
         if for_agent:
             self._feed_update(you="…", reply=text, send=None)
         else:
-            self._notify(text, title="Diktování")
+            self._notify(text, title="Diktování", error=why != "moc potichu")  # the dictation is lost
 
     def _transcribe_piece(self, take: Take, audio):
         """Worker thread. Pieces of one take run in order, so the previous piece's text is known here."""
@@ -918,7 +1033,18 @@ class Dictation:
             log.exception("Uložení nahrávky selhalo")
 
     def _dictated(self, take: Take):
-        """A dictation is transcribed: an instruction for an edit, a command ("Smaž to"), or text for the window."""
+        """A dictation is transcribed. With the check before insertion (check_first) its text first waits for
+        Claude; what's dictated meanwhile waits behind it, so everything goes in in the order it was said."""
+        if self._wants_precheck(take):
+            self._held_takes.append(take)
+            self._precheck(take)
+        elif self._held_takes:
+            self._held_takes.append(take)
+        else:
+            self._deliver(take)
+
+    def _deliver(self, take: Take):
+        """An instruction for an edit, a command ("Smaž to"), or text for the window."""
         if take.edit:
             self.pending -= 1
             self._edit_pending -= 1
@@ -927,6 +1053,7 @@ class Dictation:
             self.refresh()
         elif take.command:
             self.pending -= 1
+            take.drop_checker()
             self.refresh()
             self._run_command(take.command, take)
         else:
@@ -955,10 +1082,12 @@ class Dictation:
             problem = "Okno se mezitím změnilo"
         elif inserter.runs_as_admin(window):
             problem = "Okno běží jako správce a Windows do něj Orbitu nedovolí psát"
-        typed = False
+        typed = hold = False
         try:
             if problem:
                 log.info("Text nevkládám: %s", problem)
+                if take is not None:
+                    take.drop_checker()
                 if text.strip():
                     self.inserter.to_clipboard(text)
                     entry = self._remember(spoken, take, history.CLIPBOARD, target or window, key) or entry
@@ -971,28 +1100,59 @@ class Dictation:
                     self._notify(f"{problem}, povel jsem neprovedl.", title="Diktování")
                 return
             if text and not self.inserter.insert(text, self.cfg["insert_mode"]):
+                if take is not None:
+                    take.drop_checker()
                 self._remember(spoken, take, history.CLIPBOARD, window, key)
                 self._notify("Windows nevzal všechny klávesy, text máš pro jistotu ve schránce (Ctrl+V).",
                              title="Diktování")
                 return  # no Enter after a text that may not be there
             typed = bool(text)
-            if key:
-                said = "Odešli" if key == "send" else "Stop"
-                self.inserter.press(key, after_text=text, on_skipped=lambda: self._notify(
-                    f"Okno se mezitím změnilo, povel „{said}“ jsem neprovedl.", title="Diktování"))
+            # "Odešli" with the check on: Enter once the check's fix is in (_release_key), so the fixed text is sent
+            hold = key == "send" and typed and take is not None and (take.checker is not None or take.late)
+            if key and not hold:
+                self._press(key, text)
         except Exception as e:
             log.exception("Vložení textu selhalo")
             self._notify(f"Text se nepodařilo vložit: {e}", error=True)
-        if key:  # sent (Enter) or interrupted (Esc): nothing typed before it can be taken back
+        if key and not hold:  # sent (Enter) or interrupted (Esc): nothing typed before it can be taken back
             self.trail.clear()
         if typed:
             entry = self._remember(spoken, take, history.INSERTED, window, key) or entry
-            if not key:
-                if take is not None:
+            if not key or hold:
+                if take is not None and not key:
                     self._redictated(spoken, window)
                 self._typed(text, window, entry.id if entry else "")
+            if take is not None and (take.checker is not None or take.late or take.unchecked):
+                take.entry_id = entry.id if entry else ""
+                take.typed = self.trail.items[-1] if (not key or hold) and self.trail.items else None
+                if hold:
+                    take.held_key = key
+                    QTimer.singleShot(CHECK_SEND_WAIT_MS, lambda: self._release_key(take))
+                if take.checker is not None:
+                    self._run_check(take, spoken, window)
+                if take.unchecked:  # fixed before it went in: what changed, and a way back
+                    self._tell_fixed(take, entry)
+        elif take is not None:
+            take.drop_checker()
         if text:
             self._maybe_learn()
+
+    def _press(self, key: str, after_text: str = ""):
+        said = "Odešli" if key == "send" else "Stop"
+        self.inserter.press(key, after_text=after_text, on_skipped=lambda: self._notify(
+            f"Okno se mezitím změnilo, povel „{said}“ jsem neprovedl.", title="Diktování"))
+
+    def _release_key(self, take: Take):
+        """The "Odešli" that waited for the check (its fix is in, it failed, or CHECK_SEND_WAIT_MS passed): Enter, if
+        the dictation's window is still in front."""
+        key, take.held_key = take.held_key, ""
+        if not key:
+            return
+        if take.typed is None or not inserter.same_window(take.typed.window, inserter.foreground()):
+            self._notify("Okno se mezitím změnilo, povel „Odešli“ jsem neprovedl.", title="Diktování")
+            return
+        self._press(key, ".")  # a short wait: what the check retyped may still be on its way into a terminal
+        self.trail.clear()
 
     def _transcribe_failed(self, msg, take):
         """The transcription failed (the server died twice, it took too long): the recording is kept, a click on
@@ -1005,6 +1165,7 @@ class Dictation:
         if take.edit:
             self._edit_pending -= 1
             take.drop_rewriter()
+        take.drop_checker()
         if retry:
             self._retry_take = take
             self.retry_action.setEnabled(True)
@@ -1032,7 +1193,7 @@ class Dictation:
         log.info("Přepisuji znovu diktát, který selhal (%.1f s)", len(again.audio[0]) / SAMPLE_RATE)
         self.pending += 1
         self.refresh()
-        self._submit(self._transcribe_piece, again, again.audio[0])
+        self._submit(self._transcribe_piece, again, trim_tail(again.audio[0], self.recorder.noise))
         self._submit(self._finish_take, again, list(self.cfg["replacements"]), self.cfg["voice_commands"],
                      self.cfg["keep_recordings"], self.cfg["learn_vocabulary"])
 
@@ -1063,6 +1224,10 @@ class Dictation:
         """A dictation's history entry (text inserted again from the history keeps its own: take is None)."""
         if take is None or not text.strip():
             return None
+        if take.unchecked:  # the check fixed it before it went in
+            more.setdefault("unchecked", take.unchecked)
+        if take.second_text:
+            more.setdefault("second", take.second_text)
         entry = self.history.add(text.strip(), raw=take.raw_text, app=inserter.app_name(window), outcome=outcome,
                                  seconds=round(take.seconds, 1), recording=take.stem, key=key, **more)
         self._history_changed()
@@ -1413,6 +1578,296 @@ class Dictation:
         if pairs:
             self._corrected(pairs, learning.REDICTATED, text.strip())
 
+    # the transcript check (check.py, canary.py): Claude fixes the misheard words once the text is in the window
+
+    def _apply_check_setting(self):
+        """The second recognizer runs (its own process, the model loaded) while the check is on and wants it; a model
+        not downloaded yet is downloaded first."""
+        want = self.cfg["check_transcripts"] and self.cfg["second_opinion"] and canary.available()
+        if want and not canary.downloaded():
+            if not self.downloads.running(canary.KEY):
+                self.downloads.start(canary.KEY)
+            want = False
+        if want and self.second_opinion is None:
+            self.second_opinion = canary.SecondOpinion()
+            self.second_opinion.start()
+        elif not want and self.second_opinion is not None:
+            self.second_opinion.close()
+            self.second_opinion = None
+
+    def _start_check(self, take: Take):
+        """The check's Claude starts while the user talks (its start-up then costs nothing); dropped again when the
+        dictation turns out to be a command, an instruction or nothing."""
+        if take.agent or take.edit or not self.cfg["check_transcripts"] or not self.claude.connected:
+            return
+        take.checker = check.Checker(self.cfg["name"], self.cfg["about"], self.cfg["vocabulary"])
+        try:
+            take.checker.start()
+        except claude_cli.ClaudeError as e:
+            log.warning("Claude pro kontrolu přepisu nejde spustit: %s", e)
+            take.checker = None
+
+    def _run_check(self, take: Take, text: str, window: int):
+        """The dictation is in the window: Claude checks it in a thread (with the second recognizer's text once
+        that's there), the answer comes back in _checked."""
+        checker, take.checker = take.checker, None
+        if not check.worth_checking(text):
+            checker.cancel()
+            take.drop_checker()
+            self._release_key(take)
+            return
+        items = self.trail.items
+        k = next((i for i, item in enumerate(items) if item is take.typed), len(items))
+        before = items[k - 1].text if k > 0 else ""  # what was dictated into that place just before: context
+        app = inserter.app_name(window)
+        second_text = self._second_text_of(take)
+
+        def run():
+            second = take.second_text or second_text()
+            t0 = time.perf_counter()
+            try:
+                fixed = checker.run(text, second, before, app)
+            except Exception as e:
+                log.warning("Kontrola přepisu selhala: %s", e, exc_info=not isinstance(e, claude_cli.ClaudeError))
+                self.bridge.checked.emit(take, {"error": str(e), "second": second})
+                return
+            self.bridge.checked.emit(take, {"text": text, "fixed": fixed, "second": second,
+                                            "seconds": time.perf_counter() - t0})
+        threading.Thread(target=run, daemon=True).start()  # a daemon: quitting Orbit mustn't wait for Claude
+
+    def _second_text_of(self, take: Take):
+        """A function giving (blocking, in a worker thread) the second recognizer's text of the take as Whisper's
+        is made of its own: "" when there's none, a piece is missing or it takes too long."""
+        futures, released = list(take.second), take.released_at
+        replacements, commands = list(self.cfg["replacements"]), self.cfg["voice_commands"]
+
+        def wait() -> str:
+            if not futures:
+                return ""
+            try:
+                texts = [f.result(timeout=max(0.1, CHECK_SECOND_WAIT_S - (time.perf_counter() - released)))
+                         for f in futures]
+            except Exception as e:  # took too long, or cancelled
+                log.info("Kontrola přepisu bez druhého rozpoznávače (%s)", type(e).__name__)
+                return ""
+            if not all(t is not None for t in texts):  # a piece missing would make it look wrong
+                return ""
+            second = apply_replacements(" ".join(clean_text(t) for t in texts).strip(), replacements)
+            if commands:  # its "Odešli" or "nový řádek" as Whisper's text has it
+                second = terminal_command(apply_voice_commands(second))[0]
+            return second
+        return wait
+
+    # ... before the text goes into the window (check_first): no wrong text first and a fix after it
+
+    def _wants_precheck(self, take: Take) -> bool:
+        return (take.checker is not None and self.cfg["check_first"] and not take.edit and not take.command
+                and not take.agent and check.worth_checking(take.text))
+
+    def _precheck(self, take: Take):
+        """Where the two recognizers write the same, the text goes in at once (and is checked after, as without
+        check_first); where they differ, Whisper's mistakes usually are, so Claude's fix is waited for (up to
+        PRECHECK_WAIT_S) and the fixed text goes in. Pepa 24 Oct: "chtěl bych, aby se to rovnou napsalo opravené,
+        a ne první špatně"."""
+        take.prechecking = True
+        window = take.target if take.target and take.target != -1 else inserter.foreground()
+        top, _ = self.trail.check(window, inserter.same_window)
+        before, app, text = top.text if top else "", inserter.app_name(window), take.text
+        second_text, checker = self._second_text_of(take), take.checker
+
+        def run():
+            second = second_text()
+            take.second_text = second
+            if second and check.same_words(text, second):
+                self.bridge.prechecked.emit(take, {"agree": True})
+                return
+            lock, done, box = threading.Lock(), threading.Event(), {}
+            self.bridge.asking.emit(take)
+
+            def ask():
+                t0 = time.perf_counter()
+                try:
+                    answer = {"text": text, "fixed": checker.run(text, second, before, app), "second": second}
+                except Exception as e:
+                    log.warning("Kontrola přepisu selhala: %s", e, exc_info=not isinstance(e, claude_cli.ClaudeError))
+                    answer = {"error": str(e), "second": second}
+                answer["seconds"] = time.perf_counter() - t0
+                with lock:
+                    box.update(answer)
+                    done.set()
+                    late = box.get("late")
+                if late:  # it went in as Whisper wrote it meanwhile: the fix goes into the window now
+                    self.bridge.checked.emit(take, answer)
+            threading.Thread(target=ask, daemon=True).start()
+            done.wait(PRECHECK_WAIT_S)
+            with lock:
+                if not done.is_set():
+                    box["late"] = True
+                result = dict(box)
+            self.bridge.prechecked.emit(take, result)
+        threading.Thread(target=run, daemon=True).start()  # a daemon: quitting Orbit mustn't wait for Claude
+
+    def _asking(self, take: Take):
+        if take.prechecking:
+            take.asking = True
+            self.refresh()
+
+    def _prechecked(self, take: Take, result: dict):
+        take.prechecking = take.asking = False
+        if result.get("agree"):
+            log.info("Kontrola přepisu: Whisper i druhý rozpoznávač píšou totéž, vkládám hned")
+        else:
+            take.checker = None  # asked already: no second check after it goes in
+            if result.get("late"):
+                take.late = True
+                log.info("Kontrola přepisu nestihla %d s, vkládám text Whisperu, oprava přijde do okna", PRECHECK_WAIT_S)
+            elif "error" not in result:
+                fixed = result.get("fixed")
+                pairs = check.changes(take.text, fixed) if fixed else []
+                outcome = "odpověď zahozena (nebyla to oprava)" if not fixed else "beze změny" if not pairs else \
+                    f"{len(pairs)} změn" + (f" {pairs}" if self.cfg["learn_vocabulary"] else "")
+                log.info("Kontrola přepisu před vložením za %.1f s%s: %s", result.get("seconds", 0),
+                         " (s Canary)" if result.get("second") else "", outcome)
+                if pairs:
+                    take.unchecked, take.text = take.text, fixed
+        self._release_held()
+        self.refresh()
+
+    def _release_held(self):
+        """What waited for the check goes into the window, in order, up to the first one still being checked."""
+        while self._held_takes and not self._held_takes[0].prechecking:
+            self._deliver(self._held_takes.pop(0))
+
+    def _tell_fixed(self, take: Take, entry):
+        """A quiet bubble for a text the check fixed before it went in: what changed, and a click takes it back."""
+        shown = check.summary(check.changes(take.unchecked, take.text))
+        self._notify(f"Opraveno: {shown}. Klikni sem a vrátím, co napsal Whisper.", title="Kontrola přepisu",
+                     kind="done", quiet=True, on_click=(lambda: self._revert_check(entry.id)) if entry else None)
+
+    def _checked(self, take: Take, result: dict):
+        """The check is back: the fixed words into the window in place of the misheard ones (while that's safe),
+        else its fix is kept in the history and the bubble offers it on the clipboard."""
+        entry = self.history.get(take.entry_id) if take.entry_id else None
+        if entry is not None and result.get("second"):
+            self.history.update(entry, second=result["second"])
+        if "error" in result:
+            self._release_key(take)
+            return
+        text, fixed = result["text"], result["fixed"]
+        pairs = check.changes(text, fixed) if fixed else []
+        if not fixed:
+            outcome = "odpověď zahozena (nebyla to oprava)"
+        elif not pairs:
+            outcome = "beze změny"
+        else:  # the words only when vocabulary learning (which reads the log) is on
+            outcome = f"{len(pairs)} změn" + (f" {pairs}" if self.cfg["learn_vocabulary"] else "")
+        log.info("Kontrola přepisu za %.1f s%s: %s", result["seconds"], " (s Canary)" if result["second"] else "",
+                 outcome)
+        if not pairs:  # nothing to fix, an answer that wasn't a fix (check.accept), or punctuation only
+            self._release_key(take)
+            return
+        shown = check.summary(pairs)
+        title = "Kontrola přepisu"
+
+        def not_applied(why: str):
+            log.info("Kontrola přepisu: oprava zůstala mimo okno (%s)", why)
+            if entry is not None:
+                self.history.update(entry, checked=fixed)
+                self._history_changed()
+            self._notify(f"Opravil bych: {shown}. {why}, text v okně jsem nechal. Klikni sem a opravený text dám do "
+                         "schránky.", title=title, quiet=True, on_click=lambda: self.inserter.to_clipboard(fixed))
+            self._release_key(take)
+
+        def applied():
+            if entry is not None:
+                self.history.update(entry, text=fixed, unchecked=text, checked="")
+                self._history_changed()
+            self._notify(f"Opraveno: {shown}. Klikni sem a vrátím původní.", title=title, kind="done", quiet=True,
+                         on_click=(lambda: self._revert_check(entry.id)) if entry is not None else None)
+            self._release_key(take)
+
+        typed = take.typed
+        if typed is None:
+            not_applied("Text už odešel")
+            return
+        lead, tail = typed.text[:len(typed.text) - len(typed.text.lstrip())], typed.text[len(typed.text.rstrip()):]
+        self._retype(typed, lead + fixed + tail, applied, not_applied)
+
+    def _revert_check(self, entry_id: str):
+        """The check's bubble was clicked: the text from before its fix back (where it's still safe, else on the
+        clipboard)."""
+        entry = self.history.get(entry_id)
+        if entry is None or not entry.unchecked:
+            return
+        typed = next((item for item in self.trail.items if item.entry == entry_id), None)
+        original, fixed = entry.unchecked, entry.text
+
+        def failed(why: str):
+            self.inserter.to_clipboard(original)
+            self._notify(f"{why}, původní text máš ve schránce (vlož ho Ctrl+V).", title="Kontrola přepisu")
+
+        def done():
+            self.history.update(entry, text=original, unchecked="", checked=fixed)
+            self._history_changed()
+            log.info("Oprava z kontroly přepisu vrácena")
+
+        if typed is None:
+            failed("Text už není hned před kurzorem")
+            return
+        lead, tail = typed.text[:len(typed.text) - len(typed.text.lstrip())], typed.text[len(typed.text.rstrip()):]
+        self._retype(typed, lead + original + tail, done, failed)
+
+    def _retype(self, typed: editing.Typed, new: str, on_done, on_failed):
+        """A text Orbit typed (on the trail) becomes `new` in its window: Backspace back to where they differ, over
+        what was dictated after it too, and the rest typed again. Only while that's surely right before the cursor
+        (the same window, no key or click of the user's since: editing.Trail); on_failed(why) otherwise."""
+        def place() -> tuple[int, str]:
+            top, why = self.trail.check(inserter.foreground(), inserter.same_window)
+            if top is None:
+                return -1, {"input": "Mezitím přišla klávesa nebo klik", "window": "Okno se mezitím změnilo"}.get(
+                    why, "Text už odešel")
+            items = self.trail.items
+            k = next((i for i, item in enumerate(items) if item is typed), -1)
+            if k < 0:
+                return -1, "Text už odešel"
+            if any(item.selected for item in items[k:]):
+                return -1, "Text je označený"
+            if any(item.terminal for item in items[k:]) and                     not editing.terminal_safe("".join(item.text for item in items[k:])):
+                return -1, "Delší text v terminálu nepřepíšu (Claude Code ho mohl sbalit do jednoho bloku)"
+            return k, ""
+
+        k, why = place()
+        if k < 0:
+            on_failed(why)
+            return
+
+        def go(ok: bool):
+            if not ok:
+                on_failed("Ctrl nebo Shift zůstal držený")
+                return
+            k, why = place()
+            if k < 0:
+                on_failed(why)
+                return
+            items = self.trail.items
+            after = "".join(item.text for item in items[k + 1:])
+            old, now = typed.text + after, new + after
+            same = len(os.path.commonprefix([old, now]))
+            count = editing.keystrokes(old[same:])
+            if count > editing.MAX_DELETE_CHARS:
+                on_failed("Text je na přepsání po znacích moc dlouhý")
+                return
+            ok = inserter.delete_back(count) and (not now[same:] or self.inserter.insert(now[same:],
+                                                                                         self.cfg["insert_mode"]))
+            typed.text = new
+            if not ok:
+                self._notify("Windows nevzal všechny klávesy, text v okně možná není celý. Opravený máš ve schránce "
+                             "(Ctrl+V).", error=True, title="Kontrola přepisu")
+                self.inserter.to_clipboard(now.strip())
+                return
+            on_done()
+        self.inserter.when_keys_up(go, self._ptt_key())
+
     # the history window
 
     def open_history(self):
@@ -1470,7 +1925,7 @@ class Dictation:
             try:
                 with wave.open(str(wav), "rb") as w:
                     audio = np.frombuffer(w.readframes(w.getnframes()), np.int16)
-                raw = self.server.transcribe(audio, prompt)
+                raw = self.server.transcribe(trim_tail(audio, self.recorder.noise), prompt)
                 text = apply_replacements(clean_text(raw), replacements)
                 if commands:
                     text = terminal_command(apply_voice_commands(text))[0]
@@ -1539,6 +1994,8 @@ class Dictation:
             self._shell_stopped(session_id, task, ok, text)
         changes = self.tracker.poll()
         current = sorted(self.tracker.sessions.values(), key=lambda s: (s.folder.lower(), s.started))
+        self._watch_model_switches(current)
+        self._drive_autopilot(current)
         self.button.set_sessions(current)
         self.button.set_attention(any(s.state == "waiting" for s in current))
         self._tint_sessions(current)
@@ -1566,12 +2023,16 @@ class Dictation:
                 log.exception("Obarvení oken relací selhalo")
 
     def _show_folder_menu(self, folder: str, session_id: str, pos: QPoint):
-        """A right click on a session in the panel: its background shells to stop, its folder's colour (the panel
-        and, with tint_sessions, its terminals), then Orbit's own menu."""
+        """A right click on a session in the panel: its background shells to stop, its model, its folder's colour
+        (the panel and, with tint_sessions, its terminals), then Orbit's own menu."""
         menu = QMenu()
+        menu.setToolTipsVisible(True)
         s = self.tracker.sessions.get(session_id)
         if s and s.shells:
             self._fill_shell_menu(menu, s)
+            menu.addSeparator()
+        if s:
+            self._fill_model_menu(menu, s)
             menu.addSeparator()
         fill_color_menu(menu, folder, self.cfg["folder_colors"],
                         lambda color: self._set_folder_color(colors.key(folder), color))
@@ -1580,6 +2041,96 @@ class Dictation:
         menu.addMenu(self.menu)
         self._folder_menu = menu  # (kept while it's open)
         menu.popup(pos)
+
+    def _fill_model_menu(self, menu: QMenu, s: sessions.Session):
+        """The session's model: the one it runs on checked, a click on another switches just this session
+        (_switch_model)."""
+        current, switching = models.family(s.model), self._model_switches.get(s.id)
+        head = f"Model: {models.label(s.model) or 'zatím nevím'}"
+        menu.addAction(head + (f" → {switching['label']}…" if switching else "")).setEnabled(False)
+        cost = f"\nDalší zpráva pak znovu načte celou konverzaci (asi {s.context_tokens // 1000} tis. tokenů) bez " \
+            "mezipaměti, to jednou víc ubere z limitů." if s.context_tokens >= 20_000 else ""
+        for family in models.FAMILIES:
+            action = menu.addAction(models.name(family))
+            action.setCheckable(True)
+            action.setChecked(family == current)
+            action.setEnabled(not switching)
+            action.setToolTip(f"{models.ABOUT[family]}\n" + (
+                "Na tomhle relace běží." if family == current else
+                "Přepne jen tuhle relaci, výchozí model pro nové relace zůstane." + cost))
+            action.triggered.connect(lambda _=False, f=family: self._switch_model(s.id, f))
+
+    def _switch_model(self, session_id: str, family: str):
+        """Switches a running session to another model: /model in it, run by its mod orbit-mozek (0.5+), whose
+        question in the session's window Orbit's PreModelSwitch hook answers; _watch_model_switches follows it."""
+        s = self.tracker.sessions.get(session_id)
+        if s is None or session_id in self._model_switches or models.family(s.model) == family:
+            return
+        model = models.alias(family)
+        # another switch not through yet may have saved its model as the default already: the one it found goes back
+        pending = next(filter(None, (models.request(other, switch["id"])
+                                     for other, switch in self._model_switches.items())), None)
+        try:
+            request_id = models.ask(session_id, model, pending)
+        except (OSError, ValueError):
+            log.exception("Žádost o přepnutí modelu nejde zapsat")
+            self._notify("Přepnutí modelu se nepovedlo zadat.", error=True, title=s.name)
+            return
+        log.info("Přepínám model relace ve složce %s na %s", s.folder, model)
+        self._model_switches[session_id] = {"id": request_id, "model": model, "label": models.name(family),
+                                            "at": time.time(), "told": False}
+        self._poll_sessions()  # its row says "→ Sonnet" right away
+
+    def _watch_model_switches(self, current: list[sessions.Session]):
+        """Orbit's model switches as the sessions' mods answer them: the default for new sessions back as it was,
+        a bubble when it didn't work; meanwhile its row says "→ Sonnet"."""
+        by_id = {s.id: s for s in current}
+        for session_id, switch in list(self._model_switches.items()):
+            s, done = by_id.get(session_id), models.answer(session_id, switch["id"])
+            age = time.time() - switch["at"]
+            if done is None and s is not None and age < models.ASK_FRESH_S:
+                if not models.acked(session_id, switch["id"]):
+                    if age > models.ACK_WAIT_S:
+                        self._model_switch_over(session_id, switch, None)
+                        s.model_switch = ""
+                        log.info("Relace ve složce %s na přepnutí modelu neodpověděla (bez modu 0.5)", s.folder)
+                        self._notify(f"Na {switch['label']} jsem ji nepřepnul: relace na žádost neodpověděla (nemá "
+                                     "mod orbit-mozek 0.5 nebo novější, běží ze starší verze). V jejím okně napiš "
+                                     f"/reload-plugins a zkus to znovu, nebo tam rovnou /model {switch['model']}.",
+                                     title=s.name, kind="waiting", note="model", session_id=session_id)
+                        continue
+                elif not switch["told"] and s.state != "working" \
+                        and time.time() - max(switch["at"], s.since) > models.CONFIRM_WAIT_S:
+                    switch["told"] = True  # taken, idle, not through: it asks in its window (no Orbit hook there)
+                    self._notify(f"Relace se ptá, jestli opravdu přepnout na {switch['label']}. Klikni sem "
+                                 "a potvrď to v jejím okně.", title=s.name, kind="waiting", note="model",
+                                 session_id=session_id)
+                s.model_switch = switch["label"]
+                continue
+            self._model_switch_over(session_id, switch, done)
+            if s is None:
+                continue
+            s.model_switch = ""
+            if done and done.get("ok"):
+                log.info("Relace ve složce %s běží na %s", s.folder, done.get("model") or switch["model"])
+                s.model = str(done.get("model") or s.model)
+            elif done and str(done.get("text", "")).startswith("Kept model"):
+                log.info("Přepnutí modelu relace ve složce %s odmítnuto v jejím okně", s.folder)  # the user's no
+            elif done:
+                log.info("Relace ve složce %s model nepřepnula: %s", s.folder, done.get("text", ""))
+                self._notify(f"Na {switch['label']} se nepřepnula: {done.get('text') or 'Claude Code to odmítl.'}",
+                             title=s.name, error=True, session_id=session_id)
+            else:
+                self._notify(f"Na {switch['label']} se do 10 minut nepřepnula. Zkus to znovu.", title=s.name,
+                             kind="waiting", note="model", session_id=session_id)
+
+    def _model_switch_over(self, session_id: str, switch: dict, done: dict | None):
+        """A switch is through (or given up): /model saved the session's model as the default for new sessions,
+        that goes back; the request and the answers go."""
+        if done is not None:
+            models.restore_default(models.request(session_id, switch["id"]) or {})
+        models.forget(session_id, switch["id"])
+        self._model_switches.pop(session_id, None)
 
     def _fill_shell_menu(self, menu: QMenu, s: sessions.Session):
         """Each background shell with what it does, a click stops it; the ones it most likely doesn't need at once."""
@@ -1640,7 +2191,7 @@ class Dictation:
         def pick(color):
             self._set_folder_color(colors.key(folder), color)
             if owner.isVisible():
-                self._fill_favorites(owner, heading=owner is not self.favorites_menu)
+                self._fill_favorites(owner, heading=owner is not self.favorites_menu, keep_model=True)
         menu = self._folder_menu = QMenu(owner)
         fill_color_menu(menu, folder, self.cfg["folder_colors"], pick)
         menu.popup(pos)
@@ -2259,9 +2810,11 @@ class Dictation:
         self._fill_favorites(menu)
         menu.popup(anchor - QPoint(0, menu.sizeHint().height()) if up else anchor)
 
-    def _fill_favorites(self, menu: QMenu, heading: bool = True):
-        """A new Claude Code session in one of the favourite folders (each in its colour), a new repo, which folders
-        show here."""
+    def _fill_favorites(self, menu: QMenu, heading: bool = True, keep_model: bool = False):
+        """A new Claude Code session in one of the favourite folders (each in its colour) with the model picked at
+        the top (Claude Code's default to start with; keep_model: the one picked stays, the menu is only drawn
+        again), a new repo, which folders show here."""
+        chosen = getattr(menu, "model_choice", None) if keep_model else None
         menu.clear()
         menu.setToolTipsVisible(True)
         if not self.claude.connected:
@@ -2269,6 +2822,15 @@ class Dictation:
             return
         if heading:
             menu.addAction("Nová relace Claude Code ve složce").setEnabled(False)
+        picker = ModelPicker(menu, chosen)
+        menu.model_choice = picker.chosen
+        picker.changed.connect(lambda family: setattr(menu, "model_choice", family))
+        holder = QWidgetAction(menu)
+        holder.setDefaultWidget(picker)
+        menu.addAction(holder)
+
+        def model() -> str:
+            return models.launch_model(getattr(menu, "model_choice", ""))
         folders = [f for f in favorites.ordered(self.cfg["favorite_folders"]) if os.path.isdir(f)]
         names = favorites.labels(folders)
         for folder in folders:
@@ -2276,19 +2838,21 @@ class Dictation:
                                     names[folder])
             action.setData(folder)  # (FolderMenu: a right click asks for its colour)
             action.setToolTip(f"{folder}\nPravým klikem změníš barvu složky.")
-            action.triggered.connect(lambda _=False, f=folder: self._open_favorite(f))
+            action.triggered.connect(lambda _=False, f=folder: self._open_favorite(f, model()))
         if not folders:
             menu.addAction("Zatím tu žádná složka není").setEnabled(False)
         menu.addSeparator()
-        menu.addAction(theme.glyph_icon(ADD_GLYPH, theme.DIM, 16), "Nové repo…").triggered.connect(self._new_repo)
+        menu.addAction(theme.glyph_icon(ADD_GLYPH, theme.DIM, 16), "Nové repo…").triggered.connect(
+            lambda: self._new_repo(model()))
         menu.addAction(theme.glyph_icon(CHOOSE_GLYPH, theme.DIM, 16), "Vybrat složky a barvy…").triggered.connect(
             self._choose_favorites)
 
-    def _open_favorite(self, folder: str):
-        log.info("Nová relace v oblíbené složce %s", Path(folder).name)
+    def _open_favorite(self, folder: str, model: str = ""):
+        """model: --model, "" = Claude Code's default (models.launch_model)."""
+        log.info("Nová relace v oblíbené složce %s%s", Path(folder).name, f" ({model})" if model else "")
 
         def run():
-            ok, text = favorites.start_session(folder)
+            ok, text = favorites.start_session(folder, model=model)
             if not ok:
                 self.bridge.favorite_failed.emit(folder, text)
         threading.Thread(target=run, daemon=True).start()
@@ -2309,9 +2873,10 @@ class Dictation:
         self.past_window.show()
         self._bring_window(self.past_window)
 
-    def _resume_past(self, session_id: str):
-        """A past session going on in its folder (claude --resume, a window like the +'s sessions). One that runs
-        right now gets its window to the front instead of opening a second time."""
+    def _resume_past(self, session_id: str, model: str = ""):
+        """A past session going on in its folder (claude --resume, a window like the +'s sessions; model: --model,
+        "" = the one it ran on). One that runs right now gets its window to the front instead of opening a second
+        time."""
         past, window = self.past_sessions.get(session_id), self.past_window
         if past is None:
             return
@@ -2326,7 +2891,8 @@ class Dictation:
         window.say(f"Otevírám relaci ve složce {past.folder}…")
 
         def run():
-            self.bridge.past_resumed.emit(session_id, *favorites.start_session(past.cwd, resume=session_id))
+            self.bridge.past_resumed.emit(session_id, *favorites.start_session(past.cwd, resume=session_id,
+                                                                               model=model))
         threading.Thread(target=run, daemon=True).start()
 
     def _past_resumed(self, session_id: str, ok: bool, text: str):
@@ -2337,6 +2903,115 @@ class Dictation:
             self._notify(text, error=True, title=f"Relace ve složce {folder} se neotevřela")
         if self.past_window is not None and self.past_window.isVisible():
             self.past_window.say(text if ok else f"Neotevřela se: {text}", warn=not ok)
+
+    # -- the Autopilot (autopilot.py: a session in rounds, a phone call after each) -----------------------------
+
+    def _autopilot_settings(self) -> dict:
+        return {"phone": self.cfg["autopilot_phone"], "key": self._bland_key, "voice": self.cfg["autopilot_voice"],
+                "name": self.cfg["name"], "quiet": self.cfg["autopilot_quiet"]}
+
+    def _autopilot_ready(self) -> str:
+        """"" when the Autopilot can run, otherwise why not: it needs the session overview (its hooks)."""
+        if not self.claude.connected:
+            return "Autopilot potřebuje připojený Claude Code."
+        if not (self.cfg["claude_hooks"] and self.cfg["show_sessions"]):
+            return "Autopilot potřebuje přehled relací: zapni ho v Nastavení › Claude."
+        return ""
+
+    def _drive_autopilot(self, current: list[sessions.Session]):
+        """Every second with the session overview: the sessions on the Autopilot move on, the panel shows their
+        round or next call, what happened comes as a bubble, the window (when open) follows."""
+        ap = self.autopilot
+        ap.tick(self.tracker.sessions)
+        for s in current:
+            pilot = ap.pilots.get(s.id)
+            s.autopilot, s.autopilot_note = (pilot.label(), pilot.describe()) if pilot else ("", "")
+        self.button.set_autopilot_count(len(ap.pilots))
+        window = self.autopilot_window
+        for kind, session_id, title, text in ap.drain_events():
+            if kind in ("test", "account"):
+                if window is not None:
+                    if kind == "account":
+                        window.say_calls(f"Klíč funguje, kredit na účtu Bland AI: {money(float(text))}." if text else
+                                         "Klíč funguje.", ok=True)
+                    else:
+                        window.say_calls(text, ok=True)
+            elif kind in ("test-error", "account-error"):
+                if window is not None and window.isVisible():
+                    window.say_calls(text, warn=True)
+                else:
+                    self._notify(text, error=True, title="Autopilot")
+            else:
+                self._notify(text, title=title or "Autopilot", kind=kind, note="autopilot",
+                             on_click=lambda sid=session_id: self.open_autopilot(sid))
+        if window is not None and window.isVisible():
+            window.show_state(current, ap.pilots)
+
+    def open_autopilot(self, session_id: str = ""):
+        if self.autopilot_window is None:
+            window = self.autopilot_window = AutopilotWindow(self.cfg, lambda: self.cfg["folder_colors"])
+            window.settings_saved.connect(self._autopilot_saved)
+            window.test_requested.connect(self._autopilot_test)
+            window.start_requested.connect(self._autopilot_start)
+            window.stop_requested.connect(self._autopilot_stop)
+            window.call_requested.connect(self._autopilot_call)
+        window = self.autopilot_window
+        if session_id:
+            window.choose(session_id)
+        current = sorted(self.tracker.sessions.values(), key=lambda s: (s.folder.lower(), s.started))
+        window.show_state(current if self.session_timer.isActive() else [], self.autopilot.pilots)
+        if not self._bring_window(window):
+            window.show()
+            self._bring_window(window)
+        if why := self._autopilot_ready():
+            window.say_calls(why, warn=True)
+        elif not (self.cfg["autopilot_phone"] and self._bland_key):
+            window.say_calls("Vyplň svoje číslo a klíč Bland AI, ulož a zkus hovor.")
+
+    def _autopilot_saved(self, values: dict):
+        self.cfg["autopilot_phone"] = values["phone"]
+        self.cfg["autopilot_voice"] = values["voice"]
+        self.cfg["autopilot_quiet"] = values["quiet"]
+        if values["key"] is not None:
+            self._bland_key = values["key"]
+            self.cfg["autopilot_key"] = bland.protect(values["key"])
+        config.save(self.cfg)
+        log.info("Autopilot: nastavení hovorů uloženo (číslo %s, klíč %s)", bland.masked(values["phone"]),
+                 "je" if self._bland_key else "není")
+        window = self.autopilot_window
+        window.key_saved(bool(self._bland_key))
+        if self._bland_key:
+            window.say_calls("Uloženo, ověřuji klíč…")
+            self.autopilot.check_account(self._bland_key)
+        else:
+            window.say_calls("Uloženo. Bez klíče Bland AI Autopilot volat nebude.", warn=True)
+
+    def _autopilot_test(self):
+        window = self.autopilot_window
+        if why := self.autopilot.test_call():
+            window.say_calls(why, warn=True)
+        else:
+            log.info("Autopilot: zkušební hovor na %s", bland.masked(self.cfg["autopilot_phone"]))
+            window.say_calls("Volám přes Bland AI…")
+
+    def _autopilot_start(self, session_id: str, goal: str, interval: int):
+        window, s = self.autopilot_window, self.tracker.sessions.get(session_id)
+        why = self._autopilot_ready() or ("Relace mezitím skončila." if s is None else "") or \
+            self.autopilot.start(s, goal, interval)
+        if why:
+            window.say(why, warn=True)
+            return
+        window.say("Předávám relaci zadání prvního kola…")
+        self._poll_sessions()
+
+    def _autopilot_stop(self, session_id: str):
+        self.autopilot.stop(session_id, "vypnuto v okně Autopilot")
+        self.autopilot_window.say("Autopilot je vypnutý, relace běží dál jako dřív.")
+        self._poll_sessions()
+
+    def _autopilot_call(self, session_id: str):
+        self.autopilot.call_now(session_id)
+        self._poll_sessions()
 
     @staticmethod
     def _bring_window(window) -> bool:
@@ -2363,7 +3038,9 @@ class Dictation:
         config.save(self.cfg)
         log.info("Oblíbené složky: %d", len(folders))
 
-    def _new_repo(self):
+    def _new_repo(self, model: str = ""):
+        """model: the one picked under the +, for the session that opens in the new repo."""
+        self._repo_model = model
         if self._bring_window(self.repo_dialog):
             return
         dialog = self.repo_dialog = NewRepoDialog(
@@ -2380,7 +3057,7 @@ class Dictation:
             self.favorites_dialog.include(path)  # its Uložit mustn't drop the new one
         if git_problem:
             self._notify(f"Složka {Path(path).name} je založená, ale {git_problem}")
-        self._open_favorite(path)
+        self._open_favorite(path, getattr(self, "_repo_model", ""))
 
     def open_notebook(self):
         if self.notebook and self.notebook.isVisible():
@@ -2600,6 +3277,7 @@ class Dictation:
         key = hotkey.binding_name(self.cfg["ptt"])
         for_agent = self.take is not None and self.take.agent
         pencil = False  # an edit: a pencil on the button instead of the microphone
+        status = ""  # what it's busy with, in words next to the circles (FloatingButton.set_status)
         if self.recorder.live and not for_agent:
             pencil = self.take is not None and self.take.edit
             state, tip = "recording", ("Úprava textu: řekni, co s textem udělat, a pusť klávesu" if pencil else
@@ -2607,6 +3285,14 @@ class Dictation:
         elif self.pending or self._rewriting:
             pencil = self.pending <= self._edit_pending
             state, tip = "busy", "Upravuji text podle pokynu…" if pencil else "Přepisuji…"
+            if pencil:
+                status = "Claude upravuje text…" if self._rewriting and not self.pending else "Přepisuji pokyn…"
+            elif any(t.asking for t in self._held_takes):
+                status = "Claude kontroluje přepis…"
+                tip = (f"Claude kontroluje přepis: Whisper a druhý rozpoznávač slyšeli něco jinak, tak text vložím "
+                       f"až opravený (čekám nejvýš {PRECHECK_WAIT_S} s).")
+            else:
+                status = "Přepisuji…"
         elif self.server_state == "nomodel" and self.downloads.running(self.cfg["model"]):
             state = "loading"
             tip = f"Stahuji model pro rozpoznávání řeči… {self.downloads.percent(self.cfg['model'])} %"
@@ -2620,6 +3306,7 @@ class Dictation:
             state, tip = "idle", f"Drž {key} (nebo toto tlačítko) a mluv"
         self.button.set_state(state, pencil)
         self.button.set_button_tip(tip)
+        self.button.set_status(status)
         self.button.set_agent_state("listening" if self.recorder.live and for_agent else self._agent_state)
         tray_tip = f"Orbit – {tip}"
         if self.cfg["show_usage"] and self.usage and self.usage.limits:
@@ -2630,10 +3317,12 @@ class Dictation:
             self.tray.setToolTip(tray_tip[:127])
         self.hint_action.setText(f"Mluvení: drž {key}")
 
-    def _notify(self, msg, error=False, title="Orbit", kind=None, note="", session_id=None, url="", on_click=None):
+    def _notify(self, msg, error=False, title="Orbit", kind=None, note="", session_id=None, url="", on_click=None,
+                quiet=False):
         """Orbit's bubble at the mic button, with Orbit's sound. kind: 'done', 'waiting', 'error' or 'info'
         (default from `error`); note: small text right of the title; session_id: a click switches to it;
-        url: a click opens it; on_click: called on a click."""
+        url: a click opens it; on_click: called on a click; quiet: no sound (the transcript check's, which comes
+        after many dictations)."""
         kind = kind or ("error" if error else "info")
         if not winutil.accepts_notifications():  # full-screen game or presentation: Windows holds it for later
             icon = QSystemTrayIcon.Warning if kind == "error" else QSystemTrayIcon.Information
@@ -2655,7 +3344,7 @@ class Dictation:
             bubble.show_near(*self.button.bubble_anchor())
         else:
             bubble.show_near(None)
-        if not self.cfg["muted"]:
+        if not self.cfg["muted"] and not quiet:
             winutil.play(kind)
 
     def _bubble_closed(self, bubble):
@@ -2761,7 +3450,7 @@ class Dictation:
             config.save(self.cfg)
         if self.collapse_action.isChecked() != on:
             self.collapse_action.setChecked(on)
-        self.button.set_collapsed(on)
+        self.button.set_collapsed(on, animate=True)
 
     def _place_button(self):
         """At the saved place when both circles fit on a screen there, pulled onto the screen when they stick out
@@ -2800,6 +3489,26 @@ class Dictation:
         if fitted != pos:
             log.info("Tlačítko bylo mimo obrazovku, přesouvám ho")
             self.button.place_button(fitted)
+
+    def _keep_button_on_top(self):
+        """Every second: the button back in front when Windows has put other programs' windows over it (Pepa 17 Oct:
+        "Orbit goes behind the browser"; it stays flagged topmost then and Qt never fixes it, winutil.windows_above),
+        or it lost being topmost. Not while a full-screen game, video or presentation is in front: Windows' call,
+        the button comes back when it's over."""
+        if not self.button.isVisible():
+            return
+        hwnd = int(self.button.winId())
+        above, topmost = winutil.windows_above(hwnd), winutil.is_topmost(hwnd)
+        if not above and topmost:
+            return
+        if not winutil.accepts_notifications():
+            return
+        winutil.put_on_top(hwnd)
+        if time.monotonic() - self._buried_logged > 60:
+            self._buried_logged = time.monotonic()
+            names = list(dict.fromkeys(inserter.app_name(h) or "?" for h in above))
+            log.info("Tlačítko bylo za okny jiných programů (%s%s), vracím ho dopředu", ", ".join(names[:4]) or "žádné",
+                     "" if topmost else ", ztratilo „vždy navrchu“")
 
     def _button_moved(self, pos: QPoint):
         self.cfg["button_pos"] = [pos.x(), pos.y()]
@@ -3025,6 +3734,7 @@ class Dictation:
         self._apply_sessions_setting()
         self._apply_agent_setting()
         self._prepare_voice()
+        self._apply_check_setting()
         if "model" in values and not config.model_present(self.cfg["model"]):
             self.downloads.start(self.cfg["model"])  # a model chosen but not here yet
         if restart_server:
@@ -3036,12 +3746,17 @@ class Dictation:
         if self.take:
             self.take.cancelled = True
             self.take.drop_rewriter()
+            self.take.drop_checker()
         # queued pieces would wait for a server that's gone and keep Orbit (and its single-instance mutex) alive
         self.executor.shutdown(wait=False, cancel_futures=True)
+        self.second_executor.shutdown(wait=False, cancel_futures=True)
+        if self.second_opinion:
+            self.second_opinion.close()
         self.ptt.stop()
         if self.agent_ptt:
             self.agent_ptt.stop()
         self.agent.stop()
+        self.autopilot.shutdown()
         self.recorder.shutdown()
         self.ducker.shutdown()
         self.server.stop()

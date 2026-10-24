@@ -1,7 +1,7 @@
 {
   "name": "orbit-mozek",
-  "version": "0.3.0",
-  "description": "Mozek relace (/mozek): o čem Claude přemýšlí, co dělají nástroje a podagenti a jak je plný kontext. Limity relace předává panelu Orbitu a na jeho žádost zastaví příkaz na pozadí, který už nikdo nepotřebuje.",
+  "version": "0.5.0",
+  "description": "Mozek relace (/mozek): o čem Claude přemýšlí, co dělají nástroje a podagenti a jak je plný kontext. Limity relace předává panelu Orbitu, na jeho žádost zastaví příkaz na pozadí, který už nikdo nepotřebuje, a předá relaci zadání z Autopilota Orbitu a přepne relaci na model, který zvolíš v panelu Orbitu.",
   "author": {
     "name": "Josef Kotran"
   },

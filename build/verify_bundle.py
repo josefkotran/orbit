@@ -89,8 +89,25 @@ for mod in ["numpy", "sounddevice", "pynput.keyboard", "requests", "PySide6.QtTe
            (["onnxruntime", "piper"] if piper else []):
     check(f"import {mod}", lambda mod=mod: importlib.import_module(mod) and None)
 check("PortAudio", lambda: f"{len(__import__('sounddevice').query_devices())} zařízení")
+check("import onnx_asr", lambda: importlib.import_module("onnx_asr") and None)
 if piper:
     check("onnxruntime", lambda: ", ".join(__import__("onnxruntime").get_available_providers()))
+
+
+def canary_features():
+    """The second recognizer's (canary.py) sound to features: onnx-asr's own ONNX file, run on this onnxruntime."""
+    import importlib.resources
+    import numpy as np
+    import onnxruntime
+    path = importlib.resources.files("onnx_asr.preprocessors") / "data" / "nemo128.onnx"
+    session = onnxruntime.InferenceSession(str(path), providers=["CPUExecutionProvider"])
+    features, _ = session.run(None, {"waveforms": np.zeros((1, 16000), np.float32),
+                                     "waveforms_lens": np.array([16000], np.int64)})
+    return f"{features.shape[1]} pásem"
+
+
+if piper:  # onnxruntime is in the bundle with Piper only (--without-piper: the check works on Whisper alone)
+    check("Druhý rozpoznávač: příprava zvuku", canary_features)
 
 
 def settings_dialog():

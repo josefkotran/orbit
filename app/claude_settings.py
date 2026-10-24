@@ -25,8 +25,12 @@ from .config import DATA_DIR, ROOT
 
 log = logging.getLogger(__name__)
 
-HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "Notification", "Stop", "StopFailure", "SessionEnd", "PostToolUse")
+HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "Notification", "Stop", "StopFailure", "SessionEnd", "PostToolUse",
+               "PreModelSwitch")
 HOOK_MATCHERS = {"PostToolUse": "Artifact"}  # only published artifacts, not every tool call
+# Claude Code waits for these: the hook's answer counts (PreModelSwitch: a switch Orbit asked for needs no confirming
+# in the session's window, models.py); every other one runs in the background
+SYNC_EVENTS = ("PreModelSwitch",)
 HOOK_SCRIPT = ROOT / "app" / "cc_hook.py"
 STATUS_SCRIPT = ROOT / "app" / "cc_status.py"
 PREVIOUS_STATUSLINE = DATA_DIR / "statusline-previous.json"  # read by cc_status.py
@@ -154,9 +158,12 @@ def _edit(change) -> bool:
 
 # --- hooks ----------------------------------------------------------------------------------------
 
-def _hook() -> dict:
-    return {"type": "command", "command": _python().as_posix(), "args": [HOOK_SCRIPT.as_posix(), *_data_args()],
+def _hook(sync: bool = False) -> dict:
+    hook = {"type": "command", "command": _python().as_posix(), "args": [HOOK_SCRIPT.as_posix(), *_data_args()],
             "async": True, "timeout": 10}
+    if sync:
+        del hook["async"]
+    return hook
 
 
 def _without_ours(hooks: dict) -> dict:
@@ -210,7 +217,7 @@ def set_hooks(enabled: bool) -> bool:
             for event in HOOK_EVENTS:
                 if isinstance(new.get(event, []), list):
                     group = {"matcher": HOOK_MATCHERS[event]} if event in HOOK_MATCHERS else {}
-                    new[event] = [*new.get(event, []), dict(group, hooks=[_hook()])]
+                    new[event] = [*new.get(event, []), dict(group, hooks=[_hook(event in SYNC_EVENTS)])]
         if new == hooks:
             return False
         if new:
@@ -223,6 +230,21 @@ def set_hooks(enabled: bool) -> bool:
     if changed:
         log.info("Hooky Orbitu v %s %s", settings_path(), "přidány" if enabled else "odebrány")
     return changed
+
+
+def set_default_model(model: str | None) -> bool:
+    """Claude Code's default model for new sessions ("model"; None removes it, Claude Code then decides). Orbit sets
+    it only back to what it was after /model in one session saved that session's model there (models.py)."""
+    def change(settings: dict) -> bool:
+        if settings.get("model") == model or (model is None and "model" not in settings):
+            return False
+        if model is None:
+            settings.pop("model", None)
+        else:
+            settings["model"] = model
+        return True
+
+    return _edit(change)
 
 
 # --- status line ------------------------------------------------------------------------------

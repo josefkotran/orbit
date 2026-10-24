@@ -1,5 +1,6 @@
-"""What isn't in the installer and gets downloaded on first use: Whisper models and Piper voices, from Hugging Face
-into the data folder. Plus which model suits this PC's graphics card.
+"""What isn't in the installer and gets downloaded on first use: Whisper models, Piper voices and the transcript
+check's second recognizer (Canary), from Hugging Face into the data folder. Plus which model suits this PC's graphics
+card.
 
 No Qt: callers run download() in a worker thread. A download resumes where it stopped (a .part file next to the
 target, HTTP Range), is checked (SHA-256 pinned here, at a pinned revision of the repository, and confirmed by the
@@ -28,6 +29,7 @@ log = logging.getLogger(__name__)
 PIPER_DIR = MODELS_DIR / "piper"
 _WHISPER = "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/"
 _PIPER = "https://huggingface.co/rhasspy/piper-voices/resolve/c10ece1aade47bb51c153c893d14e5bf8e5b7117/cs/cs_CZ/"
+_CANARY = "https://huggingface.co/istupakov/canary-1b-v2-onnx/resolve/5ebc1520cef7b6b318b3526ad17adbfe00bc1bfc/"
 CHUNK = 1 << 20
 SPARE = 300 * 2 ** 20  # free space left on the disk after a download
 RETRIES = 3  # a dropped connection is resumed this many times before giving up
@@ -85,6 +87,16 @@ ITEMS = {item.key: item for item in (
     _voice("cs_CZ-kasandra-medium", "hlas Kasandra",
            (63511038, "09d08aa23691ed2d53fb3db242cfe82b189adf9c1812dd5fe928b5789ed76df7"),
            (3232, "5039f9e49def4f4f8438db031868800a13bf4c6246b62afdb0947f4c5478770e")),
+    # the transcript check's second recognizer (canary.py), at full precision: its int8 variant (1 GB) left the check
+    # at 5.1 % WER on FLEURS instead of 4.7 % (24 Oct)
+    Item("canary-1b-v2", "druhý rozpoznávač Canary", MODELS_DIR / "canary-1b-v2", tuple(
+        Remote(name, _CANARY + name, size, sha) for name, size, sha in (
+            ("config.json", 68, "f90ace8e35326dcd47c7330b230644fa0835083ed1e89e2f59aa08ba10d74f54"),
+            ("vocab.txt", 208022, "2c9efe6104fd29522ea27ce0e3aef5d37c690af4e5a4232e643e23ca403ffea3"),
+            ("encoder-model.onnx", 4762393, "c8352f7adf033ad4dfcdc42e665eaacb1ee93e1acf6b168e4f1dfc57c26b0195"),
+            ("decoder-model.onnx", 676284211, "962dc77709f31c1ed8a55a7518ff4bed7316a87c442e7c79aa3573c4bbc39a72"),
+            ("encoder-model.onnx.data", 3284660224,
+             "a1711a0b88dc1bda0ff94178f2f8c66b1450990599856982ddc8cc6e155384ec")))),
 )}
 WHISPER_MODELS = ("ggml-large-v3.bin", "ggml-large-v3-turbo.bin")
 

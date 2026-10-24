@@ -29,6 +29,7 @@ NOISE_BLOCKS = 100
 NOISE_FACTOR = 3
 NOISE_RISE = 1.02  # per 30 ms block: 50 → 250 in ~2.5 s
 VOICE_RMS = 50  # louder than a quiet mic's noise, quieter than speech counts (Recorder.voiced_s: "too quiet")
+TRIM_KEEP_S = 0.3  # of the quiet after the last word, this much stays (trim_tail): a soft last syllable fades in it
 
 
 def _hostapi(name: str) -> int | None:
@@ -132,6 +133,22 @@ def is_silent(audio: np.ndarray, noise: float = 0.0) -> bool:
     return float(np.sqrt((frames ** 2).mean(axis=1)).max()) < max(SILENCE_RMS, NOISE_FACTOR * noise)
 
 
+def trim_tail(audio: np.ndarray, noise: float = 0.0, keep_s: float = TRIM_KEEP_S) -> np.ndarray:
+    """Without the quiet after the last word (keep_s of it stays): from there to the release and TAIL_MS after it
+    (0.5–0.9 s in Pepa's recordings) Whisper writes what it "heard" in silence: "Titulky vytvořil JohnyX",
+    "Děkujeme za pozornost", a web address. Measured 24 Oct: on Pepa's 30 recordings both such endings were gone
+    and nothing said was cut; FLEURS (181) and VoxPopuli (161) came out the same as before."""
+    frame = SAMPLE_RATE * 30 // 1000
+    blocks = len(audio) // frame
+    if not blocks:
+        return audio
+    frames = audio[: blocks * frame].reshape(-1, frame).astype(np.float32)
+    loud = np.flatnonzero(np.sqrt((frames ** 2).mean(axis=1)) >= max(PAUSE_RMS, NOISE_FACTOR * noise))
+    if not len(loud):
+        return audio
+    return audio[: min(len(audio), (int(loud[-1]) + 1) * frame + int(keep_s * SAMPLE_RATE))]
+
+
 class Recorder:
     """Records from the microphone between start() and stop(); the mic is open only while recording
     (or while the settings window shows its live meter).
@@ -164,6 +181,7 @@ class Recorder:
         self.noise = 0.0  # the mic's noise floor now (0 = not known yet)
         self.got_signal = False  # anything but exact zeros came in this recording (a muted mic sends only zeros)
         self._voiced = 0  # blocks of this recording clearly above the noise (speech, maybe too quiet)
+        self.peak = 0.0  # the loudest 30 ms block of this recording (RMS), for the log
         self._device_name: str | None = None
         self.level = 0.0  # 0..1, for the UI meters
 
@@ -215,6 +233,7 @@ class Recorder:
             self.end_on_silence = False
             self.got_signal = False
             self._voiced = 0
+            self.peak = 0.0
             self._recent.clear()
             self.noise = 0.0
             self._live = already_live
@@ -351,6 +370,7 @@ class Recorder:
                         self.noise = min(min(self._recent), start * NOISE_RISE)
                     if rms >= max(VOICE_RMS, NOISE_FACTOR * self.noise):
                         self._voiced += 1
+                    self.peak = max(self.peak, rms)
                     if self.split:
                         cut = self._cut_at_pause(rms, len(chunk))
                     ended = self._speech_over(rms, len(chunk))

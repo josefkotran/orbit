@@ -351,10 +351,16 @@ class HistoryWindow(QDialog):
             parts.append("odesláno Enterem")
         if entry.corrected:
             parts.append("opraveno")
+        elif entry.unchecked or entry.checked:
+            parts.append("opravila kontrola přepisu")
         self.meta.setText(" · ".join(parts))
         info = f"Pokyn: {entry.instruction}" if entry.instruction else ""
         if entry.instruction and entry.original:
             info += f"\nPůvodně: {first_line(entry.original, 300)}"
+        if entry.unchecked:  # the check fixed it in the window
+            info = f"Před kontrolou přepisu: {first_line(entry.unchecked, 300)}"
+        elif entry.checked and not entry.corrected:  # its fix didn't make it into the window
+            info = f"V okně zůstalo: {first_line(entry.text, 300)}"
         self.edit_info.setText(info)
         self.edit_info.setVisible(bool(info))
         if not same:

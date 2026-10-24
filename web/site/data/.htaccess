@@ -1,0 +1,2 @@
+# What api/hit.php and the admin write (visits, the admin password hash, the server key). Never on the web.
+Require all denied

@@ -13,7 +13,8 @@ WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP = 0x100, 0x101, 0x104, 0x105
 WM_LBUTTONDOWN, WM_RBUTTONDOWN = 0x201, 0x204
 WM_MBUTTONDOWN, WM_MBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP = 0x207, 0x208, 0x20B, 0x20C
 LLKHF_INJECTED, LLMHF_INJECTED = 0x10, 0x01
-VK_ESCAPE, VK_LCONTROL = 0x1B, 0xA2
+VK_ESCAPE, VK_LCONTROL, VK_SPACE = 0x1B, 0xA2, 0x20
+_SPACE_MODIFIERS = (0x10, 0x11, 0x12, 0x5B, 0x5C)  # Shift, Ctrl, Alt, both Windows keys: then Space isn't just " "
 ALTGR_FAKE_CTRL_SCAN = 0x21D  # AltGr on Czech layout also sends a fake Left Ctrl with this scan code
 # Shift, Ctrl, Alt (generic and each side), the Windows keys: pressed alone they don't move the cursor
 _MODIFIER_KEYS = {0x10, 0x11, 0x12, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C}
@@ -77,13 +78,16 @@ class PushToTalk:
     user's own other than the binding: a key that isn't a modifier, a mouse button (not on one of Orbit's own windows,
     see own_point). After it the cursor may be anywhere, so what Orbit typed can't be taken back blindly (editing.py).
     Clicks are seen only while the mouse hook runs: with a mouse binding always, otherwise from watch_clicks(True).
+    on_space(), when given, is called instead for a plain Space (no Ctrl, Alt, Shift or Windows key held): it only
+    adds " " at the cursor, and people who have Orbit's trailing space off type it between dictations.
     """
 
-    def __init__(self, binding: dict, on_press, on_release, on_input=None, own_point=None):
+    def __init__(self, binding: dict, on_press, on_release, on_input=None, own_point=None, on_space=None):
         self._binding = dict(binding)
         self._on_press = on_press
         self._on_release = on_release
         self._on_input = on_input
+        self._on_space = on_space
         self._own_point = own_point  # own_point(x, y): a click there is on Orbit itself (doesn't count as input)
         self._watch_clicks = False
         self._ignored: dict | None = None  # another of Orbit's own bindings (the agent's): not the user's input
@@ -196,6 +200,11 @@ class PushToTalk:
             return False
         if self._handle(down, "key", vk):
             _suppress()
+        elif down and vk == VK_SPACE and self._on_space is not None and self._capture_cb is None and                 not any(_user32.GetAsyncKeyState(m) & 0x8000 for m in _SPACE_MODIFIERS):
+            try:
+                self._on_space()
+            except Exception:
+                log.exception("Hlášení mezery selhalo")
         elif down and vk not in _MODIFIER_KEYS:
             self._input("key", vk)
         return False

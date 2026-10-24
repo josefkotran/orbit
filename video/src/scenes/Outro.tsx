@@ -4,7 +4,7 @@ import { Orbits } from "../components/Orbits";
 import { KIN, Kinetic } from "../components/Kinetic";
 import { EASE_IN_OUT, pop, prog, rise } from "../lib/anim";
 import { C, GLYPH, ICONS, TEXT } from "../lib/theme";
-import { bar, CUT, DURATION } from "../lib/time";
+import { bar, CUT, CUT_BAR, DURATION } from "../lib/time";
 import { MicBadge } from "./Intro";
 
 const CX = 960;
@@ -22,6 +22,9 @@ const FEATURES = [
   { ring: 2, phase: 3.6 + Math.PI, label: "Předčítání", color: C.text },
   // upper left at first, then over the top: clear of the other labels, the mic and the headline the whole outro
   { ring: 0, phase: 3.9, label: "Poznámky a úkoly", color: C.accent },
+  { ring: 0, phase: 5.35, label: "Opravy hlasem", color: C.text },
+  { ring: 1, phase: 0.35, label: "Historie diktátů", color: C.text },
+  { ring: 1, phase: 4.15, label: "Kontrola přepisu", color: C.accent },
 ];
 
 /** Drums stop, the pad rings out: the orrery again, every feature on its orbit, and the download. */
@@ -61,7 +64,7 @@ export const Outro: React.FC = () => {
 
   const glowIn = prog(f, OUTRO_MIC.at, OUTRO_MIC.at + 30);
   const fadeAll = prog(f, DURATION - 34, DURATION - 2, EASE_IN_OUT);
-  const btn = pop(f, bar(33) + 22, 13);
+  const btn = pop(f, bar(CUT_BAR + 1) + 22, 13);
   const breathe = 0.75 + 0.25 * Math.sin(f * 0.07);
 
   return (
@@ -80,12 +83,12 @@ export const Outro: React.FC = () => {
           width: 1800,
           height: 420,
           background: "radial-gradient(closest-side, rgba(4,6,12,.85), rgba(4,6,12,0))",
-          opacity: prog(f, bar(33) - 10, bar(33) + 20),
+          opacity: prog(f, bar(CUT_BAR + 1) - 10, bar(CUT_BAR + 1) + 20),
         }}
       />
 
       <div style={{ position: "absolute", left: 0, right: 0, top: 650, display: "flex", flexDirection: "column", alignItems: "center" }}>
-        <Kinetic lines={["Stáhni si Orbit."]} at={bar(33)} stagger={2} cfg={KIN.hero} size={132} align="center" />
+        <Kinetic lines={["Stáhni si Orbit."]} at={bar(CUT_BAR + 1)} stagger={2} cfg={KIN.hero} size={132} align="center" />
         <div style={{ display: "flex", alignItems: "center", gap: 40, marginTop: 40 }}>
           <div
             style={{
@@ -106,10 +109,10 @@ export const Outro: React.FC = () => {
               opacity: Math.min(1, btn * 1.4),
             }}
           >
-            <span style={{ fontFamily: ICONS, fontSize: 26 }}>{GLYPH.download}</span>
-            Stáhnout pro Windows
+            <span style={{ fontFamily: ICONS, fontSize: 26, opacity: 0.999 }}>{GLYPH.download}</span>
+            <span style={{ opacity: 0.999 }}>Stáhnout pro Windows</span>
           </div>
-          <div style={{ fontFamily: TEXT, fontWeight: 500, fontSize: 36, color: C.soft, letterSpacing: ".02em", ...rise(f, bar(34), 22, 14) }}>
+          <div style={{ fontFamily: TEXT, fontWeight: 500, fontSize: 36, color: C.soft, letterSpacing: ".02em", ...rise(f, bar(CUT_BAR + 2), 22, 14) }}>
             orbit.easya.cz
           </div>
         </div>

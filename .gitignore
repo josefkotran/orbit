@@ -15,6 +15,7 @@ history.json.*
 corrections.json
 corrections.json.*
 ducked.json*
+autopilot.json*
 statusline-previous.json
 *.log
 portable
@@ -37,3 +38,11 @@ mods/*/tsconfig.json
 # research for Pepa from another session (competitors): not part of the app, the repo is public
 reports/
 research_notes/
+
+# what the web statistics write on the server (visits, the admin password hash, the server key): never in the repo
+web/site/data/*
+!web/site/data/.htaccess
+
+# the intro video for the website, exported from video/ (scripts/export-web.mjs, ~50 MB with its music, which may not be
+# shared on its own): published by web/publish.py, rebuilt from the video project
+web/site/assets/video/

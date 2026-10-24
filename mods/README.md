@@ -5,7 +5,7 @@ Claude Code 2.1.287 nebo novější. Fungují v terminálu i na kartě Code v ap
 
 | Mod | Co dělá |
 |---|---|
-| `orbit-mozek` | `/mozek` otevře vedle konverzace panel „Mozek“. Ukazuje, o čem Claude právě přemýšlí, co píše, které nástroje běží a jak dlouho, co dělají podagenti, „mozkovou vlnu“ (kolik napsal v každém kroku) a kontext rozdělený podle kategorií jako `/context`, s limity. Limity (5 h a týden) po každém tahu předá i panelu Orbitu: zapíše je do jeho datové složky v počítači, bez jediného dotazu na server. A když v panelu Orbitu zastavíš příkaz, který relace nechala zbytečně běžet na pozadí (server, který nikdo nepoužívá, visící příkaz), zastaví ho přes Claude Code (`TaskStop`), takže se relace neprobudí. Nic se nikam neposílá. |
+| `orbit-mozek` | `/mozek` otevře vedle konverzace panel „Mozek“. Ukazuje, o čem Claude právě přemýšlí, co píše, které nástroje běží a jak dlouho, co dělají podagenti, „mozkovou vlnu“ (kolik napsal v každém kroku) a kontext rozdělený podle kategorií jako `/context`, s limity. Limity (5 h a týden) po každém tahu předá i panelu Orbitu: zapíše je do jeho datové složky v počítači, bez jediného dotazu na server. A když v panelu Orbitu zastavíš příkaz, který relace nechala zbytečně běžet na pozadí (server, který nikdo nepoužívá, visící příkaz), zastaví ho přes Claude Code (`TaskStop`), takže se relace neprobudí. Relaci na Autopilotu Orbitu předá zadání dalšího kola (tvůj cíl, co jsi řekl v hovoru). A když v panelu Orbitu vybereš relaci jiný model (pravý klik na ni), přepne ji na něj přes `/model`. Mod sám nic nikam neposílá. |
 | `orbit-ukoly` | V relaci, kterou Orbit založil z úkolu v Poznámkách, je nad promptem řádek s úkolem a tlačítky **Poznámka** a **Hotovo**. Claude ví, na čem pracuje, a dostane dva nástroje: zapsat poznámku k úkolu a úkol dokončit. Orbit pak úkol přesune do Hotovo a ozve se bublinou. `/ukol` vypíše aktivní úkoly a relaci připojí k jednomu (`/ukol 2`), `/ukol odpojit` ji odpojí. |
 
 ## Instalace
@@ -39,6 +39,25 @@ restartu.
   2 s najde, zavolá `TaskStop` a vedle zapíše `<relace>.<úloha>.done.json` (`{"ok", "text"}`); oba soubory pak smaže
   Orbit. Žádost starší než minuta se nevyřizuje.
 - Proč ne rovnou ukončit proces: Claude Code by to relaci ohlásil jako chybu příkazu a relace by začala nový tah.
+
+## Jak `orbit-mozek` předá relaci zadání z Autopilota (od 0.4.0)
+
+- Orbit zapíše `<data>/sessions/prompt/<relace>.<id>.json` (`{"session_id", "id", "time", "text"}`). Mod ho do 2 s
+  najde a pošle `$.prompt.submit({ text, asUser: true })`: relace ho dostane jako slova uživatele, ve vlastním tahu,
+  jakmile nic nedělá. Vedle zapíše `<relace>.<id>.done.json` (`{"ok", "text"}`, `text` je `started`, `queued`, když
+  relace zrovna pracuje, nebo proč ne); oba soubory pak smaže Orbit. Zadání starší než minuta se nevyřizuje.
+- Relace spuštěná se starší verzí modu zadání nepřevezme: `/reload-plugins` v jejím okně (nebo restart) pomůže.
+
+## Jak `orbit-mozek` přepne relaci na jiný model (od 0.5.0)
+
+- Orbit zapíše `<data>/sessions/model/<relace>.<id>.json` (`{"session_id", "id", "time", "model", "default"}`, model
+  je alias: `fable`, `opus`, `sonnet`, `haiku`, případně s `[1m]`). Mod ho do 2 s najde, vedle zapíše
+  `<relace>.<id>.ack.json`, spustí v relaci `/model <model>` (`$.command.run`; pracující relace ho spustí po tahu)
+  a zapíše `<relace>.<id>.done.json` (`{"ok", "text", "model"}`, `model` = na čem relace běží teď). Všechny soubory
+  pak smaže Orbit. Žádost starší než minuta a jiný model než alias se nevyřizuje.
+- `/model` se v relaci, která už odpověděla, ptá „Switch model?“: Orbitův hook PreModelSwitch (`app/cc_hook.py`)
+  odpoví „allow“ jen na přepnutí, o které Orbit v té relaci požádal. `/model` taky uloží model jako výchozí pro nové
+  relace; Orbit hned vrátí původní výchozí model (`app/models.py`).
 
 ## Vývoj
 

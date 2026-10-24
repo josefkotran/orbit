@@ -1,7 +1,8 @@
 """The + above the panel (favorites.py, favoritesview.py, Dictation on a stub): it's there only with Claude connected
 and opens its menu away from the panel, the menu offers the favourite folders that exist (by name, in their colour),
-a click opens a session there (favorites.start_session replaced: no window, no Claude), "Vybrat složky…" keeps what
-was switched on, and a new repo is made, becomes a favourite and gets its session.
+a click opens a session there (favorites.start_session replaced: no window, no Claude) with the model picked at the
+top of the menu, "Vybrat složky…" keeps what was switched on, and a new repo is made, becomes a favourite and gets its
+session.
 
     .venv\\Scripts\\python.exe -m unittest discover -s tests -p "test_ui*.py"
 """
@@ -29,9 +30,9 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
 from PySide6.QtGui import QMouseEvent  # noqa: E402
-from PySide6.QtWidgets import QApplication, QMenu  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMenu, QWidgetAction  # noqa: E402
 
-from app import colors, config, favorites, main, ui  # noqa: E402
+from app import colors, config, favorites, main, models, paths, ui  # noqa: E402
 from app.favoritesview import FavoritesDialog, NewRepoDialog  # noqa: E402
 
 
@@ -58,7 +59,8 @@ class Widgets(unittest.TestCase):
         opened = []
         d = SimpleNamespace(cfg={"favorite_folders": list(folders), "folder_colors": {"orbit": "blue"}},
                             claude=SimpleNamespace(connected=connected), opened=opened,
-                            _open_favorite=opened.append, _new_repo=lambda: opened.append("nové repo"),
+                            _open_favorite=lambda folder, model="": opened.append((folder, model)),
+                            _new_repo=lambda model="": opened.append(("nové repo", model)),
                             _choose_favorites=lambda: opened.append("vybrat"),
                             open_wizard=lambda page="": opened.append(f"průvodce {page}"))
         return d
@@ -94,18 +96,59 @@ class Widgets(unittest.TestCase):
         self.assertEqual([a.text() for a in menu.actions()], ["Připojit Clauda…"])
         d = self.stub(folders=[self.orbit, os.path.join(self.dir, "smazana"), self.ondra])
         main.Dictation._fill_favorites(d, menu)
-        texts = [a.text() for a in menu.actions() if not a.isSeparator()]
+        texts = [a.text() for a in menu.actions() if not a.isSeparator() and not isinstance(a, QWidgetAction)]
         self.assertEqual(texts, ["Nová relace Claude Code ve složce", "ondra", "orbit", "Nové repo…",
                                  "Vybrat složky a barvy…"])  # by name, a folder that's gone left out
-        menu.actions()[2].trigger()  # orbit
-        self.assertEqual(d.opened, [self.orbit])
-        self.assertEqual(menu.actions()[2].data(), self.orbit)
-        self.assertTrue(menu.actions()[2].toolTip().startswith(self.orbit))
+        orbit = next(a for a in menu.actions() if a.data() == self.orbit)
+        orbit.trigger()
+        self.assertEqual(d.opened, [(self.orbit, "")])  # Claude Code's default model: no --model
+        self.assertTrue(orbit.toolTip().startswith(self.orbit))
         main.Dictation._fill_favorites(d, menu, heading=False)  # in Orbit's menu, under its own title
-        self.assertEqual(menu.actions()[0].text(), "ondra")
+        self.assertIsInstance(menu.actions()[0], QWidgetAction)  # the model first
+        self.assertEqual(menu.actions()[1].text(), "ondra")
         d = self.stub()
         main.Dictation._fill_favorites(d, menu)
         self.assertIn("Zatím tu žádná složka není", [a.text() for a in menu.actions()])
+
+    def test_the_model_for_the_new_session(self):
+        """The top of the + menu: Claude Code's default picked to start with (no --model then, the session starts
+        as one from the Explorer would), another one goes along as --model, a [1m] default stays as it is."""
+        if self.elsewhere:
+            return
+        settings = paths.claude_dir() / "settings.json"
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        self.addCleanup(settings.unlink, True)
+        settings.write_text('{"model": "opus[1m]"}', encoding="utf-8")
+        menu = QMenu()
+        d = self.stub(folders=[self.orbit])
+        main.Dictation._fill_favorites(d, menu)
+        holder = next(a for a in menu.actions() if isinstance(a, QWidgetAction))
+        picker = holder.defaultWidget()
+        self.assertEqual((picker.chosen, menu.model_choice), ("opus", "opus"))
+        picker.resize(300, picker.H)
+        segments = dict(picker._segments())
+        self.assertEqual(list(segments), ["fable", "opus", "sonnet", "haiku"])
+        self.assertIn("Výchozí", picker.tip("opus"))
+        self.assertIn("claude --model haiku", picker.tip("haiku"))
+        orbit = next(a for a in menu.actions() if a.data() == self.orbit)
+
+        def click(family):
+            at = segments[family].center()
+            picker.mousePressEvent(QMouseEvent(QEvent.MouseButtonPress, at, QPointF(picker.mapToGlobal(at.toPoint())),
+                                               Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+        click("haiku")
+        self.assertEqual(menu.model_choice, "haiku")
+        orbit.trigger()
+        click("opus")  # the default again: no --model
+        orbit.trigger()
+        click("sonnet")
+        next(a for a in menu.actions() if a.text() == "Nové repo…").trigger()
+        self.assertEqual(d.opened, [(self.orbit, "haiku"), (self.orbit, ""), ("nové repo", "sonnet")])
+        main.Dictation._fill_favorites(d, menu, keep_model=True)  # drawn again (a folder's new colour): it stays
+        self.assertEqual(menu.model_choice, "sonnet")
+        main.Dictation._fill_favorites(d, menu)  # opened again: the default
+        self.assertEqual(menu.model_choice, "opus")
+        self.assertEqual(models.alias("opus"), "opus[1m]")  # a session switched to Opus keeps the 1M of the default
 
     def test_a_right_click_asks_for_the_colour(self):
         if self.elsewhere:
@@ -140,7 +183,8 @@ class Widgets(unittest.TestCase):
         owner.popup(QPoint(10, 10))
         d = SimpleNamespace(cfg={"folder_colors": {"ondra": "pink"}}, favorites_menu=None,
                             _set_folder_color=lambda name, color: set_to.append((name, color)),
-                            _fill_favorites=lambda menu, heading=True: refilled.append((menu, heading)))
+                            _fill_favorites=lambda menu, heading=True, keep_model=False: refilled.append(
+                                (menu, heading, keep_model)))
         main.Dictation._favorite_color(d, owner, self.ondra, QPoint(20, 20))
         # over the + menu, which stays open: a popup opened in its place while Qt still handled the right click was
         # closed at once on Windows (the colours never showed; offscreen doesn't do that, so it's checked this way)
@@ -152,7 +196,8 @@ class Widgets(unittest.TestCase):
         next(a for a in actions if a.text() == "zelená").trigger()
         next(a for a in actions if a.text().startswith("Automaticky")).trigger()
         self.assertEqual(set_to, [("ondra", "green"), ("ondra", None)])
-        self.assertEqual(refilled, [(owner, True), (owner, True)])  # its dot in the new colour at once
+        # its dot in the new colour at once, the model picked in it stays
+        self.assertEqual(refilled, [(owner, True, True), (owner, True, True)])
         d._folder_menu.close()
         owner.close()
 
@@ -185,7 +230,7 @@ class Widgets(unittest.TestCase):
         with mock.patch.object(favorites, "start_session", return_value=(False, "Složka neexistuje.")) as start:
             main.Dictation._open_favorite(d, self.ondra)
             self.assertTrue(done.wait(5))
-        start.assert_called_once_with(self.ondra)
+        start.assert_called_once_with(self.ondra, model="")
         self.assertEqual(failed, [(self.ondra, "Složka neexistuje.")])
 
     def test_choosing_folders(self):
@@ -238,7 +283,7 @@ class Widgets(unittest.TestCase):
         main.Dictation._repo_created(d, self.ondra, "")
         self.assertEqual(d.cfg["favorite_folders"], [self.orbit, self.ondra])
         self.assertEqual(config.load()["favorite_folders"], [self.orbit, self.ondra])  # saved
-        self.assertEqual(d.opened, [self.ondra])
+        self.assertEqual(d.opened, [(self.ondra, "")])
         self.assertIn(self.ondra, d.favorites_dialog.folders())  # its Uložit keeps the new one
         self.assertEqual(notes, [])
         main.Dictation._repo_created(d, self.ondra, "git tu není nainstalovaný, složka je bez gitu.")

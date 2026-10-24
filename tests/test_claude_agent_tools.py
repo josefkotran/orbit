@@ -261,6 +261,27 @@ class ResumeFolder(_Starting):
         agent_tools.open_folder(OTHER)
         self.assertNotIn("--resume", self.popen.call_args.args[0])
 
+    def test_the_model_picked(self):
+        """--model only as a variable cmd expands after parsing the line, only one of Orbit's aliases; none = no
+        --model at all (Claude Code's default, or with --resume the model the session ran on)."""
+        agent_tools.open_folder(OTHER)
+        self.assertNotIn("--model", self.popen.call_args.args[0])
+        self.assertEqual(self.popen.call_args.kwargs["env"]["ORBIT_MODEL"], "")
+        agent_tools.open_folder(OTHER, "sonnet")
+        line, env = self.popen.call_args.args[0], self.popen.call_args.kwargs["env"]
+        self.assertIn('--model "!ORBIT_MODEL!"', line)
+        self.assertNotIn("sonnet", line)
+        self.assertEqual(env["ORBIT_MODEL"], "sonnet")
+        agent_tools.resume_folder(OTHER, self.ID, "opus[1m]")
+        line, env = self.popen.call_args.args[0], self.popen.call_args.kwargs["env"]
+        self.assertIn('--resume "!ORBIT_RESUME!" --model "!ORBIT_MODEL!"', line)
+        self.assertEqual((env["ORBIT_RESUME"], env["ORBIT_MODEL"]), (self.ID, "opus[1m]"))
+        calls = self.popen.call_count
+        for model in ("gpt-4", "haiku & calc", '"sonnet"', "--dangerously-skip-permissions", "claude-opus-5-5"):
+            with self.assertRaises(ValueError, msg=model):
+                agent_tools.open_folder(OTHER, model)
+        self.assertEqual(self.popen.call_count, calls)
+
     def test_refused(self):
         for session_id in ("", "1f433bb8", f"{self.ID} & calc", f'{self.ID}"', self.ID.upper() + "x"):
             with self.assertRaises(ValueError, msg=session_id):

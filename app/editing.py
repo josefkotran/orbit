@@ -244,6 +244,19 @@ class Trail:
     def input_seen(self, now: float | None = None) -> None:
         self.last_input = time.monotonic() if now is None else now
 
+    def space_seen(self, now: float | None = None) -> None:
+        """The user typed a plain Space (hotkey.PushToTalk.on_space): right after Orbit's last text it only puts " "
+        after it, so the trail goes on with that space as part of the text (Pepa has the trailing space off and types
+        it between dictations: as any other key it would have ended every check's fix, "Smaž to" too). Anywhere
+        else it's input like any other key."""
+        now = time.monotonic() if now is None else now
+        top = self.items[-1] if self.items else None
+        if top is None or self.last_input > top.at or top.selected:
+            self.input_seen(now)
+            return
+        top.text += " "
+        top.at = now
+
     def check(self, window: int, same_window) -> tuple[Typed | None, str]:
         """(the newest typed text, "") while it's safe to act on: the same window in front and no input since.
         Else (None, why): "empty" (nothing typed, or sent with Enter), "input" (a key or click since: the trail is

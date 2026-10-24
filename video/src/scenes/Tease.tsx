@@ -4,7 +4,7 @@ import { KIN, Kinetic } from "../components/Kinetic";
 import { EASE_IN, EXPO_OUT, prog } from "../lib/anim";
 import { bar, DROP } from "../lib/time";
 
-export const TEASE_START = bar(14);
+export const TEASE_START = bar(18);
 
 /** "A když pracuješ s Claude Code…" while the stars start to streak; it rushes past the camera on the drop. */
 export const Tease: React.FC = () => {
@@ -23,7 +23,7 @@ export const Tease: React.FC = () => {
     >
       <div style={{ textAlign: "center", marginTop: -40 }}>
         <Kinetic lines={["A když pracuješ"]} at={TEASE_START} stagger={2} cfg={KIN.hero} size={118} align="center" />
-        <Kinetic lines={["s Claude Code…"]} at={bar(15)} stagger={2} cfg={KIN.hero} size={118} align="center" style={{ marginTop: 6 }} />
+        <Kinetic lines={["s Claude Code…"]} at={bar(19)} stagger={2} cfg={KIN.hero} size={118} align="center" style={{ marginTop: 6 }} />
       </div>
     </AbsoluteFill>
   );

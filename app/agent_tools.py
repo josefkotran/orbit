@@ -29,7 +29,7 @@ from urllib.parse import urlsplit
 # a program by its bare name (claude, cmd) never from the current folder, whatever folder this was started in
 os.environ.setdefault("NoDefaultCurrentDirectoryInExePath", "1")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from app import browser, paths, sessions  # noqa: E402
+from app import browser, models, paths, sessions  # noqa: E402
 from app.agent import is_screenshot, known_folder, prefix  # noqa: E402
 from app.claude_setup import environment, find_exe  # noqa: E402
 
@@ -244,26 +244,27 @@ def open_session(folder: str, prompt: str = "", screenshot: str = "", source: st
     return f"Nová relace se otevírá ve složce {path} v novém okně terminálu."
 
 
-def open_folder(folder: str) -> str:
+def open_folder(folder: str, model: str = "") -> str:
     """A new session without a task in a folder the user picked (Orbit's favourite folders, the + above the panel:
     favorites.py), in a window of its own like their sessions, brought to the front. Any local folder, not only
-    known_folder: the user chose it with their own click, the agent never gets here. Not an MCP tool."""
+    known_folder: the user chose it with their own click, the agent never gets here. Not an MCP tool. model: the
+    one picked under the + (an alias, models.launch_model), "" = Claude Code's default."""
     path = _local_folder(folder)
-    proc, _ = _launch(path)
+    proc, _ = _launch(path, model=model)
     _bring_up(proc.pid)
-    return f"Nová relace se otevírá ve složce {path}."
+    return f"Nová relace se otevírá ve složce {path}" + (f" s modelem {models.label(model)}." if model else ".")
 
 
-def resume_folder(folder: str, session_id: str) -> str:
+def resume_folder(folder: str, session_id: str, model: str = "") -> str:
     """A past session going on in its folder (Orbit's session history, the clock above the panel: pastsessions.py):
     claude --resume <id> in a window of its own like the user's sessions, brought to the front. Like open_folder no
-    MCP tool, the user picked it."""
+    MCP tool, the user picked it. model: "" = the one it ran on (Claude Code brings it back when resuming)."""
     if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", session_id):
         raise ValueError("Neplatné číslo relace.")
     path = _local_folder(folder)
-    proc, _ = _launch(path, resume=session_id)
+    proc, _ = _launch(path, resume=session_id, model=model)
     _bring_up(proc.pid)
-    return f"Relace pokračuje ve složce {path}."
+    return f"Relace pokračuje ve složce {path}" + (f" s modelem {models.label(model)}." if model else ".")
 
 
 def _local_folder(folder: str) -> Path:
@@ -294,9 +295,13 @@ def _bring_up(pid: int) -> None:
         time.sleep(0.05)
 
 
-def _launch(path: Path, task: str = "", task_id: str = "", resume: str = "") -> tuple[subprocess.Popen, bool]:
+def _launch(path: Path, task: str = "", task_id: str = "", resume: str = "",
+            model: str = "") -> tuple[subprocess.Popen, bool]:
     """Starts Claude Code in path (task: its first message, "" = none; resume: the id of a past session that goes on,
-    claude --resume): (cmd.exe's process, whether it runs minimized in the background)."""
+    claude --resume; model: an alias for --model, "" = Claude Code's default): (cmd.exe's process, whether it runs
+    minimized in the background)."""
+    if model and not models.is_alias(model):
+        raise ValueError(f"Model {model} neznám.")
     exe = find_exe()
     if not exe:
         raise ValueError("Claude Code tu není nainstalovaný.")
@@ -306,14 +311,15 @@ def _launch(path: Path, task: str = "", task_id: str = "", resume: str = "") -> 
     # parsed the line (/v:on, !ORBIT_…!), so nothing in them – & | > ^ % – can run as a command. /s: cmd drops just
     # the outer quotes. The folder is the working directory, not part of the line.
     command = '"!ORBIT_CLAUDE!"' + (" --dangerously-skip-permissions" if bypass else "") + \
-        (' --resume "!ORBIT_RESUME!"' if resume else "") + (' "!ORBIT_TASK!"' if task else "")
+        (' --resume "!ORBIT_RESUME!"' if resume else "") + (' --model "!ORBIT_MODEL!"' if model else "") + \
+        (' "!ORBIT_TASK!"' if task else "")
     # With a task it works in the background: on the taskbar, minimized as soon as its window shows (_minimize). Not
     # when Claude Code will first ask whether running without permission prompts is all right: that must be seen.
     background = bool(task) and (not bypass or sessions.bypass_prompt_skipped())
     # Started normally, so it gets the same window as the user's own sessions (Windows Terminal, when that's the
     # default terminal); a console started minimized Windows never hands over and keeps it in the classic window.
     focused = ctypes.windll.user32.GetForegroundWindow() if background else None
-    env = dict(_user_environment(), ORBIT_CLAUDE=exe, ORBIT_TASK=task, ORBIT_RESUME=resume)
+    env = dict(_user_environment(), ORBIT_CLAUDE=exe, ORBIT_TASK=task, ORBIT_RESUME=resume, ORBIT_MODEL=model)
     if task_id:
         env.update(ORBIT_TASK_ID=task_id, ORBIT_TASK_DATA=str(paths.data_dir()))
     proc = subprocess.Popen(f'cmd.exe /s /v:on /k "{command}"', executable=CMD, cwd=path, env=env, close_fds=True,

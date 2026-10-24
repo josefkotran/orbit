@@ -12,6 +12,8 @@
   var finePointer = window.matchMedia("(pointer: fine)").matches;
   var canHover = window.matchMedia("(hover: hover)").matches;
   if (reduce) html.classList.add("reduce");
+  // the preloader (inline under <body>) still covers the page: the intro waits for its veil to open
+  var pl = window.OrbitPreloader && window.OrbitPreloader.active ? window.OrbitPreloader : null;
   var $ = function (s, r) { return (r || document).querySelector(s); };
   var $$ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
   var clamp = function (v, a, b) { return v < a ? a : v > b ? b : v; };
@@ -57,6 +59,7 @@
     lenis.on("scroll", ScrollTrigger.update);
     gsap.ticker.add(function (time) { lenis.raf(time * 1000); });
     gsap.ticker.lagSmoothing(0);
+    if (pl) { lenis.stop(); pl.onDone(function () { lenis.start(); }); }  // until the logo has landed in the nav
   }
   $$('a[href^="#"]').forEach(function (a) {
     a.addEventListener("click", function (e) {
@@ -99,7 +102,7 @@
   document.addEventListener("touchstart", function () { navHold = 0; }, { passive: true });  // a touch listener also lets iOS Safari show :active
 
   /* ---------- star field: stars fly towards you, faster when you scroll, warp over the main button ---------- */
-  var space = { cv: $("#space"), stars: [], w: 0, h: 0, fh: 0, area: 0, dpr: 1, cam: [0, 0], warp: 0, warpTo: 0, intro: reduce ? 0 : 1, flash: 0,
+  var space = { cv: $("#space"), stars: [], w: 0, h: 0, fh: 0, area: 0, dpr: 1, cam: [0, 0], warp: 0, warpTo: 0, intro: reduce || pl ? 0 : 1, flash: 0,
     trail: reduce ? 0 : 0.24, hoverT: 0, q: [], qn: new Int32Array(100), cols: [], tintOf: null, lws: [0.7, 1.3, 2.2, 4] };
   space.ctx = space.cv.getContext("2d");
   for (var qi = 0; qi < 100; qi++) space.q.push([]);
@@ -312,7 +315,8 @@
     kinetics.push(k);
   });
   function apply(c) {  // the axes are always real values; the reveal is only opacity, rise and blur
-    c.el.style.fontVariationSettings = '"wdth" ' + clamp(c.cur[0], 50, 150).toFixed(1) + ', "wght" ' + clamp(c.cur[1], 100, 900).toFixed(0);
+    var fv = '"wdth" ' + clamp(c.cur[0], 50, 150).toFixed(1) + ', "wght" ' + clamp(c.cur[1], 100, 900).toFixed(0);
+    if (fv !== c.fv) { c.fv = fv; c.el.style.fontVariationSettings = fv; }
     var a = c.a;
     if (a < 1) {
       c.el.style.opacity = a.toFixed(3);
@@ -349,6 +353,9 @@
       }
       for (i = 0; i < chars.length; i++) {
         var c = chars[i], tw = cfg.base[0], tg = cfg.base[1];
+        // still assembling: the axes hold still under the blur (a blurred glyph that changes shape repaints every
+        // frame, the costliest paint on the page, and with the preloader's reveal it dropped frames); breathing starts after
+        if (c.a < 1) { apply(c); continue; }
         var wave = Math.sin(t * 0.0016 - c.i * 0.55);
         tw += cfg.wave[0] * wave; tg += cfg.wave[1] * wave;
         if (ptr.seen && ptr.mouse) {
@@ -380,13 +387,19 @@
   }
   if (document.fonts && document.fonts.load) document.fonts.load(HERO_FONT, HERO_TEXT).then(placeHeroSide, placeHeroSide);
 
-  /* ---------- page load: arrive out of hyperspace, the headline assembles ---------- */
+  /* ---------- page load: arrive out of hyperspace, the headline assembles. Behind the preloader all of it waits for
+     the veil to open, and the nav's items drop in while its logo flies there ---------- */
   var heroK = kinetics.filter(function (k) { return k.cfg === KIN.hero; })[0];
-  if (heroK) { heroK.visible = true; showKinetic(heroK, reduce ? 0 : 0.3); }
+  if (heroK) heroK.visible = true;
+  function arrive() {
+    if (heroK) showKinetic(heroK, reduce ? 0 : pl ? 0.18 : 0.3);
+    if (!reduce) gsap.to(".hero .rv", { opacity: 1, y: 0, duration: 1.2, ease: "expo.out", stagger: 0.1, delay: pl ? 0.6 : 0.85, clearProps: "willChange" });
+  }
   if (reduce) gsap.set(".rv", { opacity: 1, y: 0 });
   else {
     gsap.set(".rv", { opacity: 0, y: 30 });
-    gsap.to(".hero .rv", { opacity: 1, y: 0, duration: 1.2, ease: "expo.out", stagger: 0.1, delay: 0.85 });
+    // own layers while they fade in: the button's wide shadow repainted every frame dropped frames (most under the preloader)
+    gsap.set(".hero .rv", { willChange: "transform, opacity" });
     ScrollTrigger.batch(".rv:not(.hero .rv)", {
       start: "top 90%", once: true,
       onEnter: function (els) {
@@ -402,6 +415,17 @@
       gsap.to(rv, { opacity: 1, y: 0, duration: 0.4, overwrite: true });
     });
   }
+  if (pl) {
+    // under the veil at 0.001, not 0: fully transparent content isn't painted, its first paint then costs a frame mid-reveal
+    var navItems = $$(".nav .wrap > :not(.brand)");
+    gsap.set(navItems, { opacity: 0.001, y: -14 });
+    gsap.set(".hero .rv", { opacity: 0.001 });
+    pl.onReveal(function () {
+      space.intro = 1;  // out of hyperspace, through the opening veil
+      arrive();
+      gsap.to(navItems, { opacity: 1, y: 0, duration: 1, ease: "expo.out", stagger: 0.07, delay: 0.7 });
+    });
+  } else arrive();
 
   /* ---------- nav: background once scrolled, hides going down, comes back going up; the logo's moon orbits ---------- */
   var nav = $("#nav"), moonF = $("#moonFront"), moonB = $("#moonBack"), navY = -1, navDir = 0, moonXY = "", moonSide = null;
@@ -498,10 +522,10 @@
   var video = $("#heroVideo"), soundBtn = $("#soundBtn"), pauseBtn = $("#pauseBtn");
   if (video && soundBtn && pauseBtn) {
     var still = reduce || !!(navigator.connection && navigator.connection.saveData);
-    var want = false, userPaused = false, shown = 0, failed = false, finished = false;
+    var want = false, userPaused = false, shown = 0, failed = false, finished = false, held = !!pl;  // held: under the preloader
     var play = function () { var p = video.play(); if (p && p.catch) p.catch(function () {}); };
     var autoplay = function () {
-      if (failed || still || userPaused || !video.muted || shown < 0.35) return;
+      if (held || failed || still || userPaused || !video.muted || shown < 0.35) return;
       want = true; play();
     };
     var fail = function () {  // neither file plays: the poster stays, the buttons that would do nothing go
@@ -548,11 +572,13 @@
     });
 
     /* the download button drawn at the end of the video can't be clicked: a real one flies in from above, lands
-       exactly on it and floats there while that scene is on (65.2–74.9 s); after a full play-through it stays */
-    var cta = $("#stageCta"), ctaRing = $("#ctaRing"), ctaOn = false, CTA_IN = 64.15, CTA_OUT = 74.8, END_FRAME = 70;
+       exactly on it and floats there while that scene is on (104.2–113.9 s, video/src/scenes/Outro.tsx a bar after
+       the drums stop, bar 53; until 24 Oct 2026 the video was a phrase shorter and it was 88.6–98.3 s);
+       after a full play-through it stays */
+    var cta = $("#stageCta"), ctaRing = $("#ctaRing"), ctaOn = false, CTA_IN = 103.18, CTA_OUT = 113.86, END_FRAME = 109.03;
     gsap.set(cta, { xPercent: -50, yPercent: -50 });
-    // the drawn one springs in at 65.3–65.7 s, up to 10 % past its size: this one swells with it, on the video's clock
-    var ctaBtns = $$(".cta-btn", cta), popS = 1, POP = [[65.33, 1], [65.4, 1.06], [65.43, 1.08], [65.53, 1.08], [65.6, 1.06], [65.7, 1]];
+    // the drawn one springs in at 104.4–104.7 s, up to 10 % past its size: this one swells with it, on the video's clock
+    var ctaBtns = $$(".cta-btn", cta), popS = 1, POP = [[104.36, 1], [104.43, 1.06], [104.46, 1.08], [104.56, 1.08], [104.63, 1.06], [104.73, 1]];
     var pop = function () {
       var t = video.currentTime, s = 1;
       for (var i = 1; i < POP.length; i++) if (t >= POP[i - 1][0] && t < POP[i][0]) s = lerp(POP[i - 1][1], POP[i][1], (t - POP[i - 1][0]) / (POP[i][0] - POP[i - 1][0]));
@@ -597,6 +623,7 @@
       shown = e.isIntersecting ? e.intersectionRatio : 0;
       if (!e.isIntersecting) { want = false; video.pause(); } else autoplay();
     }, { threshold: [0, 0.35] }).observe(video);
+    if (pl) pl.onReveal(function () { held = false; autoplay(); });  // from its first frame, as the veil opens
   }
 
   /* ---------- spoken commands: the marquee, pushed by the scroll; hover a command (or pick a chip) to see what it does ---------- */
@@ -880,7 +907,7 @@
     target: $("#fTarget"), tName: $("#fTName"), tFolder: $("#fTFolder"), tStatus: $("#fTStatus"), msg: $("#fMsg"), url: $("#fUrl"),
     bubble: $("#bubble"), bIcon: $("#bIcon"), bTitle: $("#bTitle"), bNote: $("#bNote"), bText: $("#bText"), speaker: $("#wSpeaker"),
     slot: $(".w-slot"), widget: $("#widget"), ver: $("#wVer"), verText: $("#wVerText"), verBtn: $("#wVerBtn"), fold: $("#wFold"),
-    icon: $("#wIcon")
+    icon: $("#wIcon"), mic: $(".w-buttons .mic"), chip: $("#wChip"), chipText: $("#wChipText")
   };
   // Claude Code's version under the panel, as Orbit shows it: the newest, a newer one with Aktualizovat, updating
   function version(state, v) {
@@ -890,9 +917,278 @@
     W.verBtn.hidden = state !== "new";
     W.verBtn.classList.remove("press");
   }
-  function fold(on) {  // folded into Orbit's icon where the mic is
-    W.widget.classList.toggle("folded", on);
+  // folded into Orbit's icon where the mic is; animate: with the app's own animation (a click in the scene)
+  function fold(on, animate) {
+    endFx(on);
+    var was = W.widget.classList.contains("folded");
+    if (animate && !reduce && on !== was && !W.widget.classList.contains("off")) startFx(on);
+    else W.widget.classList.toggle("folded", on);
     W.fold.classList.remove("press"); W.icon.classList.remove("press");
+  }
+
+  /* The fold animation, the app's own (app/foldfx.py: the same curves, times and order of the pieces). Folding, the
+     panel breathes in and swirls into the planet like into a black hole, its stars spiral in after it and the icon
+     pops out with its moon whipping round; unfolding, the icon swells with its moon speeding round, bursts, and the
+     panel unwinds out of it while its stars fly to their places and a wave of light runs over it. The real parts
+     switch at once and wait hidden; copies of them turn on a layer of their own (three more, fainter, for the blur
+     of where they just were) and a canvas over them draws the rest. The app's lengths are scaled to this mic (52 px
+     there). Layout is read once, when it starts; each frame only writes transforms and paints the canvas. */
+  var FOLD_MS = 800, UNFOLD_MS = 740, FX_PAD = 64, FX_STARS = 56, PANEL_END = 0.68;
+  var MOON_REST = Math.atan2(2.7 / 4.2, 9 / 11.8), TAU = Math.PI * 2, WHITE = [255, 255, 255];
+  var c01 = function (t) { return t < 0 ? 0 : t > 1 ? 1 : t; };
+  var smooth = function (a, b, t) { t = c01((t - a) / (b - a)); return t * t * (3 - 2 * t); };
+  var outCubic = function (t) { return 1 - Math.pow(1 - t, 3); };
+  var inBack = function (t, k) { return (k + 1) * t * t * t - k * t * t; };  // back a little first, then in
+  var outBack = function (t, k) { t -= 1; return 1 + (k + 1) * t * t * t + k * t * t; };  // past the end, then back
+  // the panel's size and turn (degrees, clockwise): folding a breath in (+4 %), then faster and faster into the
+  // planet; unfolding out of it, a little past its size and back, unwinding
+  var foldPose = function (a) { a = c01(a); return [Math.max(0.015, 1 - 0.985 * inBack(a, 1)), 80 * a * a * a]; };
+  var unfoldPose = function (g) { g = c01(g); return [0.03 + 0.97 * outBack(g, 1.25), -40 * (1 - outCubic(g))]; };
+  var mixRgb = function (a, b, t) { return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)]; };
+  var rgba = function (c, a) { return "rgba(" + Math.round(c[0]) + "," + Math.round(c[1]) + "," + Math.round(c[2]) + "," + clamp(a, 0, 1).toFixed(3) + ")"; };
+  var fx = null;  // the one playing
+
+  function inShape(sh, x, y) {  // a rounded rect (a circle is one too)
+    var dx = Math.max(Math.abs(x - sh.x - sh.w / 2) - (sh.w / 2 - sh.r), 0), dy = Math.max(Math.abs(y - sh.y - sh.h / 2) - (sh.h / 2 - sh.r), 0);
+    return dx * dx + dy * dy <= sh.r * sh.r;
+  }
+  function shapePath(ctx, sh) {
+    var r = Math.min(sh.r, sh.w / 2, sh.h / 2), x = sh.x, y = sh.y, w = sh.w, h = sh.h;
+    ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+  }
+
+  function startFx(folding) {
+    var wg = W.widget, iconInk = getComputedStyle(W.icon).getPropertyValue("--ink").trim() || "#0B1020";
+    if (!folding) {  // the real parts as they are about to be (unfolded, at once), hidden until it's over
+      wg.classList.add("no-tr", "fx", "fx-quiet");
+      wg.classList.remove("folded");
+      void wg.offsetWidth;
+      wg.classList.remove("no-tr");
+    }
+    var wr = wg.getBoundingClientRect(), z = wr.width / wg.offsetWidth || 1;  // the narrow layout zooms the widget
+    var loc = function (el) { var r = el.getBoundingClientRect(); return { x: (r.left - wr.left) / z, y: (r.top - wr.top) / z, w: r.width / z, h: r.height / z }; };
+    var parts = Array.prototype.filter.call(wg.children, function (el) { return /\bw-(strip|panel|ver|foot)\b/.test(el.className); });
+    var mic = $(".w-buttons .mic", wg), m = loc(mic), c = { x: m.x + m.w / 2, y: m.y + m.h / 2 }, k = m.w / 52, iconR = m.w * 22 / 52;
+    // the picture's shapes: where its stars start (not on the mic), what the light wave lights up
+    var shapes = [];
+    $$(".w-strip > *", wg).forEach(function (el) { var b = loc(el); b.r = b.h / 2; shapes.push(b); });
+    var panel = loc(W.panel); panel.r = 14; shapes.push(panel);
+    var ver = loc(W.ver); ver.r = ver.h / 2; shapes.push(ver);
+    [W.speaker, mic].forEach(function (el) { var b = loc(el); b.r = b.w / 2; shapes.push(b); });
+    shapes = shapes.filter(function (sh) { return sh.w > 0 && sh.h > 0; });
+    var box = shapes.reduce(function (b, sh) {
+      return { l: Math.min(b.l, sh.x), t: Math.min(b.t, sh.y), r: Math.max(b.r, sh.x + sh.w), b: Math.max(b.b, sh.y + sh.h) };
+    }, { l: c.x, t: c.y, r: c.x, b: c.y });
+    var far = Math.max(Math.hypot(box.l - c.x, box.t - c.y), Math.hypot(box.r - c.x, box.t - c.y), Math.hypot(box.l - c.x, box.b - c.y), Math.hypot(box.r - c.x, box.b - c.y));
+
+    // the copies: the parts laid out just like the real ones (the same padding, the same width), without ids
+    var layer = document.createElement("div"), cs = getComputedStyle(wg), groups = [];
+    layer.className = "w-fx";
+    layer.setAttribute("aria-hidden", "true");  // copies: the real panel is the one to read
+    for (var i = 0; i < 4; i++) {
+      var g = document.createElement("div");
+      g.style.padding = cs.paddingTop + " " + cs.paddingRight + " " + cs.paddingBottom + " " + cs.paddingLeft;
+      g.style.transformOrigin = c.x.toFixed(2) + "px " + c.y.toFixed(2) + "px";
+      parts.forEach(function (el) {
+        var copy = el.cloneNode(true);
+        $$(".w-slot, .w-icon", copy).forEach(function (n) { n.remove(); });
+        copy.removeAttribute("id"); $$("[id]", copy).forEach(function (n) { n.removeAttribute("id"); });
+        g.appendChild(copy);
+      });
+      layer.appendChild(g); groups.push(g);
+    }
+    var P = FX_PAD * k, lw = wr.width / z, lh = wr.height / z, dpr = (window.devicePixelRatio || 1) * z;
+    var cv = document.createElement("canvas");
+    cv.style.left = cv.style.top = -P + "px";
+    cv.style.width = lw + 2 * P + "px"; cv.style.height = lh + 2 * P + "px";
+    cv.width = Math.round((lw + 2 * P) * dpr); cv.height = Math.round((lh + 2 * P) * dpr);
+    layer.appendChild(cv);
+    var ctx = cv.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, P * dpr, P * dpr);  // draws in the widget's own px
+
+    // its stars, on the picture's opaque parts; the same every time it plays
+    var rand = rng(folding ? 1611 : 1612), col = accent.slice(), soft = mixRgb(col, WHITE, 0.5), stars = [];
+    for (var n = 0; n < FX_STARS * 25 && stars.length < FX_STARS; n++) {
+      var x = lerp(box.l, box.r, rand()), y = lerp(box.t, box.b, rand());
+      if (!shapes.some(function (sh) { return inShape(sh, x, y); })) continue;
+      var dx = x - c.x, dy = y - c.y;
+      if (Math.hypot(dx, dy) < iconR + 8 * k) continue;
+      var start = folding ? lerp(0.04, 0.46, rand()) : lerp(0.28, 0.42, rand()), length = folding ? lerp(0.28, 0.42, rand()) : lerp(0.34, 0.5, rand());
+      var pick = rand();
+      stars.push({ r: Math.hypot(dx, dy), th: Math.atan2(dy, dx), start: start, length: length, spin: lerp(0.45, 0.95, rand()),
+                   size: lerp(1.6, 3, rand()) * k, color: pick < 0.18 ? WHITE : pick < 0.45 ? soft : col });
+    }
+    if (folding) wg.classList.add("fx", "fx-quiet");
+    wg.appendChild(layer);
+    fx = { folding: folding, t0: performance.now(), ms: folding ? FOLD_MS : UNFOLD_MS, layer: layer, groups: groups, ctx: ctx,
+           c: c, k: k, iconR: iconR, P: P, lw: lw, lh: lh, shapes: shapes, far: far, stars: stars, accent: col, vw: innerWidth,
+           ink: folding ? getComputedStyle(wg).getPropertyValue("--ink").trim() || "#0B1020" : iconInk };
+    fxFrame(fx, 0);  // its first frame is what was there
+    gsap.ticker.add(fxTick);
+  }
+
+  function fxTick() {
+    var f = fx;
+    if (!f) return;
+    if (W.widget.classList.contains("off") || document.hidden) { endFx(f.folding); return; }  // out of sight: just the end
+    var u = Math.min(1, (performance.now() - f.t0) / f.ms);
+    if (u >= 1) endFx(f.folding);  // its last frame is what the widget shows now
+    else fxFrame(f, u);
+  }
+
+  // over (folded: whether the widget is folded now): the real parts back, all at once
+  function endFx(folded) {
+    var f = fx;
+    if (!f) return;
+    fx = null;
+    gsap.ticker.remove(fxTick);
+    var wg = W.widget;
+    wg.classList.add("no-tr");
+    wg.classList.toggle("folded", folded);
+    wg.classList.remove("fx", "fx-quiet");  // (unfolded, the caption fades back in)
+    f.layer.remove();
+    void wg.offsetWidth;
+    wg.classList.remove("no-tr");
+  }
+
+  function fxFrame(f, u) {
+    var ctx = f.ctx, poses = [null, null, null, null];  // [size, turn, opacity]: the three blurs, then the panel
+    ctx.clearRect(-f.P, -f.P, f.lw + 2 * f.P, f.lh + 2 * f.P);
+    if (f.folding) {
+      var a = u / PANEL_END;
+      if (a < 1) {
+        var fade = 1 - smooth(0.62, 1, a);
+        if (a > 0.4) [[0.045, 0.12], [0.03, 0.2], [0.015, 0.32]].forEach(function (l, i) { poses[i] = foldPose(a - l[0]).concat(fade * l[1]); });
+        poses[3] = foldPose(a).concat(fade);
+      }
+    } else {
+      var grow = u < 1 ? c01((u - 0.3) / 0.66) : 1;
+      if (grow >= 1) poses[3] = [1, 0, 1];
+      else if (grow > 0) {
+        var alpha = smooth(0, 0.28, grow);
+        if (grow < 0.5) [[0.06, 0.1], [0.04, 0.18], [0.02, 0.3]].forEach(function (l, i) { if (grow > l[0]) poses[i] = unfoldPose(grow - l[0]).concat(alpha * l[1]); });
+        poses[3] = unfoldPose(grow).concat(alpha);
+      }
+    }
+    f.groups.forEach(function (g, i) {  // (not shown = almost transparent, never hidden: they stay drawn at full size)
+      var p = poses[i], on = !!p && p[2] > 0.004 && p[0] > 0.01;
+      if (on) { g.style.transform = "rotate(" + p[1].toFixed(3) + "deg) scale(" + p[0].toFixed(4) + ")"; g.style.opacity = p[2].toFixed(3); }
+      else if (g.on !== false) g.style.opacity = "0.001";
+      g.on = on;
+    });
+    var r = f.iconR;
+    if (f.folding) {
+      fxGlow(f, smooth(0.3, 0.62, u) * (1 - smooth(0.64, 0.96, u)), r * (0.8 + 1.2 * smooth(0.3, 0.7, u)));
+      fxStars(f, u);
+      // the icon pops out, turning into place, its moon whipping round
+      var b = c01((u - 0.55) / 0.45);
+      if (b > 0) { var turn = outCubic(b); fxIcon(f, Math.min(1, b * 5), outBack(b, 2.6), -150 * (1 - turn), MOON_REST - 2 * TAU * (1 - turn)); }
+      [[0.62, 34, 3.2], [0.72, 20, 1.6]].forEach(function (w) {
+        var t = c01((u - w[0]) / (1 - w[0]));
+        if (t > 0 && t < 1) fxRing(f, r + w[1] * f.k * outCubic(t), (w[2] * (1 - t) + 0.6) * f.k, 0.9 * Math.pow(1 - t, 1.6));
+      });
+    } else {
+      fxShimmer(f, c01((u - 0.5) / 0.5), poses[3]);
+      fxGlow(f, smooth(0.04, 0.3, u) * (1 - smooth(0.32, 0.62, u)), r * (1 + 1.6 * smooth(0.1, 0.4, u)));
+      var h = c01(u / 0.34);  // the icon swells, its moon speeding round, then bursts
+      if (h < 1) fxIcon(f, 1, h < 0.62 ? 1 + 0.16 * outCubic(h / 0.62) : 1.16 * (1 - inBack((h - 0.62) / 0.38, 1.2)), 110 * h * h * h, h === 0 ? null : MOON_REST + 1.5 * TAU * h * h);
+      [[0.3, 70, 3.4], [0.37, 46, 1.8]].forEach(function (w) {
+        var t = c01((u - w[0]) / 0.5);
+        if (t > 0 && t < 1) fxRing(f, r * 0.8 + w[1] * f.k * outCubic(t), (w[2] * (1 - t) + 0.5) * f.k, 0.9 * Math.pow(1 - t, 1.5));
+      });
+      fxStars(f, u);
+    }
+  }
+
+  function fxGlow(f, strength, radius) {  // a white-hot core in the accent's glow at the icon's centre
+    if (strength <= 0.01) return;
+    var ctx = f.ctx, g = ctx.createRadialGradient(f.c.x, f.c.y, 0, f.c.x, f.c.y, radius);
+    g.addColorStop(0, rgba(WHITE, 0.95 * strength)); g.addColorStop(0.22, rgba(f.accent, 0.55 * strength)); g.addColorStop(1, rgba(f.accent, 0));
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(f.c.x, f.c.y, radius, 0, TAU); ctx.fill();
+  }
+
+  function fxRing(f, radius, width, alpha) {  // a shock wave
+    if (alpha <= 0.01) return;
+    var ctx = f.ctx;
+    ctx.strokeStyle = rgba(mixRgb(f.accent, WHITE, 0.35), alpha); ctx.lineWidth = width;
+    ctx.beginPath(); ctx.arc(f.c.x, f.c.y, radius, 0, TAU); ctx.stroke();
+  }
+
+  function fxStars(f, u) {
+    var ctx = f.ctx, c = f.c;
+    ctx.lineCap = "round";
+    f.stars.forEach(function (s) {
+      var q = (u - s.start) / s.length;
+      if (!(q > 0 && q < 1)) return;
+      var alpha, size, at = function (q) {
+        var r, th, e;
+        if (f.folding) {  // off the panel where it had carried it, round and round into the planet, faster near it
+          var pose = foldPose(s.start / PANEL_END);
+          e = Math.pow(q, 2.2); r = s.r * pose[0] * (1 - e); th = s.th + pose[1] * Math.PI / 180 + s.spin * e / (1 - 0.7 * e);
+        } else {  // out of the planet fast, unwinding, slowing down onto its place
+          e = 1 - Math.pow(1 - q, 2.6); r = s.r * e; th = s.th - s.spin * (1 - e) / (1 - 0.7 * (1 - e));
+        }
+        return [c.x + r * Math.cos(th), c.y + r * Math.sin(th)];
+      };
+      if (f.folding) { alpha = Math.min(1, q / 0.12) * (1 - smooth(0.82, 1, q)); size = s.size * (1 - 0.45 * q); }
+      else { alpha = Math.min(1, q / 0.08) * (1 - smooth(0.65, 1, q)); size = s.size; }
+      if (alpha <= 0.01) return;
+      var head = at(q), tail = at(Math.max(0, q - 0.08)), trail = ctx.createLinearGradient(tail[0], tail[1], head[0], head[1]);
+      trail.addColorStop(0, rgba(s.color, 0)); trail.addColorStop(1, rgba(s.color, alpha * 0.7));
+      ctx.strokeStyle = trail; ctx.lineWidth = size;
+      ctx.beginPath(); ctx.moveTo(tail[0], tail[1]); ctx.lineTo(head[0], head[1]); ctx.stroke();
+      ctx.fillStyle = rgba(s.color, alpha);
+      ctx.beginPath(); ctx.arc(head[0], head[1], size * 0.8, 0, TAU); ctx.fill();
+    });
+  }
+
+  // unfolding: a wave of light over the panel from the mic outwards (it loads), only on the panel and its parts
+  function fxShimmer(f, s, pose) {
+    if (!(s > 0 && s < 1) || !pose) return;
+    var ctx = f.ctx, c = f.c, band = 54 * f.k, rho = band * 0.5 + (f.far + band) * outCubic(s), outer = rho + band;
+    var light = mixRgb(f.accent, WHITE, 0.6), g = ctx.createRadialGradient(c.x, c.y, 0, c.x, c.y, outer);
+    g.addColorStop(Math.max(0, (rho - band) / outer), rgba(light, 0)); g.addColorStop(rho / outer, rgba(light, 0.3 * Math.pow(Math.sin(Math.PI * s), 0.6)));
+    g.addColorStop(1, rgba(light, 0));
+    ctx.save();
+    ctx.translate(c.x, c.y); ctx.rotate(pose[1] * Math.PI / 180); ctx.scale(pose[0], pose[0]); ctx.translate(-c.x, -c.y);
+    ctx.beginPath();
+    f.shapes.forEach(function (sh) { shapePath(ctx, sh); });
+    ctx.restore();  // the path keeps the panel's pose, the light doesn't turn with it
+    ctx.save(); ctx.clip(); ctx.fillStyle = g; ctx.fillRect(c.x - outer, c.y - outer, 2 * outer, 2 * outer); ctx.restore();
+  }
+
+  /* Orbit's icon as the app paints it (ui.py _paint_icon, the favicon in 32 units): bigger or smaller (scale), turned
+     (spin, degrees clockwise) and its moon elsewhere on its orbit (radians clockwise from the orbit's right end, behind
+     the planet on the far side, a touch smaller there; null = where it sits, exactly the static icon) */
+  function fxIcon(f, opacity, scale, spin, moon) {
+    if (opacity <= 0.01 || scale <= 0.02) return;
+    var ctx = f.ctx, c = f.c, r = f.iconR * scale, s = 2 * r / 32, light = "#EEF2FA", ink = f.ink;
+    var mx, my, mr, behind = false;
+    if (moon === null || moon === undefined) { mx = 9 * s; my = 2.7 * s; mr = 2 * s; }
+    else {
+      mx = 11.8 * Math.cos(moon) * s; my = 4.2 * Math.sin(moon) * s;
+      mr = 2 * s * (1 + 0.15 * (Math.sin(moon) - Math.sin(MOON_REST))); behind = Math.sin(moon) < 0;
+    }
+    var paintMoon = function () {
+      ctx.beginPath(); ctx.arc(mx, my, mr, 0, TAU); ctx.fillStyle = rgba(f.accent, 1); ctx.fill();
+      ctx.lineWidth = 1.2 * s; ctx.strokeStyle = ink; ctx.stroke();
+    };
+    ctx.save();
+    ctx.globalAlpha = opacity;
+    ctx.beginPath(); ctx.arc(c.x, c.y, r, 0, TAU); ctx.fillStyle = ink; ctx.fill();
+    ctx.lineWidth = 1; ctx.strokeStyle = "rgba(255,255,255,.2)";
+    ctx.beginPath(); ctx.arc(c.x, c.y, Math.max(0, r - 0.55), 0, TAU); ctx.stroke();
+    ctx.translate(c.x, c.y); ctx.rotate((spin - 24) * Math.PI / 180);
+    ctx.lineCap = "butt"; ctx.lineWidth = 1.6 * s; ctx.strokeStyle = "rgba(238,242,250,.55)";
+    ctx.beginPath(); ctx.ellipse(0, 0, 11.8 * s, 4.2 * s, 0, Math.PI, TAU); ctx.stroke();  // behind the planet
+    if (behind) paintMoon();
+    ctx.fillStyle = light; ctx.beginPath(); ctx.arc(0, 0, 6 * s, 0, TAU); ctx.fill();
+    ctx.lineWidth = 2.8 * s; ctx.strokeStyle = ink;  // in front of it, with a gap
+    ctx.beginPath(); ctx.ellipse(0, 0, 11.8 * s, 4.2 * s, 0, 0, Math.PI); ctx.stroke();
+    ctx.lineCap = "round"; ctx.lineWidth = 1.6 * s; ctx.strokeStyle = light; ctx.stroke();
+    if (!behind) paintMoon();
+    ctx.restore();
   }
   var SC = { working: ["#5B9DFF", "pracuje"], waiting: ["#F5A524", "čeká na tebe"], done: ["#3DD68C", "hotovo"] };
   function session(row, state, flash) {
@@ -924,18 +1220,24 @@
     W.bNote.textContent = o.note; W.bNote.style.color = o.color; W.bText.textContent = o.text;
     W.bubble.classList.add("on"); W.slot.classList.add("busy"); W.speaker.classList.toggle("reading", !!o.read);
   }
+  // the mic's colour and the words next to it after the key is let go (ui.StatusChip): "" = idle, none
+  function dictation(state, words) {
+    if (state) W.mic.dataset.state = state; else delete W.mic.dataset.state;
+    if (words) W.chipText.textContent = words;
+    W.chip.classList.toggle("on", !!words); W.slot.classList.toggle("busy", !!words || W.bubble.classList.contains("on"));
+  }
   var IDLE_FEED = { you: "Ty: Co dělá relace s\u00a0ceníkem?", reply: "Doplňuje ceny do tabulky, zbývají jí dvě kategorie." };
   function baseline(keepFeed) {
     limits(42, 18); W.noteText.textContent = "2\u00a0h 14\u00a0min"; W.note.classList.remove("warn");
     [W.s1, W.s2, W.s3, W.s4].forEach(function (r) { clearTimeout(r.flashT); r.classList.remove("flash"); });  // a scene left mid-flash
     session(W.s1, "working"); session(W.s2, "waiting"); session(W.s3, "working"); W.s4.hidden = true;
-    feed(keepFeed ? IDLE_FEED : null); bubble(null); version("current", "2.1.296"); fold(false);
+    feed(keepFeed ? IDLE_FEED : null); bubble(null); dictation("", ""); version("current", "2.1.296"); fold(false);
   }
   function typeInto(tl, el, text, at, dur) {
     var o = { n: 0 };
     tl.to(o, { n: text.length, duration: dur || text.length * 0.028, ease: "none", onUpdate: function () { el.textContent = text.slice(0, Math.round(o.n)); } }, at);
   }
-  var ZONES = { limity: ["limits"], relace: ["sessions"], bubliny: ["sessions"], artefakty: [], agent: ["agent", "sessions"], chrome: ["agent"], poznamky: ["agent", "sessions"], verze: [], zbalit: [] };
+  var ZONES = { limity: ["limits"], relace: ["sessions"], bubliny: ["sessions"], artefakty: [], agent: ["agent", "sessions"], chrome: ["agent"], poznamky: ["agent", "sessions"], verze: [], zbalit: [], kontrola: [] };
   var SCENES = {
     limity: function (tl) {
       tl.call(function () { limits(0, 0); });
@@ -1020,13 +1322,27 @@
     // the fold button folds it all into Orbit's icon, a click on the icon unfolds it
     zbalit: function (tl) {
       tl.call(function () { W.fold.classList.add("press"); }, null, 1.0);
-      tl.call(function () { fold(true); }, null, 1.25);
+      tl.call(function () { fold(true, true); }, null, 1.25);
       tl.call(function () { W.icon.classList.add("press"); }, null, 4.3);
-      tl.call(function () { fold(false); }, null, 4.55);
+      tl.call(function () { fold(false, true); }, null, 4.55);
       tl.to({}, { duration: 2.2 });
+    },
+    // the transcript check: said, Whisper and Canary differ, Claude checks it (the words next to the mic), the fixed
+    // text goes in and the quiet bubble says what was fixed
+    kontrola: function (tl) {
+      tl.call(function () { dictation("recording", ""); }, null, 0.6);
+      tl.call(function () { dictation("busy", ""); }, null, 2.3);
+      tl.call(function () { dictation("busy", "Přepisuji…"); }, null, 2.6);
+      tl.call(function () { dictation("busy", "Claude kontroluje přepis…"); }, null, 3.4);
+      tl.call(function () {
+        dictation("", "");
+        bubble({ icon: "✓", color: "#3DD68C", title: "Kontrola přepisu", note: "", text: "Opraveno: Daytona → Dej to na, Pushnitona → pushni to na. Klikni sem a vrátím, co napsal Whisper." });
+      }, null, 6.2);
+      tl.call(function () { bubble(null); }, null, 10.4);
+      tl.to({}, { duration: 0.8 });
     }
   };
-  var SNAP = { limity: 3, relace: 5, bubliny: 3, artefakty: 3, agent: 6, chrome: 5, poznamky: 3, verze: 6, zbalit: 2.5 };  // reduced motion: one still frame (s)
+  var SNAP = { limity: 3, relace: 5, bubliny: 3, artefakty: 3, agent: 6, chrome: 5, poznamky: 3, verze: 6, zbalit: 2.5, kontrola: 4 };  // reduced motion: one still frame (s)
   var feats = $$(".feat"), featWrap = $("#features"), sceneTl = null, activeScene = null, hoverScene = null, scrollScene = "limity";
   function playScene(name) {
     if (name === activeScene) return;
@@ -1094,7 +1410,7 @@
     else featWrap.style.removeProperty("--panel-b");
   }
   fitWidget();
-  addEventListener("resize", fitWidget);
+  addEventListener("resize", function () { if (fx && innerWidth !== fx.vw) endFx(fx.folding); fitWidget(); });  // (its copies are laid out for the old width)
   ScrollTrigger.addEventListener("refresh", fitWidget);
   // its infinite CSS animations (pulsing dots, speaker bars) stop while it is off screen
   widget.classList.add("off");
@@ -1189,9 +1505,10 @@
     var v = clamp(dy / Math.max(raw, 1) * 16.7, -200, 200);
     velocity = lerp(velocity, v, 1 - Math.exp(-raw / (Math.abs(v) < Math.abs(velocity) ? 30 : 70)));  // eases in, stops sooner
     if (document.hidden) return;
-    drawKinetics(now);  // first: its layout read comes before anything writes styles this frame
+    var veiled = pl && pl.covered;  // nothing to see under the preloader's veil yet
+    if (!veiled) drawKinetics(now);  // first: its layout read comes before anything writes styles this frame
     drawWave();
-    drawSpace(Math.min(raw, 250), now);
+    if (!veiled) drawSpace(Math.min(raw, 250), now);
     drawNav();
     drawCursor();
     drawOrrery(dt);
@@ -1205,4 +1522,5 @@
   else gsap.ticker.add(frame);
   addEventListener("load", function () { ScrollTrigger.refresh(); sizeCanvases(); placeHeroSide(); });
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { placeHeroSide(); ScrollTrigger.refresh(); if (track) mq.w = track.scrollWidth / 3; });
+  if (pl) pl.ready();  // set up: the preloader may open
 })();

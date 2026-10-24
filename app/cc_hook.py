@@ -4,7 +4,9 @@ Claude Code runs it (asynchronously, without a shell) for SessionStart, UserProm
 StopFailure and SessionEnd with the event JSON on stdin. It writes <data>/sessions/<session_id>.<event>.json – one
 file per event type, so hooks of one session running at the same time never overwrite each other's data. Orbit reads
 them. PostToolUse of the Artifact tool (a published page, which Orbit reads aloud) goes to sessions/artifacts/
-instead, one file per publish.
+instead, one file per publish. PreModelSwitch (the only one Claude Code waits for) writes nothing: it lets a model
+switch Orbit asked for (a right click on the session in Orbit's panel, models.py) through without the session asking
+"Switch model?" in its window, and says nothing to any other switch.
 
 Besides the event it records the session's permission mode (Orbit's voice agent sends messages in the same class,
 see agent.py), its claude.exe and the window that shows it: Windows Terminal's or the classic console's, else the
@@ -146,6 +148,27 @@ def _data_dir() -> Path:
     return paths.data_dir()
 
 
+SWITCH_FRESH_S = 600  # models.ASK_FRESH_S: a busy session runs Orbit's /model only after its turn
+
+
+def _switch_asked(sessions_dir: Path, data: dict) -> bool:
+    """Did Orbit ask for this switch: a request of its own (<data>/sessions/model/<session>.<id>.json, models.ask)
+    for this session and the very model /model was given, not older than SWITCH_FRESH_S?"""
+    session, wanted = str(data.get("session_id") or ""), str(data.get("requested_model") or "").lower()
+    if not wanted or not session.replace("-", "").replace("_", "").isalnum() or len(session) > 128:
+        return False
+    for f in (sessions_dir / "model").glob(f"{session}.*.json"):
+        if f.name.count(".") != 2:
+            continue  # the mod's .ack / .done
+        try:
+            record = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(record, dict) and record.get("session_id") == session                 and str(record.get("model") or "").lower() == wanted                 and 0 <= time.time() - float(record.get("time") or 0) < SWITCH_FRESH_S:
+            return True
+    return False
+
+
 def main() -> None:
     data = json.loads(sys.stdin.buffer.read().decode("utf-8"))
     if os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
@@ -154,6 +177,12 @@ def main() -> None:
     if not session or not event:
         return
     sessions_dir = _data_dir() / "sessions"
+    if event == "PreModelSwitch":
+        if _switch_asked(sessions_dir, data):
+            print(json.dumps({"hookSpecificOutput": {
+                "hookEventName": "PreModelSwitch", "permissionDecision": "allow",
+                "permissionDecisionReason": "Model zvolený v Orbitu pro tuhle relaci"}}))
+        return
     if event == "PostToolUse":
         args = data.get("tool_input") or {}
         if data.get("tool_name") == "Artifact" and args.get("file_path") and not args.get("asset") \

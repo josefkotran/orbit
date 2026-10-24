@@ -82,6 +82,10 @@ _user32.GetAsyncKeyState.restype = ctypes.c_short
 _user32.GetClipboardSequenceNumber.restype = wintypes.DWORD
 _user32.WindowFromPoint.argtypes = [wintypes.POINT]
 _user32.WindowFromPoint.restype = wintypes.HWND
+_user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+_user32.IsWindowEnabled.argtypes = [wintypes.HWND]
+_user32.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+_user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
 _advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
 _advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
 _advapi32.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
@@ -191,6 +195,24 @@ def app_name(hwnd: int) -> str:
         return name[:-4] if name.lower().endswith(".exe") else name
     finally:
         _kernel32.CloseHandle(process)
+
+
+def pointed() -> int:
+    """The window under the mouse pointer that a click there would bring to the front; 0 over the taskbar or the
+    desktop, a menu, a window that never takes focus (Orbit's button and bubbles: WS_EX_NOACTIVATE, tool windows)
+    or a disabled one (the owner of a modal dialog)."""
+    point = wintypes.POINT()
+    if not _user32.GetCursorPos(ctypes.byref(point)):
+        return 0
+    hwnd = _user32.WindowFromPoint(point)
+    if not hwnd:
+        return 0
+    root = int(_user32.GetAncestor(hwnd, 2) or hwnd)  # GA_ROOT
+    ex = _user32.GetWindowLongPtrW(wintypes.HWND(root), -20)  # GWL_EXSTYLE
+    if (is_shell(root) or _class_name(root) in ("#32768", "tooltips_class32")
+            or ex & (0x08000000 | 0x80) or not _user32.IsWindowEnabled(wintypes.HWND(root))):
+        return 0  # WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW
+    return root
 
 
 def own_point(x: int, y: int) -> bool:

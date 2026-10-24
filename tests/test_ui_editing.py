@@ -88,6 +88,7 @@ class Stub:
         self.dialog = self.history_window = None
         self.pending = self._edit_pending = self._rewriting = 0
         self._watching = False
+        self._held_takes = []  # the transcript check before insertion (its takes have no checker here)
 
     def _notify(self, msg, on_click=None, **_):
         self.notes.append(msg)
@@ -102,7 +103,8 @@ class Stub:
 
 for _name in ("_put_text", "_typed", "_remember", "_run_command", "_take_back", "_paste_last", "_edit_ready",
               "_apply_edit", "_revert_edit", "_corrected", "_always_fix", "_redictated", "_history_changed",
-              "_ptt_key", "_dictated", "_insert_text", "_rewritten", "_entry_corrected"):
+              "_ptt_key", "_dictated", "_insert_text", "_rewritten", "_entry_corrected", "_deliver",
+              "_wants_precheck"):
     setattr(Stub, _name, getattr(main.Dictation, _name))
 
 

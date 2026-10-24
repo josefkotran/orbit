@@ -5,8 +5,9 @@ import { Space } from "./components/Space";
 import { prog } from "./lib/anim";
 import { CUT, DROP, DURATION, beat } from "./lib/time";
 import { AnyWindow } from "./scenes/AnyWindow";
-import { AGENT_EVENTS, Claude, T } from "./scenes/Claude";
+import { AGENT_EVENTS, CHECK_EVENTS, CLAUDE_CHIMES, Claude, T } from "./scenes/Claude";
 import { BUSY_ON, Dictation, REC_ON } from "./scenes/Dictation";
+import { EDIT_EVENTS, Edit } from "./scenes/Edit";
 import { Intro } from "./scenes/Intro";
 import { Outro } from "./scenes/Outro";
 import { Privacy } from "./scenes/Privacy";
@@ -17,6 +18,7 @@ const CHIMES: [number, string][] = [
   [T.done, "done"],
   [T.waiting, "waiting"],
   [T.read + 4, "info"],
+  [CLAUDE_CHIMES.versionDone, "done"],
 ];
 const duck = (fr: number) =>
   CHIMES.reduce((v, [at]) => v * (1 - 0.28 * prog(fr, at - 3, at + 2) * (1 - prog(fr, at + 22, at + 34))), 1);
@@ -38,17 +40,20 @@ export const Main: React.FC = () => {
   return (
     <AbsoluteFill style={{ background: "#060912" }}>
       <Space warp={warp} travel={travel} pulse={pulse} drift={f / DURATION} />
-      <Intro />
-      <Dictation />
-      <AnyWindow />
-      <Privacy />
-      <Tease />
-      <Claude />
-      <Outro />
+      <AbsoluteFill>
+        <Intro />
+        <Dictation />
+        <AnyWindow />
+        <Edit />
+        <Privacy />
+        <Tease />
+        <Claude />
+        <Outro />
+      </AbsoluteFill>
       {flash > 0.01 ? (
         <AbsoluteFill
           style={{
-            background: "radial-gradient(circle at 1400px 700px, rgba(210,226,255,.6), rgba(91,157,255,.28) 30%, rgba(6,9,18,0) 62%)",
+            background: "radial-gradient(circle at 1749px 879px, rgba(210,226,255,.5), rgba(91,157,255,.24) 26%, rgba(6,9,18,0) 58%)",
             opacity: flash,
           }}
         />
@@ -62,6 +67,18 @@ export const Main: React.FC = () => {
       <Sfx at={BUSY_ON} file="stop" volume={0.45} />
       {CHIMES.map(([at, file]) => (
         <Sfx key={at} at={at} file={file} volume={1} />
+      ))}
+      {EDIT_EVENTS.listen.map((at) => (
+        <Sfx key={`el${at}`} at={at} file="start" volume={0.45} />
+      ))}
+      {EDIT_EVENTS.stop.map((at) => (
+        <Sfx key={`es${at}`} at={at} file="stop" volume={0.45} />
+      ))}
+      {CHECK_EVENTS.listen.map((at) => (
+        <Sfx key={`cl${at}`} at={at} file="start" volume={0.45} />
+      ))}
+      {CHECK_EVENTS.stop.map((at) => (
+        <Sfx key={`cs${at}`} at={at} file="stop" volume={0.45} />
       ))}
       {AGENT_EVENTS.listen.map((at) => (
         <Sfx key={`l${at}`} at={at} file="start" volume={0.66} />

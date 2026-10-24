@@ -48,8 +48,13 @@ FAST_POLL_S, POLL_S, FAST_POLL_FOR_S = 0.05, 0.2, 5
 _HALLUCINATION_RE = re.compile(r"\s*\(?titulky\s+(vytvořil|vytvořila|připravil|:).*$", re.IGNORECASE)
 _HALLUCINATION_EXACT = {
     "děkuji za pozornost", "díky za pozornost", "děkuji za sledování", "díky za sledování",
+    "děkujeme za pozornost", "děkujeme za sledování",
     "titulky", "hudba",
 }
+# A video's last line after what was really said: Pepa's history had "…nebo Haiku. Děkujeme za pozornost." (21 s, to
+# Claude Code) besides two dictations of only that. Not "Děkuji za pozornost." after a sentence: an e-mail may end so.
+_HALLUCINATION_END_RE = re.compile(r"(?<=[.!?…])\s+děkujeme\s+za\s+(?:pozornost|sledování)\s*[.!]?\s*$",
+                                   re.IGNORECASE)
 
 
 # --- kill the server together with this app, even if the app crashes -------------------------
@@ -312,7 +317,7 @@ _CONTROL_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")  # Unicode category Cc
 def clean_text(text: str) -> str:
     # control characters never belong to dictated text (Esc and the like would act in a terminal)
     text = " ".join(_CONTROL_RE.sub(" ", text).split())
-    text = _HALLUCINATION_RE.sub("", text).strip()
+    text = _HALLUCINATION_END_RE.sub("", _HALLUCINATION_RE.sub("", text)).strip()
     if text.lower().strip(" .!?,…-") in _HALLUCINATION_EXACT or text.strip(" .") == PROMPT.strip(" ."):
         return ""
     return text
@@ -320,14 +325,21 @@ def clean_text(text: str) -> str:
 
 def apply_replacements(text: str, replacements: list[list[str]]) -> str:
     """Fixes for phrases Whisper keeps getting wrong ("comgit" -> "Comgate"); whole words, any letter case.
-    A malformed entry is skipped (an empty "wrong" would insert `right` between every two characters)."""
+    A malformed entry is skipped (an empty "wrong" would insert `right` between every two characters). A capital
+    letter Whisper wrote stays: "Proskoumej to" -> "Prozkoumej to", not "prozkoumej to" (5 dictations in Pepa's
+    history began with a small letter so)."""
     for item in replacements:
         if not (isinstance(item, (list, tuple)) and len(item) == 2 and all(isinstance(s, str) for s in item)
                 and item[0].strip()):
             continue
         wrong, right = item
-        text = re.sub(rf"(?<!\w){re.escape(wrong.strip())}(?!\w)", lambda _: right, text, flags=re.IGNORECASE)
+        text = re.sub(rf"(?<!\w){re.escape(wrong.strip())}(?!\w)", lambda m: _keep_capital(m.group(), right), text,
+                      flags=re.IGNORECASE)
     return text
+
+
+def _keep_capital(found: str, right: str) -> str:
+    return right[:1].upper() + right[1:] if found[:1].isupper() and right[:1].islower() else right
 
 
 # "Odstavec" alone too, but only as a phrase of its own between punctuation ("Ahoj Andrej, odstavec, přeposílám"):

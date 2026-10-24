@@ -2,7 +2,7 @@
 user's past Claude Code sessions as `claude --resume` offers them, newest first, each in its folder's colour like the
 sessions in the panel; a search (diacritics not needed) and a folder above them. The chosen one on the right with its
 first and newest prompt, and "Pokračovat v relaci" (also a double click or Enter): claude --resume in its folder, in a
-window of its own (main: favorites.start_session). One that runs right now shows "běží" and its window comes to the
+window of its own (main: favorites.start_session), on the model it ran on or the one picked next to the button. One that runs right now shows "běží" and its window comes to the
 front instead of the session opening a second time. Read again every few seconds while the window is open, in a
 thread of its own (the first read of all transcripts takes a second or two)."""
 import os
@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (QApplication, QDialog, QHBoxLayout, QLineEdit, QL
                                QPlainTextEdit, QPushButton, QStyle, QStyledItemDelegate, QStyleOptionViewItem,
                                QVBoxLayout, QWidget)
 
-from . import colors, favorites, pastsessions, theme
+from . import colors, favorites, models, pastsessions, theme
 from .theme import style_titlebar
 from .ui import _combo, _label, _repolish, mic_icon
 
@@ -80,7 +80,8 @@ class _RowDelegate(QStyledItemDelegate):
 
 
 class SessionHistory(QDialog):
-    resume_requested = Signal(str)  # a session's id: going on in its folder (or its window, when it runs)
+    # a session's id and its --model ("" = the one it ran on): going on in its folder (or its window, when it runs)
+    resume_requested = Signal(str, str)
     _scanned = Signal(object)  # the sessions read in the scan thread
 
     def __init__(self, index: pastsessions.Index, folder_colors, running):
@@ -167,10 +168,19 @@ class SessionHistory(QDialog):
         self.open_folder = QPushButton("Otevřít složku")
         self.open_folder.setProperty("role", "small")
         self.open_folder.clicked.connect(self._open_folder)
+        self.model = _combo()  # the model it goes on with: the one it ran on (Claude Code brings it back), or another
+        self.model.addItem("Model jako naposledy", "")
+        for family in models.FAMILIES:
+            self.model.addItem(models.name(family), family)
+            self.model.setItemData(self.model.count() - 1, models.ABOUT[family], Qt.ToolTipRole)
+        self.model.setToolTip("S jakým modelem relace pokračuje. Jen pro ni, výchozí model se nemění.")
+        buttons.addWidget(self.resume)
+        buttons.addWidget(self.model)
         for button in (self.resume, self.copy, self.open_folder):
             button.setAutoDefault(False)
             button.setCursor(Qt.PointingHandCursor)
-            buttons.addWidget(button)
+            if button is not self.resume:
+                buttons.addWidget(button)
         buttons.addStretch(1)
         right.addLayout(buttons)
         self.status = _label("", "dim", wrap=True)
@@ -312,6 +322,7 @@ class SessionHistory(QDialog):
         self.resume.setToolTip("Relace právě běží: přenese její okno dopředu." if running else
                                f"Otevře relaci znovu v novém okně terminálu ve složce {past.folder} "
                                "(claude --resume), i s celou konverzací.")
+        self.model.setEnabled(not running)
         self.copy.setToolTip(f"Zkopíruje „claude --resume {past.id}“, spusť ho ve složce {past.cwd}.")
         self.open_folder.setEnabled(os.path.isdir(past.cwd))
         if changed:
@@ -325,11 +336,14 @@ class SessionHistory(QDialog):
 
     def _resume(self) -> None:
         if self._current:
-            self.resume_requested.emit(self._current.id)
+            family = self.model.currentData()
+            self.resume_requested.emit(self._current.id, models.alias(family) if family else "")
 
     def _copy(self) -> None:
         if self._current:
-            QGuiApplication.clipboard().setText(f"claude --resume {self._current.id}")
+            family = self.model.currentData()
+            QGuiApplication.clipboard().setText(f"claude --resume {self._current.id}" +
+                                                (f" --model {models.alias(family)}" if family else ""))
             self.say(f"Zkopírováno. Spusť to v terminálu ve složce {self._current.folder}.")
 
     def _open_folder(self) -> None:

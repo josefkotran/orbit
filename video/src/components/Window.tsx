@@ -37,14 +37,16 @@ export const Window: React.FC<{
         fontSize: titleSize,
       }}
     >
-      <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden" }}>{title}</span>
+      <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", opacity: 0.999 }}>{title}</span>
       {[GLYPH.min, GLYPH.max, GLYPH.close].map((g) => (
         <span key={g} style={{ fontFamily: ICONS, fontSize: titleSize * 0.62, width: bar * 1.25, textAlign: "center", color: "#9AA1AD" }}>
           {g}
         </span>
       ))}
     </div>
-    {children}
+    {/* text on an opaque background gets LCD antialiasing in Chrome (coloured fringes in the video), in a group
+        that isn't quite opaque grey antialiasing */}
+    <div style={{ opacity: 0.999 }}>{children}</div>
   </div>
 );
 

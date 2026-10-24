@@ -95,6 +95,64 @@ h3{font-family:var(--text-font);font-weight:600;font-stretch:112%;font-size:clam
 .cursor.is-down .cursor-ring{width:30px;height:30px;margin:-15px 0 0 -15px}
 @media (forced-colors:active){.cursor{display:none!important}.has-cursor,.has-cursor *{cursor:auto!important}}
 
+/* ---------- preloader: the moon traces Orbit's orbit, the word thickens into the nav's logo, then the veil opens
+   from the planet and both fly into the nav. Driven by the script under <body>; never without JS or with reduced motion.
+   Under the cursor (z 100), over the nav (z 20). Stroke widths and opacities the script sets are not set here. ---------- */
+.preloader{
+  position:fixed;inset:0;z-index:60;overflow:hidden;background:var(--space);touch-action:none;
+  --S:clamp(120px,24vmin,232px);--F:clamp(46px,6.6vw,98px);
+}
+.no-js .preloader{display:none}
+@media (prefers-reduced-motion:reduce){.preloader{display:none}}
+@media print{.preloader{display:none}}
+html:not(.pl-run) .preloader{animation:pl-bail .6s 1s both} /* its script never ran: don't hold the page */
+@keyframes pl-bail{to{opacity:0;visibility:hidden}}
+.preloader.open{pointer-events:none}
+.preloader.cv.open{background:none} /* the canvas paints the veil, with the hole in it */
+.pl-fx{position:absolute;inset:0;width:100%;height:100%}
+/* the glow around the planet: own layers that only fade and scale (the script sets opacity and transform) */
+.pl-glow{position:absolute;left:50%;top:42%;width:calc(var(--S) * 4.4);height:calc(var(--S) * 4.4);margin:calc(var(--S) * -2.2) 0 0 calc(var(--S) * -2.2);
+  border-radius:50%;pointer-events:none;opacity:0;will-change:opacity,transform;
+  background:radial-gradient(closest-side,rgba(var(--accent-rgb),.48),rgba(var(--accent-rgb),.16) 32%,rgba(var(--accent-rgb),0))}
+.pl-glow.far{width:150vmax;height:150vmax;margin:-75vmax 0 0 -75vmax;background:radial-gradient(closest-side,rgba(var(--accent-rgb),.14),rgba(var(--accent-rgb),0))}
+.pl-mark{position:absolute;left:50%;top:42%;width:var(--S);height:var(--S);margin:calc(var(--S) * -.5) 0 0 calc(var(--S) * -.5);overflow:visible;color:var(--text);transform-origin:0 0}
+.pl-dots{stroke:currentColor;stroke-width:.5;stroke-dasharray:0 1.18;opacity:0;transition:opacity 1.2s .2s} /* dotted, like the halo's ring */
+.preloader.go .pl-dots{opacity:.34}
+.preloader.go .pl-dots.b{opacity:.17}
+.preloader.exit .pl-dots{opacity:0;transition:opacity .35s}
+.pl-ring{stroke:currentColor}
+.pl-ring.b{opacity:.5}
+.pl-trail{stroke:var(--accent)}
+.pl-planet{fill:currentColor}
+.pl-moon{fill:var(--accent)}
+.pl-moon.f{stroke:var(--space)}
+.pl-word{
+  position:absolute;left:0;right:0;top:calc(42% + var(--S) * .34);margin:0;display:flex;justify-content:center;
+  font-family:var(--display);font-size:var(--F);line-height:1;letter-spacing:.01em;color:var(--text);white-space:nowrap;
+  transform-origin:0 0;user-select:none;-webkit-user-select:none;
+}
+.pl-word span{display:block;opacity:0;transform:translateY(.3em);filter:blur(10px);font-variation-settings:"wdth" 50,"wght" 100;
+  transition:opacity 1s var(--ease),transform 1.2s var(--ease),filter 1s var(--ease)}
+.pl-word.in span{opacity:1;transform:none;filter:none}
+.pl-word span:nth-child(2){transition-delay:.06s}
+.pl-word span:nth-child(3){transition-delay:.12s}
+.pl-word span:nth-child(4){transition-delay:.18s}
+.pl-word span:nth-child(5){transition-delay:.24s}
+.pl-foot{
+  position:absolute;left:0;right:0;bottom:clamp(20px,4.5vh,44px);max-width:var(--max);margin:0 auto;padding:0 var(--gutter);
+  display:flex;align-items:center;gap:18px;font-size:13px;line-height:1;letter-spacing:.02em;color:var(--dim);
+  opacity:0;transform:translateY(8px);transition:opacity .9s .35s,transform 1.1s var(--ease) .35s;
+}
+.preloader.go .pl-foot{opacity:1;transform:none}
+.preloader.exit .pl-foot{opacity:0;transform:translateY(8px);transition:opacity .3s,transform .4s}
+.pl-line{position:relative;flex:1;height:1px;background:var(--line-2);overflow:hidden}
+.pl-line i{position:absolute;inset:0;background:var(--accent);transform:scaleX(0);transform-origin:0 50%}
+.pl-foot b{width:2.4em;text-align:right;font-weight:600;font-stretch:110%;color:var(--text)} /* fixed box, not tabular figures: Mona Sans's tabular zero is slashed (Ø) */
+@media (max-width:520px){.pl-foot{gap:12px;font-size:12px}}
+/* the nav's logo waits until the flying one lands on it */
+html.pl-run .nav .brand{transition:opacity .2s}
+html.pl-brand .nav .brand{opacity:0}
+
 /* ---------- nav ---------- */
 .nav{position:fixed;top:0;left:0;right:0;z-index:20;transition:transform .5s var(--ease),background-color .4s,border-color .4s;border-bottom:1px solid transparent}
 .nav.scrolled{background:rgba(4,6,12,.9);border-bottom-color:var(--line)} /* no backdrop blur: it re-blurred the moving stars every frame */
@@ -437,9 +495,9 @@ section{position:relative}
 .w-feed .url{color:#9AA1AD;font-size:.92em;padding-left:14px}
 .w-feed [hidden]{display:none!important}
 .w-foot{display:flex;align-items:flex-start;gap:20px;margin-top:16px;padding-left:12px}
-.w-buttons{display:flex;gap:11px;flex:none}
-.w-buttons .mic{width:68px;height:68px}
-.w-speaker{position:relative;width:68px;height:68px;border-radius:50%;background:#2F3542;border:1px solid rgba(0,0,0,.35);display:grid;place-items:center;color:#fff;box-shadow:0 18px 40px -14px #000;transition:background-color .3s}
+.w-buttons{--m:68px;display:flex;gap:11px;flex:none}
+.w-buttons .mic{width:var(--m);height:var(--m)}
+.w-speaker{position:relative;width:var(--m);height:var(--m);border-radius:50%;background:#2F3542;border:1px solid rgba(0,0,0,.35);display:grid;place-items:center;color:#fff;box-shadow:0 18px 40px -14px #000;transition:background-color .3s}
 .w-speaker svg{width:44%;height:44%}
 .w-speaker.reading{background:var(--accent);color:var(--on-accent)}
 .w-speaker .bars{position:absolute;right:-6px;top:-4px;display:flex;gap:2px;align-items:flex-end;height:16px;opacity:0;transition:opacity .3s}
@@ -452,7 +510,7 @@ section{position:relative}
 .widget.off .dot,.widget.off .bars i{animation-play-state:paused}
 /* the fold chip right of the colours, and Claude Code's version in a pill under the panel */
 .w-fold{width:40px;height:40px;border-radius:50%;background:#181E2C;border:1px solid rgba(255,255,255,.11);display:grid;place-items:center;color:#E6E8EC;transition:box-shadow .4s,background-color .2s}
-.w-fold svg{width:22px;height:22px}
+.w-fold svg{width:28px;height:28px}
 .w-fold.lit{box-shadow:0 0 0 5px rgba(var(--accent-rgb),.22)}
 .w-fold.press{background:#2E3750}
 .w-ver{display:flex;width:max-content;max-width:100%;align-items:center;margin-top:8px;padding:4px 4px 4px 13px;min-height:30px;border-radius:999px;background:rgba(24,30,44,.92);border:1px solid rgba(255,255,255,.11);font:14px/1 "Segoe UI",var(--text-font);color:#9AA1AD;white-space:nowrap}
@@ -470,14 +528,25 @@ section{position:relative}
 .widget.folded .w-strip,.widget.folded .w-panel,.widget.folded .w-ver,.widget.folded .w-speaker,.widget.folded .w-buttons .mic,.widget.folded .w-slot{opacity:0;transform:scale(.94);pointer-events:none}
 .widget.folded .w-panel,.widget.folded .w-ver,.widget.folded .w-strip{transform-origin:20% 100%}
 .w-buttons{position:relative}
-.w-icon{position:absolute;left:87px;top:8px;width:52px;height:52px;border-radius:50%;opacity:0;transform:scale(.6);pointer-events:none;box-shadow:0 0 0 1px rgba(255,255,255,.14),0 18px 40px -14px #000;transition:opacity .45s var(--ease),transform .5s var(--ease)}
+/* the icon is the app's: 44/52 of the mic, centred on it (whatever size the mic has) */
+.w-icon{position:absolute;left:calc(var(--m) * 1.5 + 11px);top:calc(var(--m) / 2);width:calc(var(--m) * .846);height:calc(var(--m) * .846);margin:calc(var(--m) * -.423) 0 0 calc(var(--m) * -.423);border-radius:50%;opacity:0;transform:scale(.6);pointer-events:none;box-shadow:0 18px 40px -14px #000;transition:opacity .45s var(--ease),transform .5s var(--ease)}
 .w-icon svg{width:100%;height:100%;display:block}
 .widget.folded .w-icon{opacity:1;transform:none}
-.widget.folded .w-icon.press{transform:scale(.9)}
+.widget.folded .w-icon.press{--ink:var(--ink-2)}  /* lighter, like the app's icon under the mouse (the animation keeps it) */
+/* the fold animation (site.js, the app's foldfx.py): copies of the panel turn and shrink on a layer of their own while
+   the real parts wait hidden; a canvas over them draws the stars, the glow, the shock waves and the icon */
+.widget.fx > .w-strip,.widget.fx > .w-panel,.widget.fx > .w-ver,.widget.fx > .w-foot .w-speaker,.widget.fx > .w-foot .mic,.widget.fx > .w-foot .w-icon{visibility:hidden}
+.widget.fx-quiet > .w-foot .w-slot{opacity:0}
+.widget.no-tr > *,.widget.no-tr > .w-foot .w-speaker,.widget.no-tr > .w-foot .mic,.widget.no-tr .w-icon{transition:none!important}
+.w-fx{position:absolute;inset:0;pointer-events:none;z-index:2}
+/* the copies start drawn at full size and almost transparent: Chrome draws them once, before they shrink or grow */
+.w-fx > div{position:absolute;inset:0;will-change:transform,opacity;opacity:.001}
+.w-fx *{animation:none!important;transition:none!important}
+.w-fx canvas{position:absolute;display:block}
 @media (prefers-reduced-motion:reduce){
   .w-ses .dot.pulse-dot,.w-speaker.reading .bars i{animation:none}
   .w-speaker .bars i:nth-child(1){transform:scaleY(.6)}.w-speaker .bars i:nth-child(2){transform:none}
-  .w-bar i{transition:none}.w-slot .bubble{transform:none}
+  .w-bar i{transition:none}.w-slot .bubble{transform:none}.w-status{transform:none}.w-status i::after{animation:none}
   .widget .w-strip,.widget .w-panel,.widget .w-ver,.widget .w-speaker,.widget .w-buttons .mic,.widget .w-slot,.w-icon{transition:none}
 }
 .w-slot{position:relative;flex:1;min-width:0;min-height:118px}
@@ -496,6 +565,15 @@ section{position:relative}
 .bubble .bi{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:700;color:#0B1020;flex:none}
 .bubble .bn{margin-left:auto;font-weight:400;font-size:12.5px}
 .bubble p{margin-top:7px;font-size:13.5px;line-height:1.45;color:#AEB5C2}
+/* what Orbit is busy with after the key is let go (ui.StatusChip): where the bubble comes, which covers it */
+.w-status{position:absolute;left:0;top:20px;height:28px;display:flex;align-items:center;gap:8px;padding:0 13px 0 10px;border-radius:14px;
+  background:rgba(24,27,34,.96);border:1px solid rgba(255,255,255,.11);box-shadow:0 14px 34px -14px #000;
+  font-family:"Segoe UI Variable Text","Segoe UI",var(--text-font);font-size:12.5px;color:#E6E8EC;white-space:nowrap;
+  opacity:0;transform:translateX(-10px);transition:opacity .25s,transform .4s var(--ease);pointer-events:none}
+.w-status.on{opacity:1;transform:none}
+.w-status i{position:relative;width:14px;height:14px;border-radius:50%;box-shadow:inset 0 0 0 1.4px rgba(255,255,255,.22);flex:none}
+.w-status i::after{content:"";position:absolute;left:4.5px;top:4.5px;width:5px;height:5px;border-radius:50%;background:var(--busy);transform:rotate(0deg) translateX(6px);animation:moon-round 1.3s linear infinite}
+@keyframes moon-round{to{transform:rotate(360deg) translateX(6px)}}
 .features{display:grid;gap:10px}
 .feat{position:relative;padding:22px 24px;border-radius:18px;border:1px solid transparent;transition:background-color .4s,border-color .4s}
 .feat h3{margin-bottom:6px;transition:font-stretch .6s var(--ease),color .4s}
@@ -523,7 +601,8 @@ section{position:relative}
   .widget{zoom:.84}
   .w-panel{font-size:13px;padding:10px 11px 12px}.w-row{height:22px;gap:8px}
   .w-ses .fold{display:none}.w-ses .st{width:88px}.w-ses .ctx{width:36px}.w-lim b{width:48px}
-  .w-foot{padding-left:0;gap:14px}.w-buttons .mic,.w-speaker{width:56px;height:56px}
+  .w-foot{padding-left:0;gap:14px}.w-buttons{--m:56px}
+  .w-status{top:14px}
 }
 
 /* specs: the accuracy card stays put on the left, the list scrolls past it */

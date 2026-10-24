@@ -1,10 +1,25 @@
-# orbit.easya.cz – static page only. The Blueboard FTP account is shared with m-tex.cz, so nothing here may run code.
+# orbit.easya.cz – a static page plus three small PHP files for its own visit statistics: api/hit.php (beacons from
+# assets/visit.js), api/serve.php (install.ps1 and download/latest.json, so install runs can be counted) and
+# admin/index.php (the statistics, behind a password). The Blueboard FTP account is shared with m-tex.cz, so no other
+# script may run here, and lib/ (their code) and data/ (what they write) are never served.
 DirectoryIndex index.html
 AddDefaultCharset utf-8
 
 <FilesMatch "\.(php\d?|phtml|phar|cgi|pl|py|sh)$">
     Require all denied
 </FilesMatch>
+<FilesMatch "^(hit|serve|index)\.php$">
+    Require all granted
+</FilesMatch>
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^(lib|data)(/|$) - [R=404,L]
+    RewriteRule ^(?!(api/(hit|serve)|admin/index)\.php$).*\.(php\d?|phtml|phar)$ - [R=404,L]
+    # absolute targets: the hosting's mass virtual hosts turn a relative one into a path that isn't there (404)
+    RewriteRule ^install\.ps1$ /api/serve.php?f=script [L]
+    RewriteRule ^download/latest\.json$ /api/serve.php?f=release [L]
+</IfModule>
 
 <IfModule mod_mime.c>
     AddType image/svg+xml .svg
@@ -27,7 +42,7 @@ AddDefaultCharset utf-8
     Header always set Referrer-Policy "strict-origin-when-cross-origin"
     Header always set Permissions-Policy "microphone=(), camera=(), geolocation=(), payment=()"
     Header always set Strict-Transport-Security "max-age=31536000"
-    Header always set Content-Security-Policy "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; media-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    Header always set Content-Security-Policy "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
     <FilesMatch "\.(html|ps1|json)$">
         Header set Cache-Control "no-cache"
     </FilesMatch>

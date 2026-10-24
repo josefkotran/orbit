@@ -6,24 +6,26 @@ import { EASE_IN_OUT, prog, rise } from "../lib/anim";
 import { C, GLYPH, ICONS, UI_VAR } from "../lib/theme";
 import { bar } from "../lib/time";
 
-export const PRIV_START = bar(10);
-export const PRIV_END = bar(14) + 10;
+export const PRIV_START = bar(14);
+export const PRIV_END = bar(18) + 10;
 
-// the real settings window (video/capture/grab.py), 820 x 1018 logical px rendered at 3x
+// the real settings window (video/capture/grab.py, 820 x 1384 logical px rendered at 3x), its upper part
 const SHOT_W = 640;
 const K = SHOT_W / 820;
 const TITLE = 40;
+const SHOWN_H = 1050; // logical px of it in the window, the rest fades out at the bottom
 
+// where grab.py says these are (logical px in the dialog)
 const marks = [
-  { at: bar(10), x: 18, y: 304, w: 380, h: 52 }, // Model: large-v3
-  { at: bar(12), x: 10, y: 586, w: 390, h: 72 }, // "pošle jejich text (ne zvuk)"
-  { at: bar(13), x: 384, y: 146, w: 410, h: 44 }, // "Mikrofon je zapnutý jen při držení klávesy…"
+  { at: bar(14), x: 20, y: 246, w: 372, h: 69 }, // Model: large-v3
+  { at: bar(16), x: 20, y: 613, w: 372, h: 77 }, // Učit se z diktátů: "pošle jejich text (ne zvuk)"
+  { at: bar(17), x: 385, y: 144, w: 415, h: 48 }, // "Mikrofon je zapnutý jen při držení klávesy…"
 ];
 
 const statements = [
-  { at: bar(10), lines: ["Běží na tvé grafice."], size: 70, note: "Whisper large-v3, přímo v tvém počítači." },
-  { at: bar(12), lines: ["Zvuk nikam neodchází."], size: 70, note: "Přepis vzniká u tebe, ne na serveru." },
-  { at: bar(13), lines: ["Mikrofon poslouchá,", "jen když držíš klávesu."], size: 58, note: "" },
+  { at: bar(14), lines: ["Běží na tvé grafice."], size: 70, note: "Whisper large-v3, přímo v tvém počítači." },
+  { at: bar(16), lines: ["Zvuk nikam neodchází."], size: 70, note: "Přepis vzniká u tebe, ne na serveru." },
+  { at: bar(17), lines: ["Mikrofon poslouchá,", "jen když držíš klávesu."], size: 58, note: "" },
 ];
 
 export const Privacy: React.FC = () => {
@@ -42,7 +44,8 @@ export const Privacy: React.FC = () => {
           left: 150,
           top: 118,
           width: SHOT_W,
-          height: TITLE + 1018 * K,
+          height: TITLE + SHOWN_H * K,
+          WebkitMaskImage: "linear-gradient(#000 calc(100% - 170px), transparent)",
           borderRadius: 12,
           overflow: "hidden",
           background: C.ink,
@@ -65,14 +68,17 @@ export const Privacy: React.FC = () => {
             background: C.ink,
           }}
         >
-          <span style={{ flex: 1 }}>Orbit – nastavení</span>
+          <span style={{ flex: 1, opacity: 0.999 }}>Orbit – nastavení</span>
           {[GLYPH.min, GLYPH.max, GLYPH.close].map((g) => (
-            <span key={g} style={{ fontFamily: ICONS, fontSize: 10, width: 46, textAlign: "center", color: "#9AA1AD" }}>
+            <span key={g} style={{ fontFamily: ICONS, fontSize: 10, width: 46, textAlign: "center", color: "#9AA1AD", opacity: 0.999 }}>
               {g}
             </span>
           ))}
         </div>
-        <Img src={staticFile("screens/settings.png")} style={{ width: SHOT_W, display: "block" }} />
+        <Img
+          src={staticFile("screens/settings.png")}
+          style={{ width: SHOT_W, display: "block" }}
+        />
         {marks.map((m, i) => {
           const on = i === current ? prog(f, m.at, m.at + 14) : i < current ? 1 - prog(f, marks[i + 1].at, marks[i + 1].at + 10) : 0;
           if (on <= 0) return null;
