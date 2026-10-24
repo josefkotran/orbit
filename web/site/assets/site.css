@@ -205,15 +205,27 @@ html.pl-brand .nav .brand{opacity:0}
 .hero h1{font-size:var(--h1);line-height:.9;letter-spacing:-.02em;white-space:nowrap;user-select:none;-webkit-user-select:none;touch-action:pan-y pinch-zoom}
 .hero h1 .ch{transform-origin:50% 80%}
 /* the text sits in the empty space right of the short second line (JS measures the line, the fallback is the same),
-   pulled up beside it but still in flow, so the stage always starts below it */
-.hero-side{position:relative;margin:calc(var(--h1) * -.76) 0 0 var(--side-left,calc(var(--h1) * 3.526));max-width:540px;display:grid;gap:22px}
+   pulled up beside it but still in flow and at least as tall as that line, so the stage always starts below it */
+.hero-side{position:relative;margin:calc(var(--h1) * -.76) 0 0 var(--side-left,calc(var(--h1) * 3.526));min-height:calc(var(--h1) * .76);max-width:540px}
 .hero-side .lede{font-size:clamp(17px,1.35vw,19.5px)}
+/* the video right under the headline everywhere, the download under the video (Pepa, 24 Oct: phone first, then the
+   computer too): the button beside the copybox, on the stage's width */
+.hero-get{max-width:1180px;margin:clamp(28px,3.4vw,48px) auto 0;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,560px);gap:22px clamp(32px,4vw,64px);align-items:center}
 .hero-cta{display:flex;flex-wrap:wrap;align-items:center;gap:14px 20px}
 .hero-cta .fine{max-width:44ch}
-@media (max-width:1100px){.hero-side{position:static;margin:clamp(26px,4vw,40px) 0 0}.hero h1{white-space:normal}}
+/* the same install as in Instalace, right under the button: a prompt for the visitor's bot, or the command itself */
+.hero-alt .cb-head{padding:7px 8px 7px 14px;font-size:13px}
+.hero-alt .cb-head + .cb-body{padding:11px 14px 13px;font-size:14px;line-height:1.55}
+.hero-alt .cb-body + .cb-head{border-top:1px solid var(--line)}
+.hero-alt .cb-copy{padding:6px 11px;font-size:12.5px}
+@media (max-width:520px){.hero-alt .cb-code{font-size:13px}} /* the whole command on one line on a phone */
+@media (max-width:1100px){
+  .hero-side{position:static;margin:clamp(26px,4vw,40px) 0 0;min-height:0}.hero h1{white-space:normal}
+  .hero-get{margin-left:0;grid-template-columns:minmax(0,540px);align-items:start}
+}
 
-.stage-wrap{position:relative;margin:clamp(56px,7vw,96px) auto 0;max-width:1180px;perspective:1600px}
-@media (min-width:1101px){.stage-wrap{margin-top:clamp(28px,3vw,44px)}}
+/* on the first screen it doesn't tilt in (site.js) */
+.stage-wrap{position:relative;margin:clamp(28px,3vw,44px) auto 0;max-width:1180px;perspective:1600px}
 .halo{position:absolute;left:-14%;width:128%;top:50%;transform:translateY(-50%);pointer-events:none;z-index:0;overflow:visible}
 @media (max-width:760px){.halo{display:none}}
 .stage{
@@ -227,6 +239,9 @@ html.pl-brand .nav .brand{opacity:0}
 .stage:has(.orrery){background:none;box-shadow:none;border-radius:0;overflow:visible}
 .stage video{display:block;width:100%;height:100%;object-fit:cover;background:var(--space)}
 .stage video:focus-visible{outline-offset:-4px;border-radius:22px}
+/* full screen: the whole picture, not the crop of the frame (separate rules: one unknown selector drops a list) */
+.stage video:fullscreen{object-fit:contain;background:#000}
+.stage video:-webkit-full-screen{object-fit:contain;background:#000}
 .stage{container-type:inline-size}
 /* the real download button: lands exactly on the one drawn in the video (490×76 at 818,855 in 1920×1080) and floats there */
 .stage-cta{position:absolute;left:42.6%;top:79.2%;z-index:4;visibility:hidden;opacity:0}
@@ -253,19 +268,19 @@ html.pl-brand .nav .brand{opacity:0}
 .stage .cta-btn svg{width:max(15px,1.4cqw);height:max(15px,1.4cqw)}
 .stage .cta-btn.when-pending{background:var(--ink);color:var(--text);box-shadow:inset 0 0 0 1px rgba(var(--accent-rgb),.8),0 18px 60px -10px rgba(var(--accent-rgb),.6)}
 @media (prefers-reduced-motion:reduce){.cta-float,.cta-float::before,.cta-shadow{animation:none}}
-/* pause + "start over with sound", bottom right; above the native controls once they are on */
+/* pause + "start over with sound" + full screen, bottom right; above the native controls once they are on */
 .stage-ctrl{position:absolute;right:18px;bottom:18px;z-index:3;display:flex;align-items:center;gap:10px}
 .stage video[controls] ~ .stage-ctrl{bottom:64px}
-.sound,.pause{
+.sound,.pause,.full{
   display:inline-flex;align-items:center;justify-content:center;gap:9px;cursor:pointer;
   font:600 14.5px/1 var(--text-font);color:var(--text);background:rgba(4,6,12,.78);border:1px solid var(--line-2);
   padding:12px 17px;border-radius:999px;transition:border-color .3s,background-color .3s
 }
-.pause{width:43px;height:43px;padding:0;border-radius:50%}
-.sound[hidden],.pause[hidden]{display:none}
-.sound:hover,.pause:hover{border-color:rgba(var(--accent-rgb),.8);background:rgba(4,6,12,.9)}
+.pause,.full{width:43px;height:43px;padding:0;border-radius:50%}
+.sound[hidden],.pause[hidden],.full[hidden]{display:none}
+.sound:hover,.pause:hover,.full:hover{border-color:rgba(var(--accent-rgb),.8);background:rgba(4,6,12,.9)}
 .sound svg{width:17px;height:17px}
-.pause svg{width:16px;height:16px}
+.pause svg,.full svg{width:16px;height:16px}
 .pause .i-play,.pause.paused .i-pause{display:none}
 .pause.paused .i-play{display:inline}
 /* neither file plays: the poster stays, the controls that would do nothing go */
@@ -277,7 +292,7 @@ html.pl-brand .nav .brand{opacity:0}
   .stage video[controls] ~ .stage-ctrl{bottom:auto}
   .sound{padding:10px;border-radius:50%}
   .sound span{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-  .pause{width:39px;height:39px}
+  .pause,.full{width:39px;height:39px}
 }
 @container (max-width:700px){
   .stage-cta{left:50%}
@@ -655,7 +670,7 @@ section{position:relative}
 .copybox{border-radius:16px;border:1px solid var(--line-2);background:rgba(10,14,26,.72);overflow:hidden;transition:border-color .3s}
 .copybox:hover{border-color:rgba(var(--accent-rgb),.55)}
 .cb-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 12px 10px 16px;border-bottom:1px solid var(--line);font-size:13.5px;color:var(--dim)}
-.cb-copy{display:inline-flex;align-items:center;gap:7px;font:600 13.5px/1 var(--text-font);font-stretch:108%;color:var(--text);background:rgba(255,255,255,.05);border:1px solid var(--line-2);border-radius:999px;padding:8px 13px;cursor:pointer;transition:background-color .25s,border-color .25s,color .25s}
+.cb-copy{display:inline-flex;align-items:center;gap:7px;flex:none;white-space:nowrap;font:600 13.5px/1 var(--text-font);font-stretch:108%;color:var(--text);background:rgba(255,255,255,.05);border:1px solid var(--line-2);border-radius:999px;padding:8px 13px;cursor:pointer;transition:background-color .25s,border-color .25s,color .25s}
 .cb-copy svg{width:15px;height:15px}
 .cb-copy:hover{border-color:rgba(var(--accent-rgb),.8);background:rgba(var(--accent-rgb),.14)}
 .cb-copy.done{color:var(--done);border-color:rgba(61,214,140,.6)}

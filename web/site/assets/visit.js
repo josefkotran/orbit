@@ -119,7 +119,7 @@
     var el = e.target && e.target.closest ? e.target.closest("a, button") : null;
     if (!el) return;
     if (el.matches("a[download]")) return ev("download", place(el));
-    if (el.matches("[data-copy]")) return ev("copy", el.getAttribute("data-copy") === "#ciCmd" ? "prikaz" : "zadani");
+    if (el.matches("[data-copy]")) return ev("copy", (/Cmd$/.test(el.getAttribute("data-copy")) ? "prikaz" : "zadani") + ":" + place(el));
     if (el.matches('a[href$="install.ps1"]')) return ev("script_view", "", true);
     if (el.matches('a[href*="github.com/"]')) return ev("github", /\/issues/.test(el.href) ? "issues" : place(el));
     if (el.id === "soundBtn") return ev("video_sound", "");
@@ -150,7 +150,7 @@
     var sel = doc.getSelection && doc.getSelection();
     var node = sel && sel.anchorNode;
     var el = node && (node.nodeType === 1 ? node : node.parentElement);
-    if (el && el.closest && el.closest("#ciPrompt, #ciCmd")) ev("copy", "rucne", true);
+    if (el && el.closest && el.closest("#ciPrompt, #ciCmd, #heroPrompt, #heroCmd")) ev("copy", "rucne", true);
   });
 
   var mic = doc.getElementById("demoMic");

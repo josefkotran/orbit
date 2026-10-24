@@ -210,6 +210,14 @@ class WebStats(unittest.TestCase):
             self.assertIn(text, html)
         self.assertIn("orbit_no_stats", {c.name for c in jar})  # the admin's browser isn't counted from now on
 
+    def test_admin_says_where_the_install_was_copied(self):
+        self.visit(events=[("copy", "prikaz:uvod")])
+        self.visit(events=[("copy", "zadani")])  # written before 24 Oct: no place
+        opener, _ = self.log_in()
+        html = self.dashboard(opener)
+        self.assertIn("Zkopírovaný příkaz pro PowerShell <em>v úvodu</em>", html)
+        self.assertIn("Zkopírované zadání pro Claude Code</li>", html)
+
     def test_visitor_text_is_escaped(self):
         self.visit(referrer='https://evil.example/"><script>alert(1)</script>', events=[("faq", "<img src=x onerror=alert(1)>")])
         opener, _ = self.log_in()

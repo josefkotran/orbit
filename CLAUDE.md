@@ -1896,6 +1896,23 @@ jako výš. Párové srovnání s bootstrapem (95% interval rozdílu WER):
   se konec videa přestříhá, musí se změnit `CTA_IN`/`CTA_OUT`/`END_FRAME`/`POP` v `site.js` (do 20. 10. 64,15–74,8 s,
   video 76 s; do 24. 10. 87,58–98,23 s, video 99,4 s). Se zvukem video nehraje ve smyčce: po konci skočí na záběr
   v 109,0 s, tlačítko zůstane a objeví se „Přehrát znovu“. Dokud není instalátor, tlačítko říká „Instalátor už brzy“ a vede na instalaci.
+- **Video hned pod nadpisem, tlačítko až pod ním** (24. 10., Pepa nejdřív: „na mobilu dej to video nad tlačítko
+  windows“, pak: „i na počítači ať je video předtím, než se to tlačítko nastáhne, ať je video hned druhý pod
+  nadpisem“): pořadí v HTML je nadpis, text, video, `.hero-get` („Stáhnout pro Windows“ + blok s instalací). Na
+  počítači (od 1101 px) je text dál vpravo vedle „pusť.“ (`.hero-side` má `min-height` jako ten řádek, ať video
+  nezačne v nadpisu), pod nadpisem rovnou video a pod ním tlačítko vlevo a blok s instalací vpravo na šířku videa;
+  užší je všechno pod sebou. Tlačítko tak na počítači není v prvním okně (Stáhnout zůstává v menu). Video stojí
+  rovně, když začíná v prvním okně (`stageFlat` v `site.js`: horní hrana nad 90 % výšky okna; naklánění by ho
+  ukázalo zakloněné a posun o 70 px dolů by zakryl tlačítko), jinak se při scrollu naklápí jako dřív. V headless
+  Chromiu bez grafiky má záře pod videem ostré hrany dlaždic (softwarové vykreslení velkého rozmazaného stínu),
+  s `--use-angle=d3d11` je hladká.
+- **Video na celou obrazovku** (od 24. 10., Pepa: „na mobilu ať si můžu video dát na celou obrazovku“): třetí kulaté
+  tlačítko vedle pauzy a zvuku (`#fullBtn`, jen když to prohlížeč umí). Na celou obrazovku jde samotné `<video>`
+  s ovládáním prohlížeče (zvuk, posun, odchod jako všude jinde), ne celá scéna: skutečné tlačítko Stáhnout tam tedy
+  není. Na telefonu (bez najetí myší) se zamkne na šířku (`screen.orientation.lock`, Android; po odchodu `unlock`).
+  iPhone celou obrazovku pro prvky nemá, tam `webkitEnterFullscreen` (jeho přehrávač). Po odchodu se ovládání vrátí,
+  jak bylo, jen když si tam někdo zapnul zvuk, zůstane režim „se zvukem“ (ovládání, bez smyčky, tlačítka pryč).
+  Ověřeno Playwrightem (Chromium jako telefon i desktop, iPhone napodobeně). Neověřeno: skutečný Android a iPhone.
 - **Hosting gzipuje všechno**, i video: pak nefungují rozsahy bajtů (iPhone video nepřehraje, stahování bez velikosti).
   `.htaccess` proto pro mp4/webm/exe/obrázky/písma kompresi vypíná (`no-gzip`). Cloudflare si soubory drží rok:
   zlou kopii vyřeší jen změna `?v=`, tedy `ASSET_SALT` v `publish.py`.
@@ -1910,6 +1927,10 @@ jako výš. Párové srovnání s bootstrapem (95% interval rozdílu WER):
   nespustil). `ORBIT_INSTALL_DRYRUN=1` skončí po kontrole součtu. Na stránce je zadání pro Claude Code ke zkopírování:
   nejdřív si skript přečíst a říct, co udělá, pak ho spustit přes `powershell -NoProfile -Command "…"`. Soubor
   stažený skriptem nemá značku z internetu, SmartScreen se tak neozve; ochranou je kontrolní součet.
+  Od 24. 10. (Pepa: „hned pod tlačítko stáhnout pro Windows … nebo řekni svému botovi, a co má člověk napsat do
+  terminálu“) je totéž i v úvodu pod tlačítkem (`.hero-alt`, jen s hotovým instalátorem): kratší zadání pro bota
+  (`#heroPrompt`: přečíst skript, říct co udělá, po souhlasu spustit) a příkaz (`#heroCmd`). Statistiky u kopírování
+  posílají i místo (`prikaz:uvod`, `zadani:instalace`; starší záznamy jen `prikaz`/`zadani`), administrace ho ukáže.
 - **Poznámky na webu** (od 8. 10.): replika panelu má vlevo nad ním sešit s číslem aktivních (`#wNotes`, jako
   `_notes_center` v aplikaci), karta „Poznámky a úkoly“ je **třetí** (za Relace) a hraje scénu `poznamky` v `site.js`
   (otázka v panelu a bublina jako `Dictation._check_tasks`, klik na bublinu, „otevírám…“ → „otevřeno ✓“ a nová relace

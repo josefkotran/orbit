@@ -146,8 +146,9 @@ function steps(array $v): array
                 $out[] = ['good', 'Stažení instalátoru', isset(Stats::PLACES[$m]) ? 'tlačítko ' . Stats::PLACES[$m] : ''];
                 break;
             case 'copy':
-                $out[] = ['good', $m === 'prikaz' ? 'Zkopírovaný příkaz pro PowerShell'
-                    : ($m === 'rucne' ? 'Ručně zkopírovaná instalace' : 'Zkopírované zadání pro Claude Code'), ''];
+                [$what, $where] = array_pad(explode(':', $m, 2), 2, '');  // "prikaz:uvod"; before 24 Oct just "prikaz"
+                $out[] = ['good', $what === 'prikaz' ? 'Zkopírovaný příkaz pro PowerShell'
+                    : ($what === 'rucne' ? 'Ručně zkopírovaná instalace' : 'Zkopírované zadání pro Claude Code'), Stats::PLACES[$where] ?? ''];
                 break;
             case 'script_view':
                 $out[] = ['act', 'Otevřený instalační skript', ''];

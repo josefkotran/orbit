@@ -421,12 +421,6 @@
       <h1 class="display kinetic" id="heroTitle" data-kinetic="hero" data-break="2">Drž, mluv,<br> pusť.</h1>
       <div class="hero-side" id="heroSide">
         <p class="lede rv">České diktování do kteréhokoli okna ve Windows. Přepisuje se přímo na tvé grafice, zvuk nikam neodchází. A když pracuješ s Claude Code, hlídá ti limity, relace, odpovědi i rozdělané úkoly.</p>
-        <div class="hero-cta rv">
-          <a class="btn when-ready" href="__HREF__" download data-magnetic data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-download"/></svg>Stáhnout pro Windows</span></a>
-          <p class="fine when-ready">Verze __VERSION__, __SIZE__. 64bitová Windows 10 a 11.<br>Zdarma a open source.</p>
-          <a class="btn when-pending" href="#diktovani" data-magnetic data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-play"/></svg>Ukaž mi, jak to funguje</span></a>
-          <p class="fine when-pending"><span class="pulse"></span>Instalátor dokončujeme, stažení bude tady.</p>
-        </div>
       </div>
     </div>
 
@@ -449,6 +443,7 @@
         <div class="stage-ctrl">
           <button class="pause" id="pauseBtn" type="button" aria-label="Zastavit video" data-cursor="Zastavit"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="i-pause" d="M8.6 6.4v11.2M15.4 6.4v11.2" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path class="i-play" d="M8.4 6.3v11.4l9.4-5.7z" fill="currentColor" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg></button>
           <button class="sound" id="soundBtn" type="button"><svg aria-hidden="true"><use href="#i-speaker"/></svg><span>Pustit od začátku se zvukem</span></button>
+          <button class="full" id="fullBtn" type="button" aria-label="Video na celou obrazovku" data-cursor="Zvětšit" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.6 9.2V4.6h4.6M14.8 4.6h4.6v4.6M19.4 14.8v4.6h-4.6M9.2 19.4H4.6v-4.6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
         </div>
         <div class="stage-cta" id="stageCta">
           <span class="cta-shadow" aria-hidden="true"></span>
@@ -482,6 +477,21 @@
           </div>
         </div>
         <!--/novideo-->
+      </div>
+    </div>
+
+    <div class="hero-get">
+      <div class="hero-cta rv">
+        <a class="btn when-ready" href="__HREF__" download data-magnetic data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-download"/></svg>Stáhnout pro Windows</span></a>
+        <p class="fine when-ready">Verze __VERSION__, __SIZE__. 64bitová Windows 10 a 11.<br>Zdarma a open source.</p>
+        <a class="btn when-pending" href="#diktovani" data-magnetic data-warp><span class="lbl"><svg aria-hidden="true"><use href="#i-play"/></svg>Ukaž mi, jak to funguje</span></a>
+        <p class="fine when-pending"><span class="pulse"></span>Instalátor dokončujeme, stažení bude tady.</p>
+      </div>
+      <div class="copybox hero-alt rv when-ready">
+        <div class="cb-head"><span>Nebo řekni svému botovi (třeba Claude Code)</span><button type="button" class="cb-copy" data-copy="#heroPrompt"><svg aria-hidden="true"><use href="#i-copy"/></svg><span>Zkopírovat</span></button></div>
+        <p class="cb-body" id="heroPrompt">Nainstaluj mi Orbit (https://orbit.easya.cz). Nejdřív si přečti skript https://orbit.easya.cz/install.ps1 a řekni mi, co udělá. Až to odsouhlasím, spusť ho v PowerShellu: irm https://orbit.easya.cz/install.ps1 | iex</p>
+        <div class="cb-head"><span>Nebo to napiš sám do terminálu (PowerShell)</span><button type="button" class="cb-copy" data-copy="#heroCmd"><svg aria-hidden="true"><use href="#i-copy"/></svg><span>Zkopírovat</span></button></div>
+        <code class="cb-body cb-code" id="heroCmd">irm https://orbit.easya.cz/install.ps1 | iex</code>
       </div>
     </div>
   </div>

@@ -451,12 +451,18 @@
     if (sec) ScrollTrigger.create({ trigger: sec, start: "top 50%", end: "bottom 50%", refreshPriority: -1, toggleClass: { targets: a, className: "active" } });
   });
 
-  /* ---------- stage: tilts up into place as you scroll; the halo turns ---------- */
-  var stage = $("#stage"), orrery = $("#orrery");
+  /* ---------- stage: tilts up into place as you scroll; the halo turns. Where it starts on the first screen (right
+     under the headline, site.css) it stands flat: it would greet tilted back, and the drop would cover the download
+     button under it ---------- */
+  var stage = $("#stage"), orrery = $("#orrery"), stageWrap = $("#stageWrap");
+  function stageFlat() { return stageWrap.getBoundingClientRect().top + scrollY < innerHeight * 0.9; }
   if (!reduce) {
-    if (!orrery) gsap.fromTo(stage, { rotateX: 24, scale: 0.86, y: 70, transformOrigin: "50% 100%" }, {
+    if (!orrery) gsap.fromTo(stage, {
+      rotateX: function () { return stageFlat() ? 0 : 24; }, scale: function () { return stageFlat() ? 1 : 0.86; },
+      y: function () { return stageFlat() ? 0 : 70; }, transformOrigin: "50% 100%"
+    }, {
       rotateX: 0, scale: 1, y: 0, ease: "none",
-      scrollTrigger: { trigger: "#stageWrap", start: "top 98%", end: "top 22%", scrub: 0.6 }
+      scrollTrigger: { trigger: "#stageWrap", start: "top 98%", end: "top 22%", scrub: 0.6, invalidateOnRefresh: true }
     });
     else gsap.fromTo(orrery, { scale: 1.08, opacity: 0.6 }, { scale: 0.94, opacity: 1, ease: "none",
       scrollTrigger: { trigger: "#stageWrap", start: "top bottom", end: "bottom top", scrub: 0.6 } });
@@ -568,8 +574,48 @@
       if (failed) return;
       finished = false; want = true; video.currentTime = 0; video.muted = false; video.loop = false; video.controls = true;
       stage.classList.add("with-controls"); soundBtn.hidden = pauseBtn.hidden = true;
+      if (fullBtn) fullBtn.hidden = true;  // the native controls have their own
       play(); video.focus(); syncCta();
     });
+
+    /* full screen (on a phone the video is small): the video itself goes full screen with the browser's own controls,
+       so sound, seeking and leaving work the way that device does it; a phone also turns it sideways. An iPhone has
+       no full screen for elements, only its video player's (webkitEnterFullscreen). */
+    var fullBtn = $("#fullBtn"), doc = document;
+    var fsApi = !!(doc.fullscreenEnabled || doc.webkitFullscreenEnabled), ios = !fsApi && typeof video.webkitEnterFullscreen === "function";
+    if (fullBtn && (fsApi || ios)) {
+      var isFull = false, hadControls = false;
+      fullBtn.hidden = false;
+      var entered = function () {
+        if (isFull) return;
+        isFull = true; hadControls = video.controls; video.controls = true;
+        if (!canHover && screen.orientation && screen.orientation.lock) screen.orientation.lock("landscape").catch(function () {});
+      };
+      var left = function () {
+        if (!isFull) return;
+        isFull = false;
+        if (!canHover && screen.orientation && screen.orientation.unlock) try { screen.orientation.unlock(); } catch (e) {}
+        if (!video.muted && !stage.classList.contains("with-controls")) {  // the sound went on in full screen: now it's the "with sound" mode
+          video.loop = false; stage.classList.add("with-controls"); soundBtn.hidden = pauseBtn.hidden = fullBtn.hidden = true; syncCta();
+        } else video.controls = hadControls;
+      };
+      var changed = function () { if ((doc.fullscreenElement || doc.webkitFullscreenElement) === video) entered(); else left(); };
+      doc.addEventListener("fullscreenchange", changed);
+      doc.addEventListener("webkitfullscreenchange", changed);
+      video.addEventListener("webkitbeginfullscreen", entered);
+      video.addEventListener("webkitendfullscreen", left);
+      fullBtn.addEventListener("click", function () {
+        if (failed) return;
+        if (video.paused) { userPaused = false; want = true; play(); }  // full screen is for watching
+        if (ios) {
+          try { video.webkitEnterFullscreen(); }
+          catch (e) { video.addEventListener("loadedmetadata", function () { try { video.webkitEnterFullscreen(); } catch (x) {} }, { once: true }); }
+          return;
+        }
+        var p = video.requestFullscreen ? video.requestFullscreen({ navigationUI: "hide" }) : video.webkitRequestFullscreen();
+        if (p && p.catch) p.catch(function () {});
+      });
+    }
 
     /* the download button drawn at the end of the video can't be clicked: a real one flies in from above, lands
        exactly on it and floats there while that scene is on (104.2–113.9 s, video/src/scenes/Outro.tsx a bar after
